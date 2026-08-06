@@ -3,6 +3,7 @@
 Pure + offline: asserts graph.apply_changes builds a valid Kissflow node-graph from a
 synthetic fixture. No network, no Kissflow calls, no company data.
 """
+import copy
 import json
 import pathlib
 
@@ -341,3 +342,148 @@ def test_sweep_clears_orphans_left_by_an_earlier_partial_write() -> None:
     got = build_workflow(draft, [("Step", None)])
     assert "Column::Permission" not in got["Column_1"]
     assert got["F1"]["Name"] == "a"
+
+
+# ---- add_goto_task ----------------------------------------------------------------------------
+# Node G (P2 server surface) needs a real builder for the GotoTask edge node itself: everything
+# else in this module only ever produces a straight-line/parallel chain, and expr.build_goto_gate
+# only ATTACHES a condition to an already-existing GotoTask (tests/test_expr.py's own
+# draft_with_bare_goto fixture hand-builds one by raw dict surgery for exactly that reason). This
+# is that missing builder, shape pinned against shapes/goto_task.json.
+
+def _process_with_review_step() -> tuple[dict, str, str]:
+    """A minimal scaffolded process with one real step named "Review". Returns (draft, pd_id,
+    review_activity_id)."""
+    from kfforge.graph import ensure_process_def
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"}}
+    draft = ensure_process_def(bare, ("Review",))
+    pd_id = draft["M1"]["RootProcessDef"]
+    review_id = next(a for a in draft[pd_id]["ProcessDef::Activity"] if draft[a]["Name"] == "Review")
+    return draft, pd_id, review_id
+
+
+def test_add_goto_task_wires_backward_jump_and_backref() -> None:
+    from kfforge.graph import add_goto_task
+
+    draft, pd_id, review_id = _process_with_review_step()
+    got, goto_id = add_goto_task(draft, target_activity_id=review_id)
+
+    goto = got[goto_id]
+    assert goto["Kind"] == "Activity" and goto["NodeType"] == "GotoTask"
+    assert goto["Goto"] == review_id
+    assert goto["ProcessDef"] == pd_id
+    assert goto["Name"] == "Goto-Review", "default name follows the UI convention Goto-<target>"
+    assert goto_id in got[review_id]["Goto::Activity"]
+    assert goto_id.startswith("Activity_"), "platform-prefixed id, like every node this module mints"
+    # carries no Permission-eligible surface of its own (verify.py excludes GotoTask entirely)
+    assert "Activity::Permission" not in goto
+
+
+def test_add_goto_task_sits_before_a_trailing_end_event_not_after() -> None:
+    """Live-proven 2026-08-06 (see this function's own docstring correction): a chain ending in
+    a real EndEvent must get the GotoTask inserted BEFORE it, not appended strictly last — PUTting
+    it strictly last (after the EndEvent too) is REJECTED live with 400 InvalidArguments."""
+    from kfforge.graph import add_goto_task
+
+    draft, pd_id, review_id = _process_with_review_step()
+    got, goto_id = add_goto_task(draft, target_activity_id=review_id)
+
+    chain = got[pd_id]["ProcessDef::Activity"]
+    names = [got[a]["Name"] for a in chain]
+    assert names == ["Start", "Review", "Goto-Review", "Completed"], (
+        "goto must land last among the REAL activities but BEFORE the terminal EndEvent"
+    )
+    assert chain[-2] == goto_id, "the SECOND-to-last chain entry must be the goto id itself"
+    assert got[chain[-1]]["NodeType"] == "EndEvent", "the EndEvent must stay genuinely last"
+
+
+def test_add_goto_task_appends_plainly_when_the_chain_has_no_trailing_end_event() -> None:
+    """The fallback path — a chain with no EndEvent at all (matches shapes/goto_task.json's own
+    minimal 2-activity capture) — still just appends, exactly as originally captured."""
+    from kfforge.graph import add_goto_task
+
+    draft = {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process",
+              "RootProcessDef": "PD1", "Model::ProcessDef": ["PD1"]},
+        "PD1": {"Id": "PD1", "Kind": "ProcessDef", "WorkflowType": "Sequence",
+                "ProcessDef::Activity": ["A1"]},
+        "A1": {"Id": "A1", "Kind": "Activity", "NodeType": "UserTask", "Name": "Sample Rework Step",
+              "ProcessDef": "PD1"},
+    }
+    got, goto_id = add_goto_task(draft, target_activity_id="A1")
+    assert got["PD1"]["ProcessDef::Activity"] == ["A1", goto_id]
+
+
+def test_add_goto_task_accepts_an_explicit_name() -> None:
+    from kfforge.graph import add_goto_task
+
+    draft, _pd_id, review_id = _process_with_review_step()
+    got, goto_id = add_goto_task(draft, target_activity_id=review_id, name="Rework Loop")
+    assert got[goto_id]["Name"] == "Rework Loop"
+
+
+def test_add_goto_task_unknown_activity_rejected() -> None:
+    from kfforge.graph import add_goto_task
+
+    draft, _pd_id, _review_id = _process_with_review_step()
+    before = copy.deepcopy(draft)
+    with pytest.raises(ValueError):
+        add_goto_task(draft, target_activity_id="Activity_DoesNotExist99")
+    assert draft == before
+
+
+def test_add_goto_task_input_not_mutated() -> None:
+    from kfforge.graph import add_goto_task
+
+    draft, _pd_id, review_id = _process_with_review_step()
+    before = copy.deepcopy(draft)
+    add_goto_task(draft, target_activity_id=review_id)
+    assert draft == before
+
+
+def test_add_goto_task_is_idempotent_on_rerun() -> None:
+    from kfforge.graph import add_goto_task
+
+    draft, pd_id, review_id = _process_with_review_step()
+    once, goto_id_1 = add_goto_task(draft, target_activity_id=review_id)
+    twice, goto_id_2 = add_goto_task(once, target_activity_id=review_id)
+
+    assert goto_id_1 == goto_id_2, "the id is deterministic on the target, like every id this module mints"
+    chain = twice[pd_id]["ProcessDef::Activity"]
+    assert chain.count(goto_id_1) == 1, "re-running must not duplicate the GotoTask in the chain"
+    assert twice[review_id]["Goto::Activity"].count(goto_id_1) == 1, "back-ref must not duplicate either"
+
+
+def test_add_goto_task_can_pair_with_build_goto_gate_and_reads_clean() -> None:
+    """Integration: add_goto_task + expr.build_goto_gate together produce a loop verify.doctor
+    accepts, using a REAL Boolean field and a REAL permission matrix (not raw dict surgery) —
+    proving the two builders compose into something the doctor genuinely calls clean. Permissions
+    are set BEFORE add_goto_task, matching CLAUDE.md: a loop added to an already-wired flow."""
+    from kfforge.expr import build_goto_gate
+    from kfforge.graph import (
+        add_goto_task,
+        apply_changes,
+        progressive_matrix,
+        set_step_permissions,
+    )
+    from kfforge.types import FieldSpec, FieldType
+    from kfforge.verify import doctor
+
+    draft, _pd_id, review_id = _process_with_review_step()
+    draft = apply_changes(draft, [FieldSpec(name="Done Flag", type=FieldType.BOOLEAN)])
+    field_id = next(k for k, v in draft.items()
+                    if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Done Flag")
+    section_name = next(v["Name"] for v in draft.values()
+                        if isinstance(v, dict) and v.get("Kind") == "Column" and v.get("Type") == "Section")
+    matrix = progressive_matrix(draft, {section_name: ["Start"]})
+    draft = set_step_permissions(draft, matrix)
+
+    with_goto, goto_id = add_goto_task(draft, target_activity_id=review_id)
+    report_before = doctor(with_goto)
+    assert any("NO condition" in p for p in report_before.problems), \
+        "a bare goto with no condition must loop forever per verify.doctor's own rule"
+
+    gated = build_goto_gate(with_goto, goto_activity_id=goto_id, field_id=field_id)
+    assert doctor(gated).ok(), doctor(gated).problems

@@ -19,6 +19,8 @@ file is one node of a parallel build, and client.py is shared ground other nodes
 """
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -179,6 +181,61 @@ def advance(cli: DataPlaneClient, *, flow_id: str, iid: str) -> StepResult | Err
     return StepResult(step=step if isinstance(step, str) else "?", aiid=aiid, response=resp)
 
 
+def wait_new_aiid(
+    cli: DataPlaneClient,
+    *,
+    flow_id: str,
+    iid: str,
+    prev_aiid: str,
+    tries: int = 8,
+    delay: float = 0.9,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> str | Err:
+    """Bounded poll for the step transition after a submit/reject: keep re-deriving the LIVE aiid
+    (via `live_aiid` — same trap-guard `advance`/`fill_and_verify` use) until it differs from
+    `prev_aiid`, or give up.
+
+    THE GAP this closes: `walk` has no step-transition wait at all — it submits, then immediately
+    moves on to the next step's fill. Kissflow's own activity-instance transition is not always
+    visible in the very next read (the live reference implementation, `sim_case.py`, was written
+    with a bounded retry precisely because a fresh submit does not always show a rolled-over
+    `_current_context` on the FIRST read back). Calling `fill_and_verify` against a still-stale
+    aiid's context risks filling the step the item just LEFT, or re-tripping the aiid trap.
+
+    Bounded, never a silent infinite retry: `tries` hard-caps the attempts (mirrors the timing the
+    proven reference implementation already uses live — `tries=8, delay=0.9` by default). Any
+    failure along the way — a transport error from `get_detail`, or a not-yet-rolled-over
+    `_current_context` (exactly what `live_aiid` itself refuses to fabricate a fallback for) — is
+    treated as "not ready yet" and retried; a bounded poll's whole point is absorbing that class of
+    transient state. Exhausting `tries` without ever seeing a NEW aiid returns the last failure (or
+    a stuck-aiid message) as an `Err` — it never fabricates success, and never returns `prev_aiid`
+    as if that were one.
+
+    Callers integrate this as an OPTIONAL hook between `walk` steps (or drive it directly), rather
+    than `walk` gaining an unconditional poll baked in — a caller with no latency in its own fake/
+    test transport should not pay for retries it will never need.
+
+    `sleep_fn` is injectable (default `time.sleep`) purely for testability: a test proves the
+    retry/backoff loop runs exactly `tries` times, and that it sleeps BETWEEN attempts (never
+    before the first, never after the last), with no real wall-clock delay.
+    """
+    last: Err = Err("verify", f"wait_new_aiid: tries={tries} must be >= 1")
+    for attempt in range(tries):
+        if attempt > 0:
+            sleep_fn(delay)
+        fetched = _detail_and_live_aiid(cli, flow_id=flow_id, iid=iid)
+        if isinstance(fetched, Err):
+            last = fetched
+            continue
+        _detail, aiid = fetched
+        if aiid != prev_aiid:
+            return aiid
+        last = Err("verify",
+                   f"wait_new_aiid: aiid still {aiid!r} after {attempt + 1}/{tries} tries "
+                   f"({(attempt + 1) * delay:.1f}s) — step transition did not happen in time")
+    return last
+
+
 @dataclass(frozen=True)
 class StepPlan:
     """One hop of a walk: fields to set (fill_and_verify'd before anything else), then either
@@ -213,10 +270,28 @@ class WalkReport:
         return self.created and not self.failed
 
 
-def walk(cli: DataPlaneClient, *, flow_id: str, steps: list[StepPlan]) -> WalkReport:
+def walk(
+    cli: DataPlaneClient,
+    *,
+    flow_id: str,
+    steps: list[StepPlan],
+    poll_after_transition: bool = False,
+    poll_tries: int = 8,
+    poll_delay: float = 0.9,
+    poll_sleep_fn: Callable[[float], None] = time.sleep,
+) -> WalkReport:
     """create, then per step: fill_and_verify -> advance (or reject when the plan says so).
     Stops at the FIRST failure — including a fill that PUT 200 but didn't verify, which is exactly
     the silent-discard case this module exists to catch (fail loud, never continue past it).
+
+    `poll_after_transition` (default False — a caller/fake with no such latency, e.g. every OTHER
+    test in this file, pays nothing extra): when True, calls `wait_new_aiid` right after each
+    successful advance/reject, closing the gap `walk` otherwise has NO wait for at all. This is
+    the integration point Node G's dataplane review flagged: a single `forge_simulate_case` MCP
+    call runs the ENTIRE walk in one shot, so the Robot/caller layer has no seam to inject a poll
+    BETWEEN internal steps — the hook has to live in `walk` itself. A poll that never sees the
+    aiid change (transition genuinely stuck, or too slow for `poll_tries`) fails the CURRENT step
+    plan, exactly like any other stage of the loop — never silently proceeds on a stale aiid.
     """
     planned = tuple(p.name for p in steps)
     created = cli.create_item(flow_id)
@@ -258,6 +333,15 @@ def walk(cli: DataPlaneClient, *, flow_id: str, steps: list[StepPlan]) -> WalkRe
                                   advanced=advanced, rejected=rejected, failed=(plan.name,),
                                   error=f"{plan.name}: reject failed: {resp.message}")
             rejected += (plan.name,)
+            if poll_after_transition:
+                waited = wait_new_aiid(cli, flow_id=flow_id, iid=iid, prev_aiid=aiid,
+                                       tries=poll_tries, delay=poll_delay, sleep_fn=poll_sleep_fn)
+                if isinstance(waited, Err):
+                    return WalkReport(flow_id=flow_id, iid=iid, created=True, planned=planned,
+                                      filled=filled, advanced=advanced, rejected=rejected,
+                                      failed=(plan.name,),
+                                      error=f"{plan.name}: post-reject transition poll failed: "
+                                            f"{waited.message}")
             continue
 
         result = advance(cli, flow_id=flow_id, iid=iid)
@@ -266,6 +350,15 @@ def walk(cli: DataPlaneClient, *, flow_id: str, steps: list[StepPlan]) -> WalkRe
                               advanced=advanced, rejected=rejected, failed=(plan.name,),
                               error=f"{plan.name}: advance failed: {result.message}")
         advanced += (plan.name,)
+        if poll_after_transition:
+            waited = wait_new_aiid(cli, flow_id=flow_id, iid=iid, prev_aiid=result.aiid,
+                                   tries=poll_tries, delay=poll_delay, sleep_fn=poll_sleep_fn)
+            if isinstance(waited, Err):
+                return WalkReport(flow_id=flow_id, iid=iid, created=True, planned=planned,
+                                  filled=filled, advanced=advanced, rejected=rejected,
+                                  failed=(plan.name,),
+                                  error=f"{plan.name}: post-advance transition poll failed: "
+                                        f"{waited.message}")
 
     return WalkReport(flow_id=flow_id, iid=iid, created=True, planned=planned, filled=filled, advanced=advanced,
                       rejected=rejected, failed=(), error=None)

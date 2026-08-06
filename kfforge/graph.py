@@ -690,6 +690,75 @@ def build_workflow(
     return new
 
 
+def add_goto_task(draft: Draft, *, target_activity_id: str, name: str | None = None) -> tuple[Draft, str]:
+    """Add a GotoTask: a backward-jump edge node targeting `target_activity_id`. Pure.
+
+    `build_workflow` only ever produces a straight-line/parallel chain — nothing else in this
+    module writes the one genuine edge node a Sequence workflow has (CLAUDE.md "A CORRECTED
+    BELIEF... GotoTask is an edge node"). This is that missing builder, shape copied verbatim from
+    shapes/goto_task.json (captured 2026-08-05 from a UI-built flow): the new Activity carries
+    `NodeType:"GotoTask"`, a scalar `Goto` forward-pointer at the target, and joins the SAME
+    ProcessDef::Activity chain as its target (a branch-local jump, never cross-branch). The target
+    gets the bidirectional `Goto::Activity` back-ref.
+
+    ⚠️ A CORRECTION to CLAUDE.md's own "sits LAST in ProcessDef::Activity", found live 2026-08-06
+    building Node G's acceptance suite: that note was captured off shapes/goto_task.json's
+    MINIMAL 2-node illustration (one UserTask + the GotoTask, no Start/End shown at all), where
+    "last" and "last of the two elements shown" were indistinguishable. Against a REAL workflow
+    that has a terminal EndEvent, appending the GotoTask AFTER it — literally last in the array —
+    PUTs 400 `KISSFLOW_ERROR_00011 InvalidArguments` (an unhelpful, field-less error; found via a
+    two-arm live experiment: identical draft, only the insertion point differs). The position that
+    PUTs 200 is LAST AMONG THE REAL ACTIVITIES, immediately BEFORE a trailing EndEvent — so this
+    inserts there when the chain ends in one, and only falls back to a plain append (matching the
+    original minimal capture exactly) when it doesn't.
+
+    Carries no condition of its own and no Permission (like every GotoTask/Parallel — see
+    NO_PERMISSION_NODETYPES): pair with `kfforge.expr.build_goto_gate` to add the Boolean loop
+    condition, or the Goto loops forever (verify.doctor's rule 2b flags a bare one).
+
+    `name` defaults to "Goto-<target activity name>", the convention every UI-built one followed
+    (shapes/goto_task.json's own note). The new activity's id is deterministic on the TARGET (like
+    every other id this module mints), so re-running with the same target is idempotent: same id,
+    no duplicate chain entry, no duplicate back-ref.
+
+    Returns (new draft, new GotoTask activity id). Raises ValueError, draft entirely unmutated, when
+    `target_activity_id` is not a real Activity node, or that Activity has no valid `ProcessDef`
+    back-reference to join.
+    """
+    target = draft.get(target_activity_id)
+    if not isinstance(target, dict) or target.get("Kind") != "Activity":
+        raise ValueError(f"no Activity {target_activity_id!r} in draft to jump back to")
+    pd_id = target.get("ProcessDef")
+    if not isinstance(pd_id, str) or pd_id not in draft:
+        raise ValueError(f"target activity {target_activity_id!r} has no valid ProcessDef back-ref")
+
+    new: Draft = copy.deepcopy(draft)
+    target = new[target_activity_id]
+    pd = new[pd_id]
+    target_name = target.get("Name", target_activity_id)
+
+    goto_id = _new_id("Activity", pd_id, 0, f"goto:{target_activity_id}")
+    new[goto_id] = {
+        "Id": goto_id, "Kind": "Activity", "NodeType": "GotoTask",
+        "Name": name or f"Goto-{target_name}", "ProcessDef": pd_id,
+        "CreatedAt": _now(), "Goto": target_activity_id,
+    }
+    if goto_id not in (target.get("Goto::Activity") or []):
+        target.setdefault("Goto::Activity", []).append(goto_id)
+
+    chain = list(pd.get("ProcessDef::Activity") or [])
+    if goto_id not in chain:
+        # last among the REAL activities, but BEFORE a trailing EndEvent if one is present —
+        # see the correction in this function's own docstring (live-proven 2026-08-06: appending
+        # strictly last, after the EndEvent too, PUTs 400).
+        if chain and new.get(chain[-1], {}).get("NodeType") == "EndEvent":
+            chain = [*chain[:-1], goto_id, chain[-1]]
+        else:
+            chain.append(goto_id)
+    pd["ProcessDef::Activity"] = chain
+    return new, goto_id
+
+
 Matrix = dict[str, dict[str, Visibility]]        # section name -> activity id -> visibility
 
 # The builder writes no Permission for these; the oracle has none on either. A Parallel is a
