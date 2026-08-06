@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kissflow-forge": {
+      "command": "sh",
+      "args": ["-lc", "set -a; . ./.env; set +a; exec uv run --with fastmcp --no-project python -m kfforge.server"]
+    }
+  }
+}
