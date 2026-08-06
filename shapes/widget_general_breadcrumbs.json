@@ -1,0 +1,186 @@
+{
+  "kind": "Component",
+  "description": "Breadcrumb trail widget. Its Component owns a Breadcrumbs sub-node, which owns an ordered list of BreadcrumbItem nodes (Label + PageParams for in-app navigation).",
+  "source_capture": "capture_page_testallbutton_A00_full.json",
+  "template": {
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "separator",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ],
+      "Type": "String"
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample01",
+      "Value": "/"
+    },
+    "FieldMapping_Sample02": {
+      "Id": "FieldMapping_Sample02",
+      "Kind": "FieldMapping",
+      "Name": "separatorIcon",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample02"
+      ],
+      "Type": "Icon"
+    },
+    "Property_Sample02": {
+      "Id": "Property_Sample02",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample02"
+    },
+    "FieldMapping_Sample03": {
+      "Id": "FieldMapping_Sample03",
+      "Kind": "FieldMapping",
+      "Name": "maxItems",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample03"
+      ],
+      "Type": "Number"
+    },
+    "Property_Sample03": {
+      "Id": "Property_Sample03",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample03",
+      "Value": 0
+    },
+    "FieldMapping_Sample04": {
+      "Id": "FieldMapping_Sample04",
+      "Kind": "FieldMapping",
+      "Name": "collapseMode",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample04"
+      ],
+      "Type": "String"
+    },
+    "Property_Sample04": {
+      "Id": "Property_Sample04",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample04",
+      "Value": "middle"
+    },
+    "FieldMapping_Sample05": {
+      "Id": "FieldMapping_Sample05",
+      "Kind": "FieldMapping",
+      "Name": "tooltipContent",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample05"
+      ],
+      "Type": "String"
+    },
+    "Property_Sample05": {
+      "Id": "Property_Sample05",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample05"
+    },
+    "FieldMapping_Sample06": {
+      "Id": "FieldMapping_Sample06",
+      "Kind": "FieldMapping",
+      "Name": "tooltipPosition",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample06"
+      ],
+      "Type": "String"
+    },
+    "Property_Sample06": {
+      "Id": "Property_Sample06",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample06",
+      "Value": "bottom"
+    },
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "Breadcrumb",
+      "LayoutConfig": {
+        "colSpan": 25,
+        "rowSpan": 10,
+        "minRowSpan": "auto",
+        "maxRowSpan": "auto"
+      },
+      "Container": "Container001",
+      "Container::Component": [
+        "Component_Sample01"
+      ],
+      "Container::FieldMapping": [
+        "FieldMapping_Sample01",
+        "FieldMapping_Sample02",
+        "FieldMapping_Sample03",
+        "FieldMapping_Sample04",
+        "FieldMapping_Sample05",
+        "FieldMapping_Sample06"
+      ],
+      "Container::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Script": {
+        "web": "general/breadcrumbs"
+      },
+      "Name": "Breadcrumb",
+      "Page": "Page_Sample01",
+      "Data": {
+        "manifest_id": "Component",
+        "category": "general",
+        "visualization_type": "breadcrumbs"
+      },
+      "Container": "Container_Sample01",
+      "Component::Breadcrumbs": [
+        "Breadcrumbs_Sample01"
+      ]
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {}
+    },
+    "Breadcrumbs_Sample01": {
+      "Id": "Breadcrumbs_Sample01",
+      "Kind": "Breadcrumbs",
+      "Component": "Component_Sample01",
+      "Breadcrumbs::BreadcrumbItem": [
+        "BreadcrumbItem_Sample01",
+        "BreadcrumbItem_Sample02"
+      ]
+    },
+    "BreadcrumbItem_Sample01": {
+      "Id": "BreadcrumbItem_Sample01",
+      "Kind": "BreadcrumbItem",
+      "Label": "Sample Home",
+      "PageParams": {},
+      "Breadcrumbs": "Breadcrumbs_Sample01"
+    },
+    "BreadcrumbItem_Sample02": {
+      "Id": "BreadcrumbItem_Sample02",
+      "Kind": "BreadcrumbItem",
+      "Label": "Sample Section",
+      "PageParams": {},
+      "Breadcrumbs": "Breadcrumbs_Sample01"
+    }
+  },
+  "notes": [
+    "Breadcrumbs/BreadcrumbItem are their own Kind names, distinct from the generic FieldMapping/Property config pattern every other widget uses for its content — the item LIST is real sub-structure, not just a config value.",
+    "PageParams:{} on each item is where in-app navigation parameters would go for a clickable crumb that jumps to another page with state; empty means a plain non-navigating label.",
+    "Real ids typically use the manifest_id prefix only on a fresh single-widget add (e.g. `Button_<10-char-rand>`, `Metrics_<10-char-rand>`) — the scenario this template mints for — while built-up production pages (`all_pages_draft_20260806.json`) mostly carry the generic `Component_<rand>` id instead, and Repeater/Tab/MasterDetail/Breadcrumbs were never observed prefixed at all."
+  ]
+}

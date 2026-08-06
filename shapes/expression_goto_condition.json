@@ -1,0 +1,79 @@
+{
+  "kind": "Expression",
+  "description": "A GotoTask loop condition: Activity-owned Expression (not ProcessDef-owned). The Boolean literal false() is a ZERO-ARG Function node, never a Static — a Static \"false\" would be a string and never match a Boolean field.",
+  "source_capture": "goto_condition_shape.json",
+  "template": {
+    "Activity_Sample01": {
+      "Id": "Activity_Sample01",
+      "Kind": "Activity",
+      "Name": "Goto-Sample Target",
+      "NodeType": "GotoTask",
+      "ProcessDef": "ProcessDef_Sample01",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Goto": "Activity_Sample02",
+      "Activity::Expression": [
+        "Expression_Sample01"
+      ]
+    },
+    "Expression_Sample01": {
+      "Id": "Expression_Sample01",
+      "Kind": "Expression",
+      "ExpressionStr": "Field_Sample01 = false()",
+      "Activity": "Activity_Sample01",
+      "Expression::Node": [
+        "Node_Sample01"
+      ]
+    },
+    "Node_Sample01": {
+      "Id": "Node_Sample01",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "=",
+      "Syntax": "Infix",
+      "Expression": "Expression_Sample01",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample02",
+        "Node_Sample03"
+      ],
+      "DataType": "Boolean",
+      "Category": "Boolean"
+    },
+    "Node_Sample02": {
+      "Id": "Node_Sample02",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "Field_Sample01",
+      "DataType": "Boolean",
+      "Node": "Node_Sample01"
+    },
+    "Node_Sample03": {
+      "Id": "Node_Sample03",
+      "Kind": "Node",
+      "Value": "false",
+      "Node": "Node_Sample01",
+      "DataType": "Boolean",
+      "Category": "Boolean",
+      "Type": "Function"
+    },
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Boolean",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Done Flag",
+      "Column": "Column_Sample01",
+      "Field::Node": [
+        "Node_Sample02"
+      ]
+    }
+  },
+  "notes": [
+    "The literal leaf (Node_Sample03) omits BOTH Syntax and Node::Node — those only appear on the infix root. A zero-arg Function is a pure leaf, structurally different from the Field/Static leaves used for a string comparison (see expression_branch.json).",
+    "Category is set from the OPERANDS (Boolean here, since both sides are Boolean), never copied from DataType (DataType is always \"Boolean\" — the comparison's result type — regardless of what is being compared).",
+    "An Expression's owner key is one of three, meaning three different things: ProcessDef = branch condition, Activity = goto loop condition (this shape), Property = SequenceNumber prefix (see field_sequence_number.json). Always branch on which key is present.",
+    "A bare GotoTask with NO Activity::Expression loops forever — the condition is what lets an item eventually escape the loop.",
+    "Gate polarity: always test a Boolean, never an optional Select — see field_boolean.json's notes for why an unticked Boolean fails closed while a blank Select fails open."
+  ]
+}

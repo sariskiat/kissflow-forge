@@ -1,0 +1,115 @@
+{
+  "kind": "Component",
+  "description": "Chart report widget, bound via flow_id/flow_type/report_id.",
+  "source_capture": "capture_page_testallbutton_A00_full.json",
+  "template": {
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "flow_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample01",
+      "Value": "Flow_Sample01"
+    },
+    "FieldMapping_Sample02": {
+      "Id": "FieldMapping_Sample02",
+      "Kind": "FieldMapping",
+      "Name": "flow_type",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample02"
+      ]
+    },
+    "Property_Sample02": {
+      "Id": "Property_Sample02",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample02",
+      "Value": "Process"
+    },
+    "FieldMapping_Sample03": {
+      "Id": "FieldMapping_Sample03",
+      "Kind": "FieldMapping",
+      "Name": "report_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample03"
+      ]
+    },
+    "Property_Sample03": {
+      "Id": "Property_Sample03",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample03",
+      "Value": "Report_Sample01"
+    },
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "Chart",
+      "LayoutConfig": {
+        "colSpan": 6,
+        "rowSpan": 10,
+        "minRowSpan": "auto",
+        "maxRowSpan": "auto"
+      },
+      "Container": "Container001",
+      "Container::Component": [
+        "Component_Sample01"
+      ],
+      "Container::FieldMapping": [
+        "FieldMapping_Sample01",
+        "FieldMapping_Sample02",
+        "FieldMapping_Sample03"
+      ],
+      "Container::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Script": {
+        "web": "report/chart"
+      },
+      "Name": "Chart",
+      "Page": "Page_Sample01",
+      "Data": {
+        "manifest_id": "ChartReport",
+        "category": "report",
+        "visualization_type": "chart",
+        "report_type": "ChartReport"
+      },
+      "Container": "Container_Sample01"
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {
+        "Chart.Height": {
+          "value": "340px"
+        },
+        "Chart.Width": {
+          "value": "340px"
+        }
+      }
+    }
+  },
+  "notes": [
+    "ALL report/* widgets bind via the flow_id/flow_type/report_id trio (report_id instead of view_id — the one difference from the view/* binding trio).",
+    "Data.report_type on the Component itself is \"ChartReport\" for this widget, distinct from Data.visualization_type — both are written, and both matter (report_type selects the report DEFINITION kind; visualization_type selects the widget's own render mode).",
+    "A report widget re-renders ANY report definition it is bound to in its OWN visualization (unlike view/* widgets, which are constrained by the bound view's type) — card/pivot report widgets specifically need a matching report_type to already exist on the flow, or the bind has nothing compatible to show.",
+    "A freshly created flow report gets ZERO members just like a freshly created process — Permissions:[] on the report renders \"You don't have access to this component\" inside any page that charts it, fixed the same way as a process (POST .../report/{rid}/member/batch).",
+    "Real ids typically use the manifest_id prefix only on a fresh single-widget add (e.g. `Button_<10-char-rand>`, `Metrics_<10-char-rand>`) — the scenario this template mints for — while built-up production pages (`all_pages_draft_20260806.json`) mostly carry the generic `Component_<rand>` id instead, and Repeater/Tab/MasterDetail/Breadcrumbs were never observed prefixed at all."
+  ]
+}

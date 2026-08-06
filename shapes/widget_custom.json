@@ -1,0 +1,52 @@
+{
+  "kind": "Component",
+  "description": "Host for an installed custom component. No FieldMapping surface observed via the generic API — custom components configure through their own installed manifest, not generic Property nodes.",
+  "source_capture": "capture_page_testallbutton_A00_full.json",
+  "template": {
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "Custom component",
+      "LayoutConfig": {
+        "colSpan": 6,
+        "rowSpan": 10,
+        "minRowSpan": "auto",
+        "maxRowSpan": "auto"
+      },
+      "Container": "Container001",
+      "Container::Component": [
+        "Component_Sample01"
+      ],
+      "Container::FieldMapping": [],
+      "Container::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Script": {
+        "web": "custom"
+      },
+      "Name": "Custom component",
+      "Page": "Page_Sample01",
+      "Data": {
+        "manifest_id": "CustomComponents",
+        "category": "custom",
+        "visualization_type": "custom"
+      },
+      "Container": "Container_Sample01"
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {}
+    }
+  },
+  "notes": [
+    "Installing a custom component is a UI-only zip upload (npx + lcnc-sdk-js tooling) with no API route — this shape is only the bare, unconfigured host Component; there is nothing further to capture generically since each custom component defines its own config surface.",
+    "Real ids typically use the manifest_id prefix only on a fresh single-widget add (e.g. `Button_<10-char-rand>`, `Metrics_<10-char-rand>`) — the scenario this template mints for — while built-up production pages (`all_pages_draft_20260806.json`) mostly carry the generic `Component_<rand>` id instead, and Repeater/Tab/MasterDetail/Breadcrumbs were never observed prefixed at all."
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "kind": "Page",
+  "description": "The minimum node graph for any app page — what POST .../application/{app}/page returns before a single widget is added. 3 real structural nodes; draft-envelope bookkeeping (Root, CurrentVersion, PublishedBy, _meta_version) sits alongside them but is not itself wire knowledge to construct.",
+  "source_capture": "capture_page_api_probe_page.json",
+  "template": {
+    "Page_Sample01": {
+      "Id": "Page_Sample01",
+      "Kind": "Page",
+      "FlowType": "Page",
+      "Name": "Sample Page",
+      "Description": "",
+      "Settings": {},
+      "Page::Container": [
+        "Container_Sample01"
+      ]
+    },
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Body",
+      "Name": "Body Container",
+      "Container::Style": [
+        "Style_Sample01"
+      ],
+      "Container::Container": []
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {}
+    }
+  },
+  "notes": [
+    "On the real wire the root Body container is conventionally literally named \"Container001\" (and its Style \"Style001\") rather than a random id — every widget shape in this pack references that literal id as an assumed pre-existing parent rather than re-minting it.",
+    "API create (POST .../application/{app}/page) does NOT touch app navigation at all — the page exists but no Menu points at it yet; see menu_navigation.json for that separate step.",
+    "A page's draft top level also carries Root (the page id, mirroring how a form/process draft carries Root->model id), CurrentVersion, PublishedAt/PublishedBy (an embedded {_id,Name,Kind:\"User\"} object, not a separately id-keyed node), and _meta_version — all builder/platform bookkeeping the API writes itself, never something a build script constructs.",
+    "DELETE on a page returns {\"status\":\"success\"} for ANY id including bogus ones, and a deleted page's own draft GET still 200s afterward (storage lingers) — verify deletion only via the page LIST route, never via the delete response or a draft GET."
+  ]
+}

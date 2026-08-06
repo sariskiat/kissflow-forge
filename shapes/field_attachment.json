@@ -1,0 +1,21 @@
+{
+  "kind": "Field",
+  "description": "File-upload field. Carries CaptureOnly, the per-type default the builder writes that the bare API does not require.",
+  "source_capture": "CLAUDE.md",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Attachment",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Upload Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "CaptureOnly": false
+    }
+  },
+  "notes": [
+    "CaptureOnly:false is the builder's own default (camera-capture-only mode off); write it explicitly rather than omitting, for parity with a UI-built Attachment field."
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "kind": "EventMapping",
+  "description": "on_click wired to a Container. Two real Type values observed: JSAction (arbitrary JS in a Code-typed Property) and OpenPopup (a Popup-typed Property naming the target Popup directly, no script).",
+  "source_capture": "all_pages_draft_20260806.json",
+  "template": {
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Container",
+      "Container::EventMapping": [
+        "EventMapping_Sample01"
+      ]
+    },
+    "EventMapping_Sample01": {
+      "Id": "EventMapping_Sample01",
+      "Kind": "EventMapping",
+      "Name": "on_click",
+      "Container": "Container_Sample01",
+      "Type": "JSAction",
+      "EventMapping::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Code",
+      "EventMapping": "EventMapping_Sample01",
+      "Value": "await kf.app.page.setVariable(\"sampleSelection\", kf.eventParameters.item); await kf.client.showInfo(\"Sample notice\");"
+    },
+    "Container_Sample02": {
+      "Id": "Container_Sample02",
+      "Kind": "Container",
+      "Type": "Component",
+      "Container::EventMapping": [
+        "EventMapping_Sample02"
+      ]
+    },
+    "EventMapping_Sample02": {
+      "Id": "EventMapping_Sample02",
+      "Kind": "EventMapping",
+      "Name": "on_click",
+      "Container": "Container_Sample02",
+      "Type": "OpenPopup",
+      "EventMapping::Property": [
+        "Property_Sample02"
+      ]
+    },
+    "Property_Sample02": {
+      "Id": "Property_Sample02",
+      "Kind": "Property",
+      "Type": "Popup",
+      "Name": "popup_params",
+      "Value": "Popup_Sample01",
+      "EventMapping": "EventMapping_Sample02"
+    }
+  },
+  "notes": [
+    "kf.app.page.setVariable(name, value) + kf.app.page.openPopup(id) called TOGETHER inside one JSAction Code string is the confirmed live pattern for \"select a repeater row, then show its detail popup\" — openPopup here is an SDK call inside arbitrary Code, not a separate wire Type; OpenPopup as a wire Type (below) is a DIFFERENT, simpler mechanism used when the click needs to do nothing but open a popup.",
+    "kf.client.showInfo(...) is documented as a valid call in this same Code slot; its exact call signature was not independently re-verified in this pass beyond that prose mention — the surrounding Code/JSAction wire shape is what is actually confirmed live.",
+    "OpenPopup's Property carries no script at all: Type:\"Popup\", Name:\"popup_params\", Value is directly the target Popup's id — the simplest of the two mechanisms, prefer it when the click does nothing but open a popup with no page-state side effect.",
+    "Container::EventMapping is the back-ref key regardless of whether the Container Type is a plain layout Container or a widget-hosting Component container — both were observed live."
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "kind": "Field",
+  "description": "Star-rating field. Minimal — no per-type extra keys observed, same shape class as Boolean.",
+  "source_capture": "table_node_shape.json",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "StarRating",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Rating Field",
+      "Column": "Column_Sample01"
+    }
+  },
+  "notes": [
+    "First observed live as a child column inside a table (see table.json) but nothing in its own node shape is table-specific — it is a normal top-level-capable Field type."
+  ]
+}

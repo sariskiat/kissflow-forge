@@ -1,0 +1,49 @@
+{
+  "kind": "Column",
+  "description": "A Section is a Column{Type:Section} that owns a list of content Rows via Column::Row. It always sits inside its own top-level Row (Row{Model:<root>, Row::Column:[section]}) — a form's layout is Model -> Row -> Section-Column -> [Row -> field-Column]*.",
+  "source_capture": "CLAUDE.md",
+  "template": {
+    "Row_Sample01": {
+      "Id": "Row_Sample01",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample01"
+      ]
+    },
+    "Column_Sample01": {
+      "Id": "Column_Sample01",
+      "Kind": "Column",
+      "Type": "Section",
+      "Name": "Sample Section",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample01",
+      "Column::Row": [
+        "Row_Sample02"
+      ],
+      "Description": [
+        {
+          "type": "paragraph",
+          "nodes": [
+            {
+              "type": "bold",
+              "text": "Sample hint text"
+            }
+          ]
+        }
+      ]
+    },
+    "Row_Sample02": {
+      "Id": "Row_Sample02",
+      "Kind": "Row",
+      "Column": "Column_Sample01",
+      "Row::Column": []
+    }
+  },
+  "notes": [
+    "Description accepts EITHER a plain string OR this serialized rich-text doc form — the builder writes the rich-text array only when the hint text has formatting (bold/etc). Both forms coexist live across different sections of the same flow; a plain string is simpler when no formatting is needed.",
+    "StartEvent is workflow position 0, so whichever section should show on the submission form must list Start among its owning steps in the visibility matrix, or the form renders empty (see process_skeleton.json / permission_section.json).",
+    "A table host Column can NEVER be one of this Section's Column::Row rows — see table.json."
+  ]
+}

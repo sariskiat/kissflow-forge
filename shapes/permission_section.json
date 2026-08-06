@@ -1,0 +1,39 @@
+{
+  "kind": "Permission",
+  "description": "Section-level per-step visibility: the SAME Permission shape as a field, but Column points at a Section column instead of a Field column — one Permission hides/shows every field inside it at once. Far cheaper than field-level (8x steps vs field-count x steps).",
+  "source_capture": "CLAUDE.md",
+  "template": {
+    "Column_Sample01": {
+      "Id": "Column_Sample01",
+      "Kind": "Column",
+      "Type": "Section",
+      "Name": "Sample Section",
+      "Start": 0,
+      "End": 6,
+      "Column::Permission": [
+        "Permission_Sample01"
+      ]
+    },
+    "Activity_Sample01": {
+      "Id": "Activity_Sample01",
+      "Kind": "Activity",
+      "NodeType": "StartEvent",
+      "Name": "Start",
+      "Activity::Permission": [
+        "Permission_Sample01"
+      ]
+    },
+    "Permission_Sample01": {
+      "Id": "Permission_Sample01",
+      "Kind": "Permission",
+      "Column": "Column_Sample01",
+      "Permission": "Hidden",
+      "Activity": "Activity_Sample01"
+    }
+  },
+  "notes": [
+    "This lever was long believed not to exist (0-of-132 in one oracle sample) until the builder's own \"hide section at this step\" action was captured writing exactly this shape — absence in one sample is not absence in the API.",
+    "Field-level and section-level Permission nodes coexist untouched by each other on a live flow (1159 field-level + 5 section-level observed together); precedence when both disagree (section Hidden vs a field inside it Editable) is UNVERIFIED — do not rely on it.",
+    "StartEvent is workflow position 0 — the section carrying the initial submission form's fields must list Start as an owner, or the form renders empty on creation."
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "kind": "Container",
+  "description": "A layout Container inside the tree: LayoutType:flex with LayoutConfig (grid placement) on the node itself, and the actual flex/gap/padding CSS-ish values one level down on its Style.",
+  "source_capture": "capture_page_testallbutton_A00_full.json",
+  "template": {
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Container",
+      "Name": "Container",
+      "LayoutConfig": {
+        "colSpan": 25,
+        "rowSpan": 70,
+        "minRowSpan": "auto",
+        "maxRowSpan": "auto"
+      },
+      "LayoutType": "flex",
+      "Container": "Container001",
+      "Container::Container": [],
+      "Container::Component": [],
+      "Container::FieldMapping": [],
+      "Container::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {
+        "Container.Width": {
+          "value": "100%"
+        },
+        "Container.Height": {
+          "value": "auto"
+        },
+        "Container.Row.Gap": {
+          "value": "16px"
+        },
+        "Container.Column.Gap": {
+          "value": "16px"
+        },
+        "Container.Padding.Top": {
+          "value": "8px"
+        },
+        "Container.Padding.Right": {
+          "value": "8px"
+        },
+        "Container.Padding.Bottom": {
+          "value": "8px"
+        },
+        "Container.Padding.Left": {
+          "value": "8px"
+        },
+        "Container.Flex.Direction": {
+          "value": "column"
+        },
+        "Container.Flex.Wrap": {
+          "value": "nowrap"
+        }
+      }
+    }
+  },
+  "notes": [
+    "LayoutConfig (colSpan/rowSpan/minRowSpan/maxRowSpan) lives on the Container itself and drives the page's own grid placement; it is separate from the flex CHILD layout rules, which live entirely in Style.Value.",
+    "An empty Style.Value ({}) is a fully valid, common state meaning \"no layout overrides\" — not a placeholder to always fill in.",
+    "Container::Container is how the tree nests (a Container's own children are OTHER Containers, which in turn may be Type:Component hosts) — a widget's Container is a LEAF of this tree, see any widget_*.json for that pattern.",
+    "This node's own \"Container\" scalar (its PARENT) points at the well-known literal \"Container001\" — the page's ever-present root Body container id, not app-specific and safe to reference without re-minting."
+  ]
+}

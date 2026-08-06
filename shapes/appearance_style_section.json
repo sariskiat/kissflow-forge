@@ -1,0 +1,43 @@
+{
+  "kind": "Style",
+  "description": "Section colour styling. Kissflow persists only NON-DEFAULT values — an empty Style node means \"unstyled\", never \"unsupported\". Colours on a FORM section are design-token refs, never hex.",
+  "source_capture": "CLAUDE.md",
+  "template": {
+    "Column_Sample01": {
+      "Id": "Column_Sample01",
+      "Kind": "Column",
+      "Type": "Section",
+      "Name": "Sample Section",
+      "Column::Appearance": [
+        "Appearance_Sample01"
+      ]
+    },
+    "Appearance_Sample01": {
+      "Id": "Appearance_Sample01",
+      "Kind": "Appearance",
+      "Column": "Column_Sample01",
+      "Appearance::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample01",
+      "Value": {
+        "Section.Bg.Color": {
+          "ref": "Color.Info.300"
+        },
+        "Section.Header.Color": {
+          "ref": "Color.Secondary.Ten.800"
+        }
+      }
+    }
+  },
+  "notes": [
+    "Only these two token names are CONFIRMED live: Color.Info.300, Color.Secondary.Ten.800. Every other token is UNCAPTURED — never probe or guess one; the write API does not validate them (a bogus token PUTs 200 and publishes clean, then fails SILENTLY at render). Capture a new token only by setting it in the builder's own colour dropdown first.",
+    "Setting a property's value to None/absent (not writing the key at all) is the only route back to the theme default — there is no explicit \"unset\" sentinel.",
+    "Reuse an existing Appearance/Style pair rather than creating a second one for the same section — Kissflow expects exactly one of each per styled node.",
+    "This is the FORM-section token-ref styling surface. App PAGES use a structurally different surface (raw hex/px-ish CSS values on Container/Component Style, see page_style.json) — do not conflate the two; they are different subsystems with different value formats."
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "kind": "Variable",
+  "description": "Page-level state. Three DataType variants: Text (a scalar default), Json (an object default plus a JSON-Schema), and ObjectList (an array default plus a JSON-Schema) — the KPI-tile pattern is an ObjectList of {label,value,icon,color,iconColor}.",
+  "source_capture": "all_pages_draft_20260806.json",
+  "template": {
+    "Variable_Sample01": {
+      "Id": "Variable_Sample01",
+      "Kind": "Variable",
+      "Name": "sampleActiveTab",
+      "DataType": "Text",
+      "Page": "Page_Sample01",
+      "DefaultValue": "tab-one"
+    },
+    "Variable_Sample02": {
+      "Id": "Variable_Sample02",
+      "Kind": "Variable",
+      "Name": "sampleSelection",
+      "DataType": "Json",
+      "Page": "Page_Sample01",
+      "DefaultValue": {
+        "item_id": "SAMPLE-001",
+        "name": "Sample Item",
+        "status": "Open"
+      },
+      "Schema": {
+        "type": "object",
+        "properties": {
+          "item_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Variable_Sample03": {
+      "Id": "Variable_Sample03",
+      "Kind": "Variable",
+      "Name": "sampleQuickStats",
+      "DataType": "ObjectList",
+      "Page": "Page_Sample01",
+      "DefaultValue": [
+        {
+          "label": "Sample Metric A",
+          "value": "24",
+          "icon": "chart-bar-solid.svg",
+          "color": "Color.Primary.100",
+          "iconColor": "Color.Primary.600"
+        },
+        {
+          "label": "Sample Metric B",
+          "value": "8",
+          "icon": "cog-solid.svg",
+          "color": "Color.Secondary.Six.100",
+          "iconColor": "Color.Secondary.Six.600"
+        }
+      ],
+      "Schema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            },
+            "icon": {
+              "type": "string"
+            },
+            "color": {
+              "type": "string"
+            },
+            "iconColor": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "notes": [
+    "Json and ObjectList both carry a Schema (JSON-Schema shape) alongside DefaultValue; Text carries neither.",
+    "Colours INSIDE a Variable's DefaultValue data (e.g. the KPI \"color\"/\"iconColor\" fields here) are design-TOKEN refs as plain strings (\"Color.Primary.100\"), even though the unrelated page Style.Value surface wraps colour refs in a {\"ref\": ...} object — two different serializations of the same token vocabulary depending on which surface holds it.",
+    "The KPI-tile pattern is this ObjectList shape feeding a Repeater component (see widget_repeater.json) whose template renders one card per array element.",
+    "A Variable is PAGE-scoped state (LHSType:\"PageVariable\" when a Condition reads it — see criteria_condition.json), structurally distinct from a VariableRef, which reads live datasource/repeater-item data rather than this static default (see variable_ref.json)."
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "kind": "Permission",
+  "description": "Field-level per-step visibility: one Permission per (field column, workflow step) pair.",
+  "source_capture": "aicase_draft_snapshot.json",
+  "template": {
+    "Column_Sample01": {
+      "Id": "Column_Sample01",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Column::Permission": [
+        "Permission_Sample01"
+      ]
+    },
+    "Activity_Sample01": {
+      "Id": "Activity_Sample01",
+      "Kind": "Activity",
+      "NodeType": "UserTask",
+      "Name": "Sample Step",
+      "Activity::Permission": [
+        "Permission_Sample01"
+      ]
+    },
+    "Permission_Sample01": {
+      "Id": "Permission_Sample01",
+      "Kind": "Permission",
+      "Column": "Column_Sample01",
+      "Permission": "Editable",
+      "Activity": "Activity_Sample01"
+    }
+  },
+  "notes": [
+    "Permission is one of exactly three values: Editable, ReadOnly, Hidden — no fourth value observed across 132 UI-written Permission nodes on a live oracle.",
+    "Both back-refs (Column::Permission and Activity::Permission) are bidirectional and must both be maintained — a rebuild that deletes Permission nodes without sweeping these lists leaves PUT succeeding (200) but PUBLISH failing with a bare MetadataError.",
+    "Required is scoped by per-step visibility: a Required field that is Hidden at a given step is NOT enforced there, but a Required field that is Hidden at its OWN (only) visible step makes that step permanently unsubmittable.",
+    "A workflow rebuild (build_workflow-style, replacing every Activity) DELETES every Permission — re-run whatever wrote this matrix immediately after any workflow rebuild."
+  ]
+}

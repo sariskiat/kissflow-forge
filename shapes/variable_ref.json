@@ -1,0 +1,61 @@
+{
+  "kind": "VariableRef",
+  "description": "Binds one component property to live datasource data instead of a static value: the Property's own Type flips from \"Value\" to \"Variable\" and gains a VariableRef child. Silently inert unless the ref is ALSO registered in the page's own Page::VariableRef list.",
+  "source_capture": "capture_page_qa_fixes.json",
+  "template": {
+    "Page_Sample01": {
+      "Id": "Page_Sample01",
+      "Kind": "Page",
+      "FlowType": "Page",
+      "Name": "Sample Page",
+      "Page::VariableRef": [
+        "VariableRef_Sample01"
+      ]
+    },
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "Label",
+      "Container::FieldMapping": [
+        "FieldMapping_Sample01"
+      ],
+      "Container::VariableRef": [
+        "VariableRef_Sample01"
+      ]
+    },
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "title",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Variable",
+      "FieldMapping": "FieldMapping_Sample01",
+      "Property::VariableRef": [
+        "VariableRef_Sample01"
+      ]
+    },
+    "VariableRef_Sample01": {
+      "Id": "VariableRef_Sample01",
+      "Kind": "VariableRef",
+      "Type": "DatasourceParameter",
+      "Variable": "item.Sample_Field",
+      "Container": "Container_Sample01",
+      "Page": "Page_Sample01",
+      "Property": "Property_Sample01"
+    }
+  },
+  "notes": [
+    "THE gotcha (cost a full failed render before being solved): a VariableRef node can exist, be fully wired to its Container and Property, and STILL render nothing until its id is also added to the page-level Page::VariableRef list. Registered-but-orphaned vs orphaned-but-unregistered look identical everywhere except that one list — captured directly from a before/after fix pair where the only diff was this registration.",
+    "The VariableRef is registered in THREE places at once: Page::VariableRef (page-wide registry — the one that silently gates rendering), Container::VariableRef (its immediate host), and Property::VariableRef (the specific property whose value it overrides). All three plus the VariableRef's own Page/Container/Property scalar back-pointers must agree.",
+    "Type:\"DatasourceParameter\" with Variable dot-paths like \"item.<field>\" is the form used inside a Repeater template (each row's own data) — see widget_repeater.json. A ref reading a page-level Variable's own fields instead (e.g. \"selectedRecord.sample_id_field\") is the same node shape by convention but was not directly captured with that exact dot-path root; do not assume the LHSType/Type string carries over unchanged without confirming.",
+    "Once bound, the Property's Type is \"Variable\" and its \"Value\" key is dropped entirely — leaving a stale Value alongside Type:\"Variable\" was never observed and should not be written; the two are mutually exclusive on every capture seen."
+  ]
+}

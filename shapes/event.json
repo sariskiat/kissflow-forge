@@ -1,0 +1,36 @@
+{
+  "kind": "Event",
+  "description": "A field event: JS run by the low-code SDK on the SOURCE field, the mechanism for every computed value since Kissflow has no formula/computed field type.",
+  "source_capture": "event_node_shape.json",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Number",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Computed Total",
+      "Column": "Column_Sample01",
+      "DefaultValue": "0",
+      "Decimalpoint": "2",
+      "Field::Event": [
+        "Event_Sample01"
+      ]
+    },
+    "Event_Sample01": {
+      "Id": "Event_Sample01",
+      "Kind": "Event",
+      "Field": "Field_Sample01",
+      "Trigger": "onChange",
+      "Script": "(async () => {\n  const c = kf.context;\n  const a = await c.getField(\"Field_Sample02\");\n  const b = await c.getField(\"Field_Sample03\");\n  await c.updateField({ Field_Sample01: (Number(a) || 0) + (Number(b) || 0) });\n})();"
+    }
+  },
+  "notes": [
+    "Put the event on the SOURCE field(s) being read, never on the computed TARGET — an event on the target only fires when a human edits it, which for a computed field never happens.",
+    "The editor parses the pasted script as a plain function body: a top-level `await` is a SyntaxError there. Wrap everything in `(async () => { ... })();` as shown.",
+    "`kf` is already injected into that scope; `KFSDK` is undefined and calling `KFSDK.initialize()` fails — that call is only for custom components, a different host.",
+    "Trigger \"onChange\" is the only wire-string confirmed live. Per the docs the trigger name depends on field TYPE (On Select for Date/Number/User/Currency/Email/Radio/Slider, On Change for Text/Textarea/Multi-select/Checkbox/Lookup/Rating, On Click for Button/Dropdown/Yes-No) — those other two strings are UNVERIFIED, capture before writing them.",
+    "No events are possible on Attachment/Image/Rich text/Signature/SequenceNumber/Geolocation fields — the Event tab does not exist for those types in the builder.",
+    "The SDK is read+update only (no create/delete) — an event can fill fields and child-table rows but can never create a field, a table, or a row."
+  ]
+}

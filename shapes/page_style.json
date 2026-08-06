@@ -1,0 +1,61 @@
+{
+  "kind": "Style",
+  "description": "The App-PAGE styling surface (Container/Component Style), structurally distinct from the FORM-section styling surface (appearance_style_section.json). Dimensional/layout values here are raw px/percent/keyword strings.",
+  "source_capture": "all_pages_draft_20260806.json",
+  "template": {
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Container",
+      "Container::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {
+        "Container.Width": {
+          "value": "auto"
+        },
+        "Container.Height": {
+          "value": "48px"
+        },
+        "Container.Background": {
+          "ref": "Color.Primary.100"
+        },
+        "Container.Border.Top.Left.Radius": {
+          "value": "12px"
+        },
+        "Container.Border.Top.Right.Radius": {
+          "value": "12px"
+        },
+        "Container.Border.Bottom.Left.Radius": {
+          "value": "12px"
+        },
+        "Container.Border.Bottom.Right.Radius": {
+          "value": "12px"
+        },
+        "Container.Align.Items": {
+          "value": "center"
+        },
+        "Container.Justify.Content": {
+          "value": "center"
+        },
+        "Container.Flex.Direction": {
+          "value": "column"
+        },
+        "Container.Flex.Wrap": {
+          "value": "nowrap"
+        }
+      }
+    }
+  },
+  "notes": [
+    "DOUBLY-CORRECTED BELIEF: CLAUDE.md originally described this surface as \"raw hex/px strings — NOT design-token refs\"; an earlier version of this note swung the other way and claimed hex was NEVER observed (ref-only). Both were wrong. Full-corpus count across all_pages_draft_20260806.json (1315 Kind:Style nodes): COLOUR keys accept BOTH forms live and render-proven side by side — 1394 {\"ref\": \"Color.Token\"} occurrences AND 122 {\"value\": \"#RRGGBB\"} literal-hex occurrences (breakdown: Label.Color 47, Container.Background 27, Container.Border.Color 17, Icon.Color 13, Icon.Bg.Color 13, Divider.Color 3, Body.Container.Background 2). DIMENSIONAL/layout keys (Width/Height/Gap/Padding/Flex.*/Align/Justify/Border.*.Radius/Border.*.Width) are always a raw px/percent/keyword string, never a token ref — that part of the original claim holds. Token names are UNVALIDATED by the write API (a bogus ref PUTs and publishes clean, then fails silently at render) — capture a real one off the builder's own colour dropdown rather than guessing. Do not present either colour form as the only one; check the specific key/node you are working with.",
+    "Every colour on a freshly generated page starts as {\"value\": None} (the default grey look) — an empty/None value means unstyled, exactly like the form-section surface.",
+    "Key names are CSS-ish but namespaced by owner (\"Body.Container.*\" for the root body vs \"Container.*\" for a nested one vs \"Icon.*\"/\"Chart.*\"/\"Divider.*\" for specific widget styling) — copying a key from the wrong namespace silently styles nothing.",
+    "Style tokens (on either surface) are NOT validated by the write API — a bogus ref name PUTs and publishes clean, then fails silently at render. Only reuse a token seen in the builder's own colour dropdown."
+  ]
+}

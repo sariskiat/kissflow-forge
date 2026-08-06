@@ -1,0 +1,91 @@
+{
+  "kind": "Model",
+  "description": "The workflow skeleton a bare process draft needs before it accepts ANY further write — a freshly created process PUTs 500 even completely unmodified until ProcessDef/Activities exist.",
+  "source_capture": "aicase_draft_snapshot.json",
+  "template": {
+    "Model_Sample01": {
+      "Id": "Model_Sample01",
+      "Kind": "Model",
+      "FlowType": "Process",
+      "Name": "Sample Process",
+      "Model::Appearance": [
+        "Appearance_Sample01"
+      ],
+      "Model::ProcessDef": [
+        "ProcessDef_Sample01"
+      ],
+      "RootProcessDef": "ProcessDef_Sample01",
+      "Button::Row": [
+        "Row_Sample01"
+      ]
+    },
+    "Appearance_Sample01": {
+      "Id": "Appearance_Sample01",
+      "Kind": "Appearance",
+      "Model": "Model_Sample01",
+      "Appearance::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample01"
+    },
+    "Row_Sample01": {
+      "Id": "Row_Sample01",
+      "Kind": "Row",
+      "Button": "Model_Sample01"
+    },
+    "ProcessDef_Sample01": {
+      "Id": "ProcessDef_Sample01",
+      "Kind": "ProcessDef",
+      "WorkflowType": "Sequence",
+      "Model": "Model_Sample01",
+      "ProcessDef::Activity": [
+        "Activity_Sample01",
+        "Activity_Sample02",
+        "Activity_Sample03"
+      ]
+    },
+    "Activity_Sample01": {
+      "Id": "Activity_Sample01",
+      "Kind": "Activity",
+      "NodeType": "StartEvent",
+      "Name": "Start",
+      "ProcessDef": "ProcessDef_Sample01"
+    },
+    "Activity_Sample02": {
+      "Id": "Activity_Sample02",
+      "Kind": "Activity",
+      "NodeType": "UserTask",
+      "Name": "Sample Step",
+      "ProcessDef": "ProcessDef_Sample01",
+      "Activity::Resource": [
+        "Resource_Sample01"
+      ]
+    },
+    "Resource_Sample01": {
+      "Id": "Resource_Sample01",
+      "Kind": "Resource",
+      "ValueType": "AppRole",
+      "Value": "Role_Sample01",
+      "DisplayValue": "Sample Role",
+      "Activity": "Activity_Sample02"
+    },
+    "Activity_Sample03": {
+      "Id": "Activity_Sample03",
+      "Kind": "Activity",
+      "NodeType": "EndEvent",
+      "Name": "Completed",
+      "ProcessDef": "ProcessDef_Sample01"
+    }
+  },
+  "notes": [
+    "WorkflowType:\"Sequence\" means the ORDER of ProcessDef::Activity IS the flow — there are no edge nodes for the forward path (GotoTask, in goto_task.json, is the one exception: a backward jump).",
+    "Model::Appearance -> Appearance -> Style must exist on every flow (any FlowType) or the builder page fails to render with a bare \"There was an error\" — the write API itself never requires it.",
+    "Button::Row is a Row every human-built process carries (Button:<model id> instead of the usual Row/Column back-refs) — omitting it is accepted by the API but diffs from every UI-built process.",
+    "Assignees (Activity::Resource, ValueType:AppRole) CANNOT be written before the process has members — publish fails with a bare MetadataError if attempted first. Members first, assignees second.",
+    "SendBackToInitiator (a special node with Name:null) is a normal, expected sibling of the chain on a real process — not shown here since this shape focuses on the minimum skeleton, but its absence is not itself a defect."
+  ]
+}
