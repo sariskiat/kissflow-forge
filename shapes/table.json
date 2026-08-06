@@ -1,0 +1,131 @@
+{
+  "kind": "Model",
+  "description": "A child table is a nested Model hosted by a Column{Type:Model}, not a field type. The host Column carries MaxRow (Kissflow's native row cap) and must sit in its own ROOT row — a table host cannot live inside a Section (proven: renders an empty section).",
+  "source_capture": "table_node_shape.json",
+  "template": {
+    "Model_Sample01": {
+      "Id": "Model_Sample01",
+      "Kind": "Model",
+      "Model::Model": [
+        "Model_Sample02"
+      ],
+      "Model::Row": [
+        "Row_Sample01"
+      ]
+    },
+    "Row_Sample01": {
+      "Id": "Row_Sample01",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample01"
+      ]
+    },
+    "Column_Sample01": {
+      "Id": "Column_Sample01",
+      "Kind": "Column",
+      "Type": "Model",
+      "Start": 0,
+      "End": 6,
+      "Name": "Sample Table",
+      "AllowImport": false,
+      "Row": "Row_Sample01",
+      "Column::Model": [
+        "Model_Sample02"
+      ],
+      "MaxRow": 2
+    },
+    "Model_Sample02": {
+      "Id": "Model_Sample02",
+      "Kind": "Model",
+      "Model": "Model_Sample01",
+      "Name": "Sample Table",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Column": "Column_Sample01",
+      "Model::Row": [
+        "Row_Sample02"
+      ],
+      "Model::Field": [
+        "Field_Sample01",
+        "Field_Sample02",
+        "Field_Sample03"
+      ]
+    },
+    "Row_Sample02": {
+      "Id": "Row_Sample02",
+      "Kind": "Row",
+      "Model": "Model_Sample02",
+      "Row::Column": [
+        "Column_Sample02",
+        "Column_Sample03",
+        "Column_Sample04"
+      ]
+    },
+    "Column_Sample02": {
+      "Id": "Column_Sample02",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 0,
+      "Row": "Row_Sample02",
+      "Column::Field": [
+        "Field_Sample01"
+      ]
+    },
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample02",
+      "Name": "Sample Child Text",
+      "Column": "Column_Sample02"
+    },
+    "Column_Sample03": {
+      "Id": "Column_Sample03",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 0,
+      "Row": "Row_Sample02",
+      "Column::Field": [
+        "Field_Sample02"
+      ]
+    },
+    "Field_Sample02": {
+      "Id": "Field_Sample02",
+      "Kind": "Field",
+      "Type": "StarRating",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample02",
+      "Name": "Sample Child Rating",
+      "Column": "Column_Sample03"
+    },
+    "Column_Sample04": {
+      "Id": "Column_Sample04",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 0,
+      "Row": "Row_Sample02",
+      "Column::Field": [
+        "Field_Sample03"
+      ]
+    },
+    "Field_Sample03": {
+      "Id": "Field_Sample03",
+      "Kind": "Field",
+      "Type": "Boolean",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample02",
+      "Name": "Sample Child Flag",
+      "Column": "Column_Sample04"
+    }
+  },
+  "notes": [
+    "MaxRow lives on the HOST COLUMN, not the table Model — {\"Type\":\"Model\",\"AllowImport\":false,\"MaxRow\":2}. This is Kissflow's NATIVE row cap; no SDK/event enforcement needed. Do not confuse it with a MAX_LENGTH/MIN_LENGTH Criteria+Condition (FieldValidation-owned, a totally different Criteria usage keyed off a child FIELD, not the table) — that shape is out of scope here.",
+    "Child columns are Start=0/End=0 always — the 6-unit row grid does not apply inside a table.",
+    "PROVEN LIVE (2026-08-05): wiring the host Row into a Section's Column::Row PUTs 200, publishes 200, verifies on the wire — and still renders an EMPTY section. The host Row must be its own entry in the parent Model::Row, never inside a Section's Column::Row.",
+    "New field type seen only as a table child in the wild: StarRating (also usable top-level, see field_star_rating.json)."
+  ]
+}

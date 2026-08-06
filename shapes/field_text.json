@@ -1,0 +1,22 @@
+{
+  "kind": "Field",
+  "description": "Plain single-line text field. The simplest Field shape: no per-type extra keys beyond the universal ones every Field must carry.",
+  "source_capture": "aicase_draft_snapshot.json",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Text Field",
+      "Column": "Column_Sample01",
+      "Required": false
+    }
+  },
+  "notes": [
+    "Model (back-ref to the owning root/table Model) and CreatedAt are mandatory on EVERY Field of every type; the API accepts a write missing them (200, publishes clean) but the builder then fails to render the whole flow. This is the single most common way to build something that lies about working.",
+    "Column points at this field's own Column node (Type:Field) — see row_grid.json / section.json for how that Column is wired into a Row/Section; this file deliberately stays minimal to teach the Field node in isolation.",
+    "Node id casing is capitalised on the wire: Field_, Column_, Row_, not field_/column_/row_."
+  ]
+}

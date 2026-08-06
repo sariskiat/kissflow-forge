@@ -1,0 +1,187 @@
+{
+  "kind": "Component",
+  "description": "Progress bar widget with a title/help text and a linear or other chart type.",
+  "source_capture": "capture_page_testallbutton_A00_full.json",
+  "template": {
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "title",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample01",
+      "Value": "Sample progress"
+    },
+    "FieldMapping_Sample02": {
+      "Id": "FieldMapping_Sample02",
+      "Kind": "FieldMapping",
+      "Name": "helpText",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample02"
+      ]
+    },
+    "Property_Sample02": {
+      "Id": "Property_Sample02",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample02"
+    },
+    "FieldMapping_Sample03": {
+      "Id": "FieldMapping_Sample03",
+      "Kind": "FieldMapping",
+      "Name": "chartType",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample03"
+      ]
+    },
+    "Property_Sample03": {
+      "Id": "Property_Sample03",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample03",
+      "Value": "linear"
+    },
+    "FieldMapping_Sample04": {
+      "Id": "FieldMapping_Sample04",
+      "Kind": "FieldMapping",
+      "Name": "type",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample04"
+      ]
+    },
+    "Property_Sample04": {
+      "Id": "Property_Sample04",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample04",
+      "Value": "normal"
+    },
+    "FieldMapping_Sample05": {
+      "Id": "FieldMapping_Sample05",
+      "Kind": "FieldMapping",
+      "Name": "maxValue",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample05"
+      ]
+    },
+    "Property_Sample05": {
+      "Id": "Property_Sample05",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample05",
+      "Value": 100
+    },
+    "FieldMapping_Sample06": {
+      "Id": "FieldMapping_Sample06",
+      "Kind": "FieldMapping",
+      "Name": "currentValue",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample06"
+      ]
+    },
+    "Property_Sample06": {
+      "Id": "Property_Sample06",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample06",
+      "Value": 40
+    },
+    "FieldMapping_Sample07": {
+      "Id": "FieldMapping_Sample07",
+      "Kind": "FieldMapping",
+      "Name": "tooltipContent",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample07"
+      ]
+    },
+    "Property_Sample07": {
+      "Id": "Property_Sample07",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample07"
+    },
+    "FieldMapping_Sample08": {
+      "Id": "FieldMapping_Sample08",
+      "Kind": "FieldMapping",
+      "Name": "tooltipPosition",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample08"
+      ]
+    },
+    "Property_Sample08": {
+      "Id": "Property_Sample08",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample08",
+      "Value": "topLeft"
+    },
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "Progress bar",
+      "LayoutConfig": {
+        "colSpan": 6,
+        "rowSpan": 10,
+        "minRowSpan": "auto",
+        "maxRowSpan": "auto"
+      },
+      "Container": "Container001",
+      "Container::Component": [
+        "Component_Sample01"
+      ],
+      "Container::FieldMapping": [
+        "FieldMapping_Sample01",
+        "FieldMapping_Sample02",
+        "FieldMapping_Sample03",
+        "FieldMapping_Sample04",
+        "FieldMapping_Sample05",
+        "FieldMapping_Sample06",
+        "FieldMapping_Sample07",
+        "FieldMapping_Sample08"
+      ],
+      "Container::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Script": {
+        "web": "general/progressbar"
+      },
+      "Name": "Progress bar",
+      "Page": "Page_Sample01",
+      "Data": {
+        "manifest_id": "Progressbar",
+        "category": "general",
+        "visualization_type": "progressbar"
+      },
+      "Container": "Container_Sample01"
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {}
+    }
+  },
+  "notes": [
+    "QA sweep (2026-08-06) flagged this widget as CONFIGURED yet rendering blank — a verbatim clone of a working one DID render, so the node shape itself is sound; the unsolved part was a fill/population side effect in one specific automation path, not this shape.",
+    "Real ids typically use the manifest_id prefix only on a fresh single-widget add (e.g. `Button_<10-char-rand>`, `Metrics_<10-char-rand>`) — the scenario this template mints for — while built-up production pages (`all_pages_draft_20260806.json`) mostly carry the generic `Component_<rand>` id instead, and Repeater/Tab/MasterDetail/Breadcrumbs were never observed prefixed at all."
+  ]
+}

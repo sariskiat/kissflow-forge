@@ -1,0 +1,71 @@
+{
+  "kind": "Component",
+  "description": "general/tab widget entry point: the Container/Component/FieldMapping(tabType) cluster every widget has. The richer Tabs::Tab / DefaultTab / per-pane Container mechanism this Component's Component::Tabs back-ref leads to is documented once, in tabs.json, rather than duplicated here.",
+  "source_capture": "capture_page_testallbutton_A00_full.json",
+  "template": {
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "Tab",
+      "LayoutConfig": {
+        "colSpan": 30,
+        "rowSpan": 70,
+        "minRowSpan": "auto",
+        "maxRowSpan": "auto"
+      },
+      "Container": "Container001",
+      "Container::Component": [
+        "Component_Sample01"
+      ],
+      "Container::FieldMapping": [
+        "FieldMapping_Sample01"
+      ],
+      "Container::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Type": "Tab",
+      "Script": {
+        "web": "general/tab"
+      },
+      "Name": "Tab",
+      "Page": "Page_Sample01",
+      "Data": {
+        "manifest_id": "Tab",
+        "category": "general",
+        "visualization_type": "tab"
+      },
+      "Container": "Container_Sample01"
+    },
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "tabType",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Value",
+      "Value": "TYPE1",
+      "FieldMapping": "FieldMapping_Sample01"
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {}
+    }
+  },
+  "notes": [
+    "A fuller Tab widget carries Component::Tabs pointing at a Tabs node (Kind:\"Tabs\") that owns the actual pane list — omitted from THIS minimal entry to keep it self-consistent on its own; see tabs.json for the complete Component->Tabs->Tab->Container chain with that key populated, which is identical regardless of whether you reached the Component via this widget-palette entry or via any other page.",
+    "Real ids typically use the manifest_id prefix only on a fresh single-widget add (e.g. `Button_<10-char-rand>`, `Metrics_<10-char-rand>`) — the scenario this template mints for — while built-up production pages (`all_pages_draft_20260806.json`) mostly carry the generic `Component_<rand>` id instead, and Repeater/Tab/MasterDetail/Breadcrumbs were never observed prefixed at all."
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "kind": "Field",
+  "description": "Boolean (checkbox/toggle) field. Minimal — no per-type extra keys observed, unlike Textarea/Number/Attachment. Its literal-comparison partner is the zero-arg false() Function node (see expression_goto_condition.json), never a Static.",
+  "source_capture": "goto_condition_shape.json",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Boolean",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Done Flag",
+      "Column": "Column_Sample01"
+    }
+  },
+  "notes": [
+    "The captured live oracle for this type (a loop-gate field named \"Done\") carried no Required key at all — Required appears to default falsy when absent rather than being written explicitly on every Boolean. Safer to still set it explicitly when building new ones.",
+    "Always gate a loop/condition on a Boolean, never an optional Select: an unticked Boolean reads false (fails closed — item stays visible), a blank optional Select also reads as not-equal (fails open — item silently escapes the gate)."
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "kind": "Component",
+  "description": "Static image widget. Single binding: imageSrc (a Resource-typed FieldMapping).",
+  "source_capture": "capture_page_testallbutton_A00_full.json",
+  "template": {
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "imageSrc",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ],
+      "Type": "Resource"
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample01"
+    },
+    "FieldMapping_Sample02": {
+      "Id": "FieldMapping_Sample02",
+      "Kind": "FieldMapping",
+      "Name": "tooltipContent",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample02"
+      ]
+    },
+    "Property_Sample02": {
+      "Id": "Property_Sample02",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample02"
+    },
+    "FieldMapping_Sample03": {
+      "Id": "FieldMapping_Sample03",
+      "Kind": "FieldMapping",
+      "Name": "tooltipPosition",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample03"
+      ]
+    },
+    "Property_Sample03": {
+      "Id": "Property_Sample03",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample03",
+      "Value": "topLeft"
+    },
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "Image",
+      "LayoutConfig": {
+        "colSpan": 6,
+        "rowSpan": 10,
+        "minRowSpan": "auto",
+        "maxRowSpan": "auto"
+      },
+      "Container": "Container001",
+      "Container::Component": [
+        "Component_Sample01"
+      ],
+      "Container::FieldMapping": [
+        "FieldMapping_Sample01",
+        "FieldMapping_Sample02",
+        "FieldMapping_Sample03"
+      ],
+      "Container::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Script": {
+        "web": "general/image"
+      },
+      "Name": "Image",
+      "Page": "Page_Sample01",
+      "Data": {
+        "manifest_id": "Image",
+        "category": "general",
+        "visualization_type": "image"
+      },
+      "Container": "Container_Sample01"
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {}
+    }
+  },
+  "notes": [
+    "imageSrc's FieldMapping.Type is \"Resource\" (an uploaded asset reference), the only widget observed using that particular type hint — its Property is still plain Type:\"Value\" underneath, consistent with every other typed FieldMapping.",
+    "Real ids typically use the manifest_id prefix only on a fresh single-widget add (e.g. `Button_<10-char-rand>`, `Metrics_<10-char-rand>`) — the scenario this template mints for — while built-up production pages (`all_pages_draft_20260806.json`) mostly carry the generic `Component_<rand>` id instead, and Repeater/Tab/MasterDetail/Breadcrumbs were never observed prefixed at all."
+  ]
+}

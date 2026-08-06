@@ -1,0 +1,23 @@
+{
+  "kind": "Field",
+  "description": "Numeric field. Carries DefaultValue (as a STRING, not a JSON number) and Decimalpoint — both per-type defaults the builder writes that the bare API does not require.",
+  "source_capture": "CLAUDE.md",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Number",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Count Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "DefaultValue": "0",
+      "Decimalpoint": "2"
+    }
+  },
+  "notes": [
+    "DefaultValue is the STRING \"0\", not the number 0 — the whole node graph is JSON but several numeric-looking fields (this, MaxRow's sibling Padding on SequenceNumber) are wire strings.",
+    "Decimalpoint:\"2\" is itself a string holding a digit count, not a boolean/flag."
+  ]
+}

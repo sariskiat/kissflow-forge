@@ -1,0 +1,70 @@
+{
+  "kind": "Criteria",
+  "description": "Per-container conditional visibility. isHidden toggles the WHOLE container off; the Condition's LHSType tells you what it is testing — DatasourceParameter for live repeater-row data, PageVariable for a page Variable (e.g. the tab-switch pattern).",
+  "source_capture": "capture_page_qa_fixes.json",
+  "template": {
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Container",
+      "Container::Criteria": [
+        "Criteria_Sample01"
+      ]
+    },
+    "Criteria_Sample01": {
+      "Id": "Criteria_Sample01",
+      "Kind": "Criteria",
+      "isHidden": false,
+      "Container": "Container_Sample01",
+      "Criteria::Condition": [
+        "Condition_Sample01"
+      ]
+    },
+    "Condition_Sample01": {
+      "Id": "Condition_Sample01",
+      "Kind": "Condition",
+      "LHSVariable": "item._status",
+      "LHSType": "DatasourceParameter",
+      "LHSDataType": "Text",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "HasArguments": true,
+      "Criteria": "Criteria_Sample01",
+      "RHSValue": "Sample Active"
+    },
+    "Container_Sample02": {
+      "Id": "Container_Sample02",
+      "Kind": "Container",
+      "Type": "Container",
+      "Container::Criteria": [
+        "Criteria_Sample02"
+      ]
+    },
+    "Criteria_Sample02": {
+      "Id": "Criteria_Sample02",
+      "Kind": "Criteria",
+      "isHidden": false,
+      "Container": "Container_Sample02",
+      "Criteria::Condition": [
+        "Condition_Sample02"
+      ]
+    },
+    "Condition_Sample02": {
+      "Id": "Condition_Sample02",
+      "Kind": "Condition",
+      "LHSVariable": "sampleActiveTab",
+      "LHSType": "PageVariable",
+      "LHSDataType": "Text",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "HasArguments": true,
+      "Criteria": "Criteria_Sample02",
+      "RHSValue": "tab-one"
+    }
+  },
+  "notes": [
+    "Two confirmed LHSType values, testing genuinely different things: DatasourceParameter reads a live repeater-row/datasource field (dot-path \"item.<field>\", same root as variable_ref.json); PageVariable reads a page-level Variable by NAME directly (no dot-path, no \"item.\" prefix).",
+    "The tab-switch pattern is exactly Condition_Sample02's shape repeated once per tab pane, each with a different RHSValue matching one tab's identifier, paired with an EventMapping on each tab button that calls kf.app.page.setVariable(\"sampleActiveTab\", \"<that pane's value>\") on click — no dedicated Tabs-with-Criteria capture beyond this generic pattern was needed since the two mechanisms (Criteria and EventMapping) are each independently confirmed and simply compose.",
+    "This is a DIFFERENT Criteria usage from FieldValidation-owned Criteria on the process side (a MIN_LENGTH/MAX_LENGTH string-length rule on a form field, keyed by \"FieldValidation\" instead of \"Container\", with no LHSVariable/LHSType/LHSDataType at all) — same Kind name, different owner key, different purpose, different Condition shape. Do not conflate them."
+  ]
+}

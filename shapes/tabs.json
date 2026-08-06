@@ -1,0 +1,95 @@
+{
+  "kind": "Tabs",
+  "description": "A Tabs widget: Component{Type:Tab} owns a Tabs node, which owns one or more Tab panes, each with its own Container content tree. DefaultTab picks which pane shows first.",
+  "source_capture": "capture_page_testallbutton_A00_full.json",
+  "template": {
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "Tab",
+      "Container::Component": [
+        "Component_Sample01"
+      ],
+      "Container::FieldMapping": [
+        "FieldMapping_Sample01"
+      ]
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Type": "Tab",
+      "Script": {
+        "web": "general/tab"
+      },
+      "Name": "Tab",
+      "Page": "Page_Sample01",
+      "Data": {
+        "manifest_id": "Tab",
+        "category": "general",
+        "visualization_type": "tab"
+      },
+      "Container": "Container_Sample01",
+      "Component::Tabs": [
+        "Tabs_Sample01"
+      ]
+    },
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "tabType",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Value",
+      "Value": "TYPE1",
+      "FieldMapping": "FieldMapping_Sample01"
+    },
+    "Tabs_Sample01": {
+      "Id": "Tabs_Sample01",
+      "Kind": "Tabs",
+      "Component": "Component_Sample01",
+      "Tabs::Tab": [
+        "Tab_Sample01"
+      ],
+      "DefaultTab": "Tab_Sample01"
+    },
+    "Tab_Sample01": {
+      "Id": "Tab_Sample01",
+      "Kind": "Tab",
+      "Name": "Tab 1",
+      "hasBadge": false,
+      "Tabs": "Tabs_Sample01",
+      "Tab::Container": [
+        "Container_Sample02"
+      ]
+    },
+    "Container_Sample02": {
+      "Id": "Container_Sample02",
+      "Kind": "Container",
+      "Type": "Tab",
+      "Name": "Tab Container",
+      "Tab": "Tab_Sample01",
+      "Container::Style": [
+        "Style_Sample01"
+      ],
+      "Container::Container": []
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample02",
+      "Value": {}
+    }
+  },
+  "notes": [
+    "Each Tab's content lives in its OWN Container (Type:\"Tab\") reached via Tab::Container — a fifth distinct Container Type value alongside Body/Container/Component/Popup.",
+    "A multi-pane tab widget is just Tabs::Tab holding more than one id, each with its own Tab::Container — DefaultTab still names exactly one of them.",
+    "For a CRITERIA-DRIVEN tab switcher (show/hide whole custom-built panes instead of using this native widget) the pattern is different: a PageVariable + one EventMapping per tab button + one Criteria+Condition per pane testing that Variable — see criteria_condition.json. The two approaches are not the same mechanism; this file is the NATIVE Tabs widget."
+  ]
+}

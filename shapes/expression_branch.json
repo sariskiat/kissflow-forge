@@ -1,0 +1,95 @@
+{
+  "kind": "Expression",
+  "description": "A branch condition: ProcessDef-owned Expression holding a full infix \"=\" Node AST (Field lhs, Static rhs). The Field carries a bidirectional Field::Node back-ref to every node that references it.",
+  "source_capture": "expression_node_shape.json",
+  "template": {
+    "Activity_Sample01": {
+      "Id": "Activity_Sample01",
+      "Kind": "Activity",
+      "NodeType": "Parallel",
+      "Name": "Sample Fork",
+      "Activity::ProcessDef": [
+        "ProcessDef_Sample01"
+      ]
+    },
+    "ProcessDef_Sample01": {
+      "Id": "ProcessDef_Sample01",
+      "Kind": "ProcessDef",
+      "Name": "Sample Branch A",
+      "Activity": "Activity_Sample01",
+      "ProcessDef::Activity": [
+        "Activity_Sample02"
+      ],
+      "ProcessDef::Expression": [
+        "Expression_Sample01"
+      ]
+    },
+    "Activity_Sample02": {
+      "Id": "Activity_Sample02",
+      "Kind": "Activity",
+      "NodeType": "UserTask",
+      "Name": "Sample Branch Step",
+      "ProcessDef": "ProcessDef_Sample01"
+    },
+    "Expression_Sample01": {
+      "Id": "Expression_Sample01",
+      "Kind": "Expression",
+      "ExpressionStr": "Field_Sample01 = \"Sample Option\"",
+      "ProcessDef": "ProcessDef_Sample01",
+      "Expression::Node": [
+        "Node_Sample01"
+      ]
+    },
+    "Node_Sample01": {
+      "Id": "Node_Sample01",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "=",
+      "Syntax": "Infix",
+      "Expression": "Expression_Sample01",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample02",
+        "Node_Sample03"
+      ],
+      "DataType": "Boolean",
+      "Category": "String"
+    },
+    "Node_Sample02": {
+      "Id": "Node_Sample02",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "Field_Sample01",
+      "DataType": "String",
+      "Node": "Node_Sample01"
+    },
+    "Node_Sample03": {
+      "Id": "Node_Sample03",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "Sample Option",
+      "DataType": "String",
+      "Node": "Node_Sample01"
+    },
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Select",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Route Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "ReferredList": "List_Sample01",
+      "Field::Node": [
+        "Node_Sample02"
+      ]
+    }
+  },
+  "notes": [
+    "ExpressionStr references the field by ID, not name, and is only the human-readable mirror — the Node tree is what the engine actually evaluates. Keep both in sync on every write.",
+    "Category on the root Node is the OPERAND class, not the result: it is \"String\" here because the compared field is a Select (string-valued); a Boolean-vs-Boolean comparison instead takes Category:\"Boolean\" (see expression_goto_condition.json). Set it from the operands, never copy DataType (DataType is always \"Boolean\" — the result of \"=\" — regardless).",
+    "Literals are case-SENSITIVE and completely unvalidated by the write API: a Static whose Value does not byte-for-byte match a live list option means the branch silently never fires. Always read the option list (GET .../list/{id}/items) before writing the literal.",
+    "Field::Node must list EVERY node anywhere in the graph that references this field — losing that back-ref does not break the expression itself but breaks whatever else relies on it (e.g. a rewire script that walks Field::Node to find every reference)."
+  ]
+}

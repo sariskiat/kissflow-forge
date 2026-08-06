@@ -1,0 +1,70 @@
+{
+  "kind": "Popup",
+  "description": "A Popup is siblings-deep like a Page: its own Container tree, FieldMapping/Property config (e.g. title), and Style — referenced by id from an OpenPopup EventMapping or a kf.app.page.openPopup(...) call.",
+  "source_capture": "capture_page_testallbutton_A00_full.json",
+  "template": {
+    "Popup_Sample01": {
+      "Id": "Popup_Sample01",
+      "Kind": "Popup",
+      "Script": {
+        "web": "general/popup"
+      },
+      "Name": "Sample Popup",
+      "Page": "Page_Sample01",
+      "Popup::Container": [
+        "Container_Sample01"
+      ],
+      "Popup::FieldMapping": [
+        "FieldMapping_Sample01"
+      ],
+      "Popup::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Popup",
+      "Name": "Popup Container",
+      "Popup": "Popup_Sample01",
+      "Container::Style": [
+        "Style_Sample02"
+      ],
+      "Container::Container": []
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Popup": "Popup_Sample01",
+      "Value": {}
+    },
+    "Style_Sample02": {
+      "Id": "Style_Sample02",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {}
+    },
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "title",
+      "Popup": "Popup_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Value",
+      "Value": "Sample Popup Title",
+      "FieldMapping": "FieldMapping_Sample01"
+    }
+  },
+  "notes": [
+    "FieldMapping can be owned by a Popup directly (parent key \"Popup\"), exactly like it can be owned by a Container or a Menu — the same FieldMapping/Property node shape is reused across all three owner kinds, only the back-ref key name changes.",
+    "The Popup's OWN root Container is Type:\"Popup\" (not \"Body\" like a page's root, not \"Component\"/\"Container\" like a nested layout node) — a distinct fourth Container Type value alongside Body/Container/Component.",
+    "A Popup carries its own Style (Popup-owned) in addition to its root Container's Style (Container-owned) — two separate Style nodes for two separate concerns (the popup chrome itself vs its content area).",
+    "Content beyond the title (buttons, fields, repeaters, anything) goes inside Container_Sample01's own Container::Container tree, using the exact same widget shapes as any page body."
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "kind": "Activity",
+  "description": "GotoTask is the one edge node in an otherwise edge-free Sequence workflow: a backward jump. Sits LAST in ProcessDef::Activity, renders no form, and — like Parallel — carries zero Permission nodes.",
+  "source_capture": "goto_condition_shape.json",
+  "template": {
+    "ProcessDef_Sample01": {
+      "Id": "ProcessDef_Sample01",
+      "Kind": "ProcessDef",
+      "WorkflowType": "Sequence",
+      "Model": "Model_Sample01",
+      "ProcessDef::Activity": [
+        "Activity_Sample02",
+        "Activity_Sample01"
+      ]
+    },
+    "Activity_Sample02": {
+      "Id": "Activity_Sample02",
+      "Kind": "Activity",
+      "NodeType": "UserTask",
+      "Name": "Sample Rework Step",
+      "ProcessDef": "ProcessDef_Sample01",
+      "Goto::Activity": [
+        "Activity_Sample01"
+      ]
+    },
+    "Activity_Sample01": {
+      "Id": "Activity_Sample01",
+      "Kind": "Activity",
+      "Name": "Goto-Sample Rework Step",
+      "NodeType": "GotoTask",
+      "ProcessDef": "ProcessDef_Sample01",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Goto": "Activity_Sample02"
+    }
+  },
+  "notes": [
+    "The back-ref is bidirectional: the JUMP TARGET gets Goto::Activity:[<goto id>] even though the GotoTask itself is the one carrying the scalar Goto:<target id> forward-pointer.",
+    "Carries no Permission / Activity::Permission — exclude every GotoTask (and every Parallel) from any per-step permission-matrix count; the builder writes none for either.",
+    "This shape shows the condition wiring point (Activity::Expression would attach here) but leaves the condition itself to expression_goto_condition.json — a bare Goto with no Activity::Expression loops forever, it is never a no-op default.",
+    "Name is conventionally \"Goto-<target activity name>\" — cosmetic, but every UI-built one observed followed it."
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "kind": "Navigation",
+  "description": "App-level navigation: Application::Navigation -> Navigation::Menu -> Menu::FieldMapping -> Property{Type:Page} names the target page. A brand-new page exists but has NO menu entry until this chain is built.",
+  "source_capture": "app_draft_20260806.json",
+  "template": {
+    "Model_Sample01": {
+      "Id": "Model_Sample01",
+      "Kind": "Application",
+      "FlowType": "Application",
+      "Name": "Sample Application",
+      "DefaultPage": "Page_Sample01",
+      "Application::Navigation": [
+        "Navigation_Sample01"
+      ]
+    },
+    "Navigation_Sample01": {
+      "Id": "Navigation_Sample01",
+      "Kind": "Navigation",
+      "Name": "Sample Role Navigation",
+      "Application": "Model_Sample01",
+      "Navigation::Menu": [
+        "Menu_Sample01"
+      ]
+    },
+    "Menu_Sample01": {
+      "Id": "Menu_Sample01",
+      "Kind": "Menu",
+      "Name": "Sample Menu Entry",
+      "Navigation": "Navigation_Sample01",
+      "Menu::FieldMapping": [
+        "FieldMapping_Sample01"
+      ]
+    },
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "Page",
+      "Menu": "Menu_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Page",
+      "Value": "Page_Sample01",
+      "FieldMapping": "FieldMapping_Sample01"
+    }
+  },
+  "notes": [
+    "FieldMapping can be owned by a Menu directly (parent key \"Menu\", Name always \"Page\" for this use) — the same node shape reused a third way alongside Container- and Popup-owned FieldMapping.",
+    "Every Menu observed live carries an explicit scalar \"Navigation\" back-ref to its parent — CLAUDE.md separately notes that a NEW-style Menu carries this key while an old-style one may lack it; no old-style (Navigation-less) Menu was directly re-examined in this pass, so build new Menus WITH the key and treat a Menu missing it as merely legacy, not broken.",
+    "\"Same view for all roles\" is achieved by pointing every role's Navigation::Menu entries at the SAME Menu ids (sharing Menu/FieldMapping/Property nodes across Navigations) rather than duplicating them — Navigation nodes carry no role key themselves; the role->Navigation binding lives outside this draft entirely.",
+    "One Application can hold many Navigation sets (one conventionally per app-role, e.g. \"Requester Navigation\", \"Admin Navigation\") plus stray ad-hoc ones the builder UI creates on \"Add page\" if you are not careful which Navigation is currently selected — a page can exist and even have a Menu pointing at it while still never appearing in any role's actual nav, if that Menu landed in the wrong (or a brand-new, orphaned) Navigation."
+  ]
+}

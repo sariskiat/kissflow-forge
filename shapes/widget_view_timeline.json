@@ -1,0 +1,106 @@
+{
+  "kind": "Component",
+  "description": "Timeline view widget, data-bound via the flow_type/flow_id/view_id trio.",
+  "source_capture": "capture_page_testallbutton_A00_full.json",
+  "template": {
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "flow_type",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample01",
+      "Value": "Form"
+    },
+    "FieldMapping_Sample02": {
+      "Id": "FieldMapping_Sample02",
+      "Kind": "FieldMapping",
+      "Name": "flow_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample02"
+      ]
+    },
+    "Property_Sample02": {
+      "Id": "Property_Sample02",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample02",
+      "Value": "Flow_Sample01"
+    },
+    "FieldMapping_Sample03": {
+      "Id": "FieldMapping_Sample03",
+      "Kind": "FieldMapping",
+      "Name": "view_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample03"
+      ]
+    },
+    "Property_Sample03": {
+      "Id": "Property_Sample03",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample03",
+      "Value": "myitems"
+    },
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "Timeline",
+      "LayoutConfig": {
+        "colSpan": 6,
+        "rowSpan": 10,
+        "minRowSpan": "auto",
+        "maxRowSpan": "auto"
+      },
+      "Container": "Container001",
+      "Container::Component": [
+        "Component_Sample01"
+      ],
+      "Container::FieldMapping": [
+        "FieldMapping_Sample01",
+        "FieldMapping_Sample02",
+        "FieldMapping_Sample03"
+      ],
+      "Container::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Script": {
+        "web": "view/timeline"
+      },
+      "Name": "Timeline",
+      "Page": "Page_Sample01",
+      "Data": {
+        "manifest_id": "Timeline",
+        "category": "view",
+        "visualization_type": "timeline"
+      },
+      "Container": "Container_Sample01"
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {}
+    }
+  },
+  "notes": [
+    "ALL view/* widgets bind via this same flow_type/flow_id/view_id trio, regardless of which visual the widget renders — only Script.web (and Data.manifest_id/visualization_type) differ between them.",
+    "A data-bound widget renders per the BOUND VIEW's own type, not the widget's name: e.g. a view bound to \"myitems\" (a table-type view) shows a table inside a kanban/timeline/matrix widget until a matching view TYPE actually exists on the flow — this is expected, not a bug in the widget.",
+    "Data-bound widgets obey the sticky \"Viewing as\" role lens in the builder — an access-denied render usually means the LENS role lacks permission on the bound flow/view, not that the widget itself is broken.",
+    "Real ids typically use the manifest_id prefix only on a fresh single-widget add (e.g. `Button_<10-char-rand>`, `Metrics_<10-char-rand>`) — the scenario this template mints for — while built-up production pages (`all_pages_draft_20260806.json`) mostly carry the generic `Component_<rand>` id instead, and Repeater/Tab/MasterDetail/Breadcrumbs were never observed prefixed at all."
+  ]
+}

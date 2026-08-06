@@ -1,0 +1,82 @@
+{
+  "kind": "Row",
+  "description": "A Row is a 6-unit grid. Field columns tile (0,2) (2,4) (4,6) — max 3 per row before a new Row must open. Overflowing one Row breaks rendering for the WHOLE flow, not just that row.",
+  "source_capture": "CLAUDE.md",
+  "template": {
+    "Row_Sample01": {
+      "Id": "Row_Sample01",
+      "Kind": "Row",
+      "Column": "Column_Sample01",
+      "Row::Column": [
+        "Column_Sample02",
+        "Column_Sample03",
+        "Column_Sample04"
+      ]
+    },
+    "Column_Sample02": {
+      "Id": "Column_Sample02",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample01",
+      "Column::Field": [
+        "Field_Sample01"
+      ]
+    },
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Field A",
+      "Column": "Column_Sample02"
+    },
+    "Column_Sample03": {
+      "Id": "Column_Sample03",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample01",
+      "Column::Field": [
+        "Field_Sample02"
+      ]
+    },
+    "Field_Sample02": {
+      "Id": "Field_Sample02",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Field B",
+      "Column": "Column_Sample03"
+    },
+    "Column_Sample04": {
+      "Id": "Column_Sample04",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 4,
+      "End": 6,
+      "Row": "Row_Sample01",
+      "Column::Field": [
+        "Field_Sample03"
+      ]
+    },
+    "Field_Sample03": {
+      "Id": "Field_Sample03",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Field C",
+      "Column": "Column_Sample04"
+    }
+  },
+  "notes": [
+    "Observed live failure: 17 field columns all left at Start=0 in a single Row broke rendering for the entire flow, not just that section — this is not cosmetic.",
+    "A 4th field on the same visual row means a SECOND Row node under the same Section, not a 4th column squeezed into this one — per-type width (Textarea/Attachment take the full 6, short types take 2-3) changes how many fit before that new Row opens.",
+    "Row.Column here is the row's OWNING Section column, distinct from Row::Column (the list of field columns it contains) — easy to transpose the two."
+  ]
+}

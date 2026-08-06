@@ -1,0 +1,58 @@
+{
+  "kind": "Field",
+  "description": "Auto-numbered item id. Not a plain field: it hangs 3 Property children off Field::Property, one of which (PrefixExpression) itself owns an Expression — the ONE place an Expression is Property-owned rather than ProcessDef- or Activity-owned.",
+  "source_capture": "CLAUDE.md",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "SequenceNumber",
+      "Model": "Model_Sample01",
+      "Name": "Sample Running Number",
+      "Field::Property": [
+        "Property_Sample01",
+        "Property_Sample02",
+        "Property_Sample03"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Name": "Padding",
+      "ValueType": "Value",
+      "Value": "0001",
+      "Field": "Field_Sample01"
+    },
+    "Property_Sample02": {
+      "Id": "Property_Sample02",
+      "Kind": "Property",
+      "Name": "Step",
+      "ValueType": "Value",
+      "Value": "Activity_Sample01",
+      "Field": "Field_Sample01"
+    },
+    "Property_Sample03": {
+      "Id": "Property_Sample03",
+      "Kind": "Property",
+      "Name": "PrefixExpression",
+      "ValueType": "Expression",
+      "Field": "Field_Sample01",
+      "Property::Expression": [
+        "Expression_Sample01"
+      ]
+    },
+    "Expression_Sample01": {
+      "Id": "Expression_Sample01",
+      "Kind": "Expression",
+      "ExpressionStr": "concatenate(\"SAMPLE\")",
+      "Property": "Property_Sample03"
+    }
+  },
+  "notes": [
+    "UNCAPTURED and deliberately omitted: the Expression's own Node-tree internals for a concatenate(...) call (unlike the binary infix \"=\" pattern in expression_branch.json / expression_goto_condition.json, which was captured 4 times). Only the Property->Expression wiring and the ExpressionStr mirror are grounded. Do not synthesize an Expression::Node list here — capture one from a builder-typed sequence-number prefix before writing it.",
+    "An Expression is NOT always a branch/loop condition: this is the third of three owner keys (ProcessDef=branch, Activity=goto loop, Property=this). Always branch on which key is present rather than assuming ProcessDef.",
+    "Padding's Value is a wire STRING (\"0001\"), and Step stores the owning Activity's id as its Value (stamped there by the builder, not something you choose independently).",
+    "The host Column for a SequenceNumber field is IsHidden:true and gets NO Permission nodes — hidden columns have no per-step visibility to set; do not count them as visibility-matrix gaps.",
+    "INFERRED, UNVERIFIED: each Property's scalar owner back-ref (\"Field\": \"Field_Sample01\") is inferred from the convention seen on other node families (e.g. a FieldMapping owns its Property via a scalar owner key) — no raw capture of a real UI-built SequenceNumber field exists anywhere in research/ to confirm this specific key name, and this whole shape's source_capture is CLAUDE.md prose rather than a saved JSON capture. Treat the \"Field\" key on Property_Sample01/02/03 as a plausible-by-convention placeholder, not a captured fact, until a builder-typed sequence-number field is captured."
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "kind": "Field",
+  "description": "Multiline text field — a real distinct Type, NOT Text plus a display widget. Carries AllowFormatting, the one per-type default the builder writes that the bare API does not require.",
+  "source_capture": "CLAUDE.md",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Textarea",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Notes Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "AllowFormatting": false
+    }
+  },
+  "notes": [
+    "AllowFormatting:false is what the builder itself writes on a plain Textarea (rich-text formatting off). Omitting the key entirely is accepted by the API and publishes fine, but diffs away from every UI-built Textarea — write it explicitly for parity.",
+    "A Textarea in the 6-unit row grid should usually span the FULL row (End-Start=6): a 2-unit canvas box is the single biggest visual tell of an API-built form vs a hand-built one."
+  ]
+}

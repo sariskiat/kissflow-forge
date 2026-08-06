@@ -1,0 +1,23 @@
+{
+  "kind": "Field",
+  "description": "Single-select field bound to a list of options via ReferredList. The option VALUES live outside this node entirely (in the referenced list) and are never validated against by the write API.",
+  "source_capture": "goto_condition_shape.json",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Select",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Choice Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "ReferredList": "List_Sample01"
+    }
+  },
+  "notes": [
+    "ReferredList is an id into the account's list inventory (GET /flow/2/{acct}/list) — never invent one; only reuse an id the builder itself wrote, and read its option values via GET /flow/2/{acct}/list/{list_id}/items before writing any literal that must equal one (e.g. an expression Static comparing against this field).",
+    "A Select PUT with a value outside its list's options returns 200 and silently discards — read back after every write to a Select-typed field.",
+    "The wiring FORMAT of a brand-new ReferredList reference (not just its target id) is still uncaptured — only reusing an existing one is proven safe."
+  ]
+}

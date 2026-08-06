@@ -1,0 +1,288 @@
+{
+  "kind": "Component",
+  "description": "Repeater: renders N live rows from a bound view. This is the CLAUDE.md \"SOLVED 2026-08-06\" mechanism — covers both the page-side repeater requirement and the 28th widget-palette entry (repeater counts once).",
+  "source_capture": "capture_page_qa_general_repeater.json",
+  "template": {
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "caption",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample01",
+      "Value": "Sample Repeater"
+    },
+    "FieldMapping_Sample02": {
+      "Id": "FieldMapping_Sample02",
+      "Kind": "FieldMapping",
+      "Name": "flow_type",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample02"
+      ]
+    },
+    "Property_Sample02": {
+      "Id": "Property_Sample02",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample02",
+      "Value": "Process"
+    },
+    "FieldMapping_Sample03": {
+      "Id": "FieldMapping_Sample03",
+      "Kind": "FieldMapping",
+      "Name": "flow_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample03"
+      ]
+    },
+    "Property_Sample03": {
+      "Id": "Property_Sample03",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample03",
+      "Value": "Flow_Sample01"
+    },
+    "FieldMapping_Sample04": {
+      "Id": "FieldMapping_Sample04",
+      "Kind": "FieldMapping",
+      "Name": "view_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample04"
+      ]
+    },
+    "Property_Sample04": {
+      "Id": "Property_Sample04",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample04",
+      "Value": "admin"
+    },
+    "FieldMapping_Sample05": {
+      "Id": "FieldMapping_Sample05",
+      "Kind": "FieldMapping",
+      "Name": "view_type",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample05"
+      ]
+    },
+    "Property_Sample05": {
+      "Id": "Property_Sample05",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample05",
+      "Value": "table"
+    },
+    "FieldMapping_Sample06": {
+      "Id": "FieldMapping_Sample06",
+      "Kind": "FieldMapping",
+      "Name": "variable_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample06"
+      ]
+    },
+    "Property_Sample06": {
+      "Id": "Property_Sample06",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample06",
+      "Value": ""
+    },
+    "FieldMapping_Sample07": {
+      "Id": "FieldMapping_Sample07",
+      "Kind": "FieldMapping",
+      "Name": "variable_type",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample07"
+      ]
+    },
+    "Property_Sample07": {
+      "Id": "Property_Sample07",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample07",
+      "Value": ""
+    },
+    "FieldMapping_Sample08": {
+      "Id": "FieldMapping_Sample08",
+      "Kind": "FieldMapping",
+      "Name": "filterParameters",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample08"
+      ],
+      "Type": "Object"
+    },
+    "Property_Sample08": {
+      "Id": "Property_Sample08",
+      "Kind": "Property",
+      "Type": "FilterParam",
+      "FieldMapping": "FieldMapping_Sample08"
+    },
+    "FieldMapping_Sample09": {
+      "Id": "FieldMapping_Sample09",
+      "Kind": "FieldMapping",
+      "Name": "status",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample09"
+      ]
+    },
+    "Property_Sample09": {
+      "Id": "Property_Sample09",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample09"
+    },
+    "FieldMapping_Sample10": {
+      "Id": "FieldMapping_Sample10",
+      "Kind": "FieldMapping",
+      "Name": "activity_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample10"
+      ]
+    },
+    "Property_Sample10": {
+      "Id": "Property_Sample10",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample10"
+    },
+    "FieldMapping_Sample11": {
+      "Id": "FieldMapping_Sample11",
+      "Kind": "FieldMapping",
+      "Name": "selectedFields",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample11"
+      ],
+      "Type": "Array"
+    },
+    "Property_Sample11": {
+      "Id": "Property_Sample11",
+      "Kind": "Property",
+      "Type": "Array",
+      "FieldMapping": "FieldMapping_Sample11",
+      "Value": [
+        "sample_id_field",
+        "Name",
+        "_status",
+        "_current_step"
+      ]
+    },
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "Sample Repeater",
+      "LayoutConfig": {
+        "colSpan": 25,
+        "rowSpan": 110,
+        "minRowSpan": "auto",
+        "maxRowSpan": "auto"
+      },
+      "Container": "Container001",
+      "Container::Container": [],
+      "Container::Component": [
+        "Component_Sample01"
+      ],
+      "Container::FieldMapping": [
+        "FieldMapping_Sample01",
+        "FieldMapping_Sample02",
+        "FieldMapping_Sample03",
+        "FieldMapping_Sample04",
+        "FieldMapping_Sample05",
+        "FieldMapping_Sample06",
+        "FieldMapping_Sample07",
+        "FieldMapping_Sample08",
+        "FieldMapping_Sample09",
+        "FieldMapping_Sample10",
+        "FieldMapping_Sample11"
+      ],
+      "Container::Style": [
+        "Style_Sample01"
+      ],
+      "Container::EventMapping": []
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Type": "Repeater",
+      "Script": {
+        "web": "general/repeater"
+      },
+      "Name": "Repeater",
+      "Page": "Page_Sample01",
+      "Data": {
+        "manifest_id": "Repeater",
+        "category": "general",
+        "visualization_type": "repeater",
+        "flow_type": "Process",
+        "flow_id": "Flow_Sample01",
+        "view_id": "admin",
+        "view_type": "table",
+        "selectedFields": [
+          "sample_id_field",
+          "Name",
+          "_status",
+          "_current_step"
+        ]
+      },
+      "Container": "Container_Sample01",
+      "Component::Repeater": [
+        "Repeater_Sample01"
+      ]
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {}
+    },
+    "Repeater_Sample01": {
+      "Id": "Repeater_Sample01",
+      "Kind": "Repeater",
+      "Component": "Component_Sample01",
+      "Repeater::Container": [
+        "Container_Sample02"
+      ]
+    },
+    "Container_Sample02": {
+      "Id": "Container_Sample02",
+      "Kind": "Container",
+      "Type": "Repeater",
+      "Name": "Repeater Container",
+      "Repeater": "Repeater_Sample01",
+      "Container::Style": [
+        "Style_Sample02"
+      ]
+    },
+    "Style_Sample02": {
+      "Id": "Style_Sample02",
+      "Kind": "Style",
+      "Container": "Container_Sample02",
+      "Value": {}
+    }
+  },
+  "notes": [
+    "This shape covers ONLY the host mechanism (Component + its 11 FieldMappings + Repeater + its content Container, Type:\"Repeater\" — a seventh distinct Container Type value). Getting this right renders \"Repeater (N)\" with N live rows but every row BLANK.",
+    "Making a row's template labels show actual per-row data is a SEPARATE mechanism layered inside Container_Sample02's own content tree: each bound label needs the Type:\"Variable\" + VariableRef(Type:\"DatasourceParameter\", Variable:\"item.<field>\") chain AND registration in the page's Page::VariableRef list — see variable_ref.json for that full chain rather than duplicating it here; the two shapes compose (host config here + N bound-label instances of variable_ref.json's pattern, one per visible field, inside this Container).",
+    "selectedFields is written TWICE — once as a plain Array FieldMapping/Property, once again inline on Component.Data.selectedFields — both were present together on every live capture; write both rather than assuming either alone is read.",
+    "view_id:\"admin\" is what a repeater needs to see ALL rows regardless of who created them (myitems/mytasks/participated/assigned are the narrower, user-scoped alternatives — same view-id vocabulary as the item data-plane's own admin routes).",
+    "An on_click EventMapping on a per-row action Container inside here combined with kf.eventParameters.item (the clicked row's own data) is how \"click a row -> open its detail popup\" is built — see event_mapping.json's JSAction example, which is this exact pattern.",
+    "Real ids typically use the manifest_id prefix only on a fresh single-widget add (e.g. `Button_<10-char-rand>`, `Metrics_<10-char-rand>`) — the scenario this template mints for — while built-up production pages (`all_pages_draft_20260806.json`) mostly carry the generic `Component_<rand>` id instead, and Repeater/Tab/MasterDetail/Breadcrumbs were never observed prefixed at all."
+  ]
+}
