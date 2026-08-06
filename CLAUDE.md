@@ -138,6 +138,17 @@ Row        { Id:"Row_Sample01", Kind:"Row", Button:<root model id> }
   Permissions — exclude it from any permission-matrix count, the same
   treatment as a `Parallel` gateway. A bare `GotoTask` with no attached
   condition loops forever; see Expressions for how the condition attaches.
+
+  ⚠️ A CORRECTED BELIEF on "sits LAST", found live 2026-08-06 building node G's `add_goto_task`
+  (kfforge/graph.py) + Robot acceptance suite. The line above was captured off a MINIMAL 2-node
+  illustration (one UserTask + the GotoTask, no Start/End shown), where "last" and "last of the
+  two elements shown" were indistinguishable. Against a REAL workflow with a terminal EndEvent,
+  appending the GotoTask strictly last — AFTER the EndEvent too — PUTs 400
+  `KISSFLOW_ERROR_00011 InvalidArguments` (a field-less, unhelpful error; isolated via a two-arm
+  live experiment: identical draft, only the insertion point differs). The position that PUTs 200
+  is last among the REAL activities, immediately BEFORE a trailing EndEvent. `add_goto_task`
+  inserts there when the chain ends in one, and only plain-appends (matching the original minimal
+  capture exactly) when it doesn't.
 - **`IsSuspended` skips a step at runtime without deleting it:**
 
 ```json
@@ -384,6 +395,22 @@ PUT  /flow/2/{acct}/{type}/{id}/member/{id}                        -> update-onl
 GET  /flow/2/{acct}/{type}/{id}/member                             -> harvest role ids off an EXISTING flow
 ```
 
+⚠️ **`Permission` in that body must be a LIST, never a bare string** (proven
+live 2026-08-07, node G review): `"Permission": "Editable"` is silently
+iterated character-by-character by the request parser and 400s
+`KISSFLOW_ERROR_04231 UnsupportedPermissionError`, naming each individual
+LETTER as an invalid permission value — a genuinely confusing error shape if
+you don't already know the cause. Always `"Permission": ["Editable"]`.
+
+⚠️ **Listing flows in an app (`GET /flow/2/{acct}/{type}?...`) MUST carry
+`_application_id`, or it silently returns the WHOLE ACCOUNT's flows of that
+type, not just the target app's** (confirmed live: 0 flows with the filter on
+an empty app vs. 19 without it, same account, same moment). `kfforge.client.
+KfClient.list_flows` already does this correctly
+(`?_application_id={app_id}&page_size=100`) — this note exists so nobody ever
+hand-rolls the URL without it and silently starts reading (or, worse, later
+writing against an id sourced from) a DIFFERENT app's flow.
+
 There is no working route to list app roles from scratch (the obvious
 "external list" endpoint for roles returns an empty array) — harvest role ids
 by reading the member list of a flow that already has members, or by having a
@@ -394,6 +421,43 @@ human add one role in the builder UI first so you have an id to reuse.
   `Member` instead — the error response itself names the valid set for that
   flow type, so read a rejected batch's error before just retrying with a
   different guess.
+- **`member/batch`'s `Name` is separately validated against REAL, pre-existing
+  AppRoles** (found live 2026-08-06, node G): POSTing a synthetic `Name` (e.g.
+  `"Probe Admin"`) on an app with none defined 404s
+  `KISSFLOW_ERROR_00051 UserOrGroupDoesNotExistError`, `en_message: "The
+  AppRole {Name} does not exist in your account."` — a DIFFERENT, more
+  specific check than the `Role` value alone. On an app with zero
+  builder-UI-created AppRoles (confirmed live on the app under test),
+  `member/batch` is therefore FUNCTIONALLY BLOCKED end to end — there is no
+  API route that creates an AppRole either, so this can only ever re-grant a
+  role harvested from a flow where a human already set one up.
+- **⚠️ A CORRECTED MECHANISM, re-verified live 2026-08-07 (node G review).** An
+  earlier version of this note claimed an unassigned step's item had NO
+  derivable activity-instance id "so advance/submit can never even derive a
+  live aiid to try, let alone 403." That is WRONG and would send a future
+  agent looking in the wrong place. What is actually true, confirmed by
+  independently re-running the probe:
+  - The activity instance DOES exist and IS exposed — in the create
+    response's own `_activity_instance_id`, and in a `myitems`-style listing's
+    `_activity_id` + `_activity_instance_id`. Nothing about it is missing or
+    unreachable.
+  - Submitting WITH that real id returns `403 KISSFLOW_ERROR_050302`,
+    `"You don't have permission to submit this item anymore."` — a
+    **permission** failure, not a missing-id failure. The cause is the step
+    has no AppRole assignee the API user belongs to (see above: a fresh app
+    has no grantable AppRole at all).
+  - What IS genuinely absent, on an unassigned step, is only the
+    `_current_context[0]._context_activity_instance_id` MIRROR (Item data
+    plane's own documented source for `live_aiid`) — not transient, unchanged
+    across 5 reads 1s apart. `live_aiid()` (dataplane.py) correctly REFUSES to
+    fall back to the create-response/myitems id instead — that fallback is
+    exactly the "myitems consumed-instance" trap this whole module exists to
+    avoid (see Item data plane) — so it reports its own "cannot submit without
+    the live aiid" Err rather than ever reaching a submit call. The 403 above
+    is what a caller sees if it bypasses `live_aiid` and submits with the
+    create-response id directly; `walk`/`advance` never do that, so in
+    practice this pack's own code stops one step earlier, at `live_aiid`'s
+    refusal, for the SAME underlying reason (no AppRole membership).
 - A step's assignee is `Resource{ValueType:"AppRole", Value:<role_id>,
   Activity:<id>}`. Writing `ValueType:"User"` instead persists and even
   publishes without error, but the builder appears to simply ignore it at
@@ -488,6 +552,47 @@ navigation chain is `GET/PUT /metadata/2/{acct}/application/{app_id}/draft` →
 `Navigation` (one per role's menu set) → `Menu` → `FieldMapping` →
 `Property{Type:"Page", Value:<page_id>}`. The application root also carries a
 `DefaultPage`.
+
+**Creating/deleting the APPLICATION itself (not a page within one) — captured
+live 2026-08-06, node G's forge_create_app probe.** Tried the obvious shapes;
+only ONE worked, ≤3 attempts:
+
+```
+POST   /flow/2/{acct}/application         {"Name": "..."}    -> 200 {_id, Type:"Application", Status:"Draft"}
+GET    /flow/2/{acct}/application?page_size=100                -> the true inventory (mirrors the page-list route)
+POST   /flow/2/{acct}/application/{id}/archive                 -> 200
+DELETE /flow/2/{acct}/application/{id}                          -> 400 KISSFLOW_ERROR_04602 unless archived first
+```
+`POST /metadata/2/{acct}/application` and `POST /flow/2/{acct}/app` both 404
+(wrong door). Same archive-then-delete rule as a process. Duplicate `Name` on
+create 400s `KISSFLOW_ERROR_04204 FlowNameAlreadyExists`.
+
+⚠️ **A REFUTED CLAIM, deleted 2026-08-07 (node G review).** This note used to
+say a freshly-created application gets built-in `Admin`/`User` AppRoles
+auto-provisioned, inferred from a `PageAccess` list seen in one archive
+response. Independently re-tested and disproven: a throwaway app's own member
+roster (`GET .../application/{app}/member`) held exactly one entry — the
+creating USER — and zero AppRole entries. `member/batch` against that app with
+`Kind:"AppRole"` and `Name` of `"Admin"`, `"User"`, or `"Member"` each 500s
+`FlowError`. What is actually proven, app-agnostic:
+- A freshly-created (or otherwise fresh) application carries **no grantable
+  AppRole** — there is nothing to `member/batch` a step's assignee onto yet.
+- `member/batch` at the APPLICATION level with an `AppRole` name 500s
+  `FlowError` regardless of which built-in-sounding name is tried.
+- A step assignee written as `Resource{ValueType:"User", Value:<real user
+  id>}` persists and PUBLISHES cleanly (CLAUDE.md elsewhere already notes the
+  builder appears to ignore `ValueType:"User"` at render time) but does NOT
+  confer runtime submit permission either: with a User-typed assignee AND
+  that same user granted via `member/batch` (⚠️ `Permission` must be a
+  **list**, e.g. `["Editable"]` — a bare string is iterated character-by-
+  character and 400s `KISSFLOW_ERROR_04231 UnsupportedPermissionError`,
+  naming each letter as an invalid value), `_current_context[0]` STILL lacked
+  `_context_activity_instance_id` and submit STILL returned `403
+  KISSFLOW_ERROR_050302` on a real live item.
+- There is no API route that creates an AppRole, or adds a user to one — both
+  are builder-UI-only, matching the "no route to list app roles from scratch"
+  note above. This is a structural gap, not something a build script can work
+  around with a different request shape.
 
 Each page is its own draft/publish unit:
 
