@@ -189,6 +189,80 @@ def _reachable_stage_names(
     return reachable
 
 
+def _forward_next_stages(spec: AppSpecLike) -> dict[str, str | None]:
+    """A stage's single forward "next" edge, under the loop-terminal merge rule.
+
+    Every stage has exactly one onward edge except a routing-point stem (a fork's outgoing is its
+    decision diamond, not a spine edge) and the last stage. A branch -- the spine span a routing
+    target opens -- runs to a TERMINAL, and that terminal points at the MERGE (the first stage
+    after the deepest terminal) instead of spilling forward into a sibling branch's stages (the
+    round-1 major defect in decision_01 item 1: three service tiers each drew a spine edge into the
+    next tier instead of converging on the shared join).
+
+    Terminal derivation (the loop-terminal rule): a branch's terminal defaults to its on-spine
+    entry target, unless a BACKWARD rework loop's `from_stage` is owned by that entry (owner = the
+    most recent entry at-or-before it in spine order), in which case the loop's `from_stage` is the
+    terminal -- the stage the branch really ends at, and the one that must jump to the merge.
+    """
+    stages = _seq(spec.stages)
+    stage_names = [st.name for st in stages]
+    idx = _stage_index(spec)
+    routing = _seq(spec.routing)
+    routing_at_stages = {rp.at_stage for rp in routing}
+    loops = _seq(spec.rework_loops)
+
+    # On-spine branch entries = routing targets that are actual stages.
+    entries: set[str] = set()
+    for rp in routing:
+        for target in dict(rp.route_per_option).values():
+            if target in idx:
+                entries.add(target)
+
+    # owner[name] = the most recent entry at-or-before it; None before the first branch.
+    owner: dict[str, str | None] = {}
+    last_entry: str | None = None
+    for name in stage_names:
+        if name in entries:
+            last_entry = name
+        owner[name] = last_entry
+
+    # terminal per entry, defaulting to the entry itself; a backward loop's from_stage overrides
+    # the terminal of the entry that owns it.
+    terminal: dict[str, str] = {e: e for e in entries}
+    for lp in loops:
+        fi, ti = idx.get(lp.from_stage), idx.get(lp.to_stage)
+        if fi is None or ti is None or ti >= fi:
+            continue  # off-spine endpoint, or not a genuine backward rework loop
+        own = owner.get(lp.from_stage)
+        if own is not None:
+            terminal[own] = lp.from_stage
+
+    # Merge = the first stage after the deepest terminal (where all branches reconverge).
+    terminal_set = set(terminal.values())
+    merge: str | None = None
+    if terminal_set:
+        deepest = max(idx[t] for t in terminal_set)
+        if deepest + 1 < len(stage_names):
+            merge = stage_names[deepest + 1]
+
+    # An unreachable (orphan) stage must not be wired with a fabricated edge either -- only
+    # reachable stages get a forward "next" (same gate _reachable_stage_names applies in
+    # flow_diagram_xml, so a stray sequential pointer can't invent a path through a stage the spec
+    # never actually reaches).
+    reachable = _reachable_stage_names(stage_names, routing, loops, routing_at_stages)
+    next_of: dict[str, str | None] = {}
+    for i, name in enumerate(stage_names):
+        if name not in reachable:
+            next_of[name] = None
+        elif name in routing_at_stages:
+            next_of[name] = None  # the fork's outgoing is its diamond, not a spine edge
+        elif name in terminal_set:
+            next_of[name] = merge  # branch terminal jumps to the merge (or ends)
+        else:
+            next_of[name] = stage_names[i + 1] if i + 1 < len(stage_names) else None
+    return next_of
+
+
 def _row_advance(n_routing_at_stage: int) -> float:
     """Vertical distance from this stage's y to the NEXT stage's y. A stage with no routing point
     just needs the baseline ROW_H; one with N>=1 routing points needs room for its decision
@@ -349,6 +423,7 @@ def flow_diagram_xml(spec: AppSpecLike) -> str:
         routing_counts[rp.at_stage] = routing_counts.get(rp.at_stage, 0) + 1
     reachable = _reachable_stage_names(stage_names, routing, loops, routing_at_stages)
 
+    next_of = _forward_next_stages(spec)
     stage_y: dict[str, float] = {}
     y = 40.0
     for i, st in enumerate(stages):
@@ -359,8 +434,9 @@ def flow_diagram_xml(spec: AppSpecLike) -> str:
             label = _two_line(f"{st.name} (unreachable?)", st.owner_role)
             style = _ORPHAN_STYLE
         vid = c.vertex(name=st.name, value=label, x=SPINE_X, y=y, w=BOX_W, h=BOX_H, style=style)
-        if i > 0 and stage_names[i - 1] not in routing_at_stages:
-            c.edge(source=c.resolve(stage_names[i - 1]), target=vid)
+        nxt = next_of.get(st.name)
+        if nxt is not None:
+            c.edge(source=vid, target=c.resolve(nxt))
         y += _row_advance(routing_counts.get(st.name, 0))
 
     placed_at_stage: dict[str, int] = {}
