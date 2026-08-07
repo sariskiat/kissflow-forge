@@ -1,7 +1,7 @@
 {
   "kind": "Field",
   "description": "Plain single-line text field. The simplest Field shape: no per-type extra keys beyond the universal ones every Field must carry.",
-  "source_capture": "aicase_draft_snapshot.json",
+  "source_capture": "ui-built-oracle",
   "template": {
     "Field_Sample01": {
       "Id": "Field_Sample01",

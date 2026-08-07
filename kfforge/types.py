@@ -22,7 +22,7 @@ class FieldType(StrEnum):
 class Visibility(StrEnum):
     """What one field column looks like at one workflow step.
 
-    Wire-strings taken from the UI-built oracle (aicase_draft_snapshot.json, 132 Kissflow-generated
+    Wire-strings taken from the UI-built oracle (a captured draft snapshot, 132 Kissflow-generated
     Permission nodes: 118 ReadOnly, 11 Editable, 3 Hidden). There is no fourth value and no
     section-level variant — hiding a section means hiding every field column inside it.
     """

@@ -1,6 +1,6 @@
 """Idempotent reconcile: applying a manifest adds only missing fields, never duplicates.
 
-This is what lets the AI-Clinic manifest run against the EXISTING process safely. Offline.
+This is what lets the original-app manifest run against the EXISTING process safely. Offline.
 """
 import json
 import pathlib

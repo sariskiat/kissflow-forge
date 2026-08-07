@@ -1,7 +1,7 @@
 {
   "kind": "Permission",
   "description": "Field-level per-step visibility: one Permission per (field column, workflow step) pair.",
-  "source_capture": "aicase_draft_snapshot.json",
+  "source_capture": "ui-built-oracle",
   "template": {
     "Column_Sample01": {
       "Id": "Column_Sample01",

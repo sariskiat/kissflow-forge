@@ -7,7 +7,11 @@ import re
 ROOT = pathlib.Path(__file__).parent.parent
 SKIP_DIRS = {".git", "__pycache__", ".venv", ".ruff_cache", "node_modules"}
 TEXT_EXT = {".py", ".json", ".md", ".robot", ".toml", ".txt", ".yml", ".yaml", ".cfg"}
-FORBIDDEN = re.compile("|".join(["AI_" + "Clinic", "ai" + "clinic", "cP" + "5", "คลิ" + "นิก"]))
+# Case-insensitive "cli"+"nic" and "ai"+"case" subsume the old underscore/concatenated
+# tokens AND close the dash/space/possessive + app-abbreviation gaps the case-sensitive
+# ones missed -- a green scan now really means blind. Tokens built by concatenation so
+# this file's own source stays grep-clean.
+FORBIDDEN = re.compile("|".join(["cli" + "nic", "ai" + "case", "cP" + "5", "คลิ" + "นิก"]), re.IGNORECASE)
 
 
 def _repo_text_files():

@@ -1,7 +1,7 @@
 {
   "kind": "Model",
   "description": "The workflow skeleton a bare process draft needs before it accepts ANY further write — a freshly created process PUTs 500 even completely unmodified until ProcessDef/Activities exist.",
-  "source_capture": "aicase_draft_snapshot.json",
+  "source_capture": "ui-built-oracle",
   "template": {
     "Model_Sample01": {
       "Id": "Model_Sample01",

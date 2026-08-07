@@ -101,7 +101,7 @@ def test_no_forbidden_tokens_in_doc():
     # Same split-string trick as tests/test_p0_scaffold.py: build the forbidden
     # tokens by concatenation so the literal substring never appears in THIS
     # file's own source (which is itself scanned by the repo-wide blindness test).
-    forbidden = ["AI_" + "Clinic", "ai" + "clinic", "cP" + "5", "คลิ" + "นิก"]
-    text = _doc_text()
-    hits = [tok for tok in forbidden if tok in text]
+    forbidden = ["cli" + "nic", "ai" + "case", "cP" + "5", "คลิ" + "นิก"]
+    text = _doc_text().lower()
+    hits = [tok for tok in forbidden if tok.lower() in text]
     assert not hits, f"forbidden token(s) leaked into CLAUDE.md: {hits}"

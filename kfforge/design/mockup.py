@@ -420,6 +420,15 @@ def _master_data_section(lists: list[Any]) -> str:
     return f'<section class="kf-master-data"><h2>Reference lists</h2>{"".join(items)}</section>'
 
 
+def _format_sequence(prefix: Any, padding: Any) -> str:
+    """Join a SequenceNumber prefix and zero-padding with exactly one separator.
+
+    A prefix may already end with the separator (e.g. `"RPT-"` -- decision_01 item 2);
+    re-joining with another dash double-wires it into `RPT--0001`. Normalize
+    the trailing dash once, then splice the single separator."""
+    return f"{str(prefix).rstrip('-')}-{padding}"
+
+
 def _sequence_note(seq: Any) -> str:
     """M7: `DataModel.sequence` (prefix + zero-padding) renders nowhere before this, yet it is
     the record id every user of the built app actually sees. Shown once, near the top of the
@@ -427,9 +436,9 @@ def _sequence_note(seq: Any) -> str:
     prefix, padding = seq.prefix, seq.padding
     try:
         next_val = str(int(padding) + 1).zfill(len(padding))
-        example = f"{prefix}-{padding}, {prefix}-{next_val}, ..."
+        example = f"{_format_sequence(prefix, padding)}, {_format_sequence(prefix, next_val)}, ..."
     except (ValueError, TypeError):
-        example = f"{prefix}-{padding}"
+        example = _format_sequence(prefix, padding)
     return f'<p class="kf-sequence-note">Record ID (auto-numbered): {html.escape(example)}</p>'
 
 

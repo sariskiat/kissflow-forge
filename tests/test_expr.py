@@ -129,7 +129,7 @@ def draft_with_goto_condition(
 def draft_with_legacy_select_goto_condition(
     draft_with_bare_goto: tuple[Draft, str], select_field_id: str,
 ) -> tuple[Draft, str, str]:
-    """A goto condition shaped like the ORIGINAL captured "Full Clinic" gate before its historical
+    """A goto condition shaped like the ORIGINAL captured branch gate before its historical
     rewire (research/goto_condition_shape.json, cross-checked against shapes/expression_goto_
     condition.json's notes): Activity-owned, comparing a Select field against a Static literal.
     `build_goto_gate` itself can never produce this shape — it only ever writes Boolean+false() —
@@ -759,7 +759,7 @@ def test_rewire_goto_condition_from_legacy_select_static_to_boolean_false(
 ) -> None:
     """Pins the production op the reviewer hand-ran: a goto gated on a Select field with a Static
     literal (the real shape a UI-built flow can carry — research/goto_condition_shape.json's
-    original "Full Clinic" capture, before its historical rewire) taken through rewire_condition
+    original branch-gate capture, before its historical rewire) taken through rewire_condition
     onto a Boolean field. Must land on exactly the shape build_goto_gate itself writes: the
     zero-arg false() Function, with no Syntax and no Node::Node on that leaf.
     """

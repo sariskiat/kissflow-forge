@@ -20,7 +20,7 @@ the OTHER half of the contract: this package's own minimal protocol also accepts
 in place of any wrapper, via `kfforge.design.diagram._seq()`.
 
 Domain is deliberately neutral (a small equipment-repair intake flow) -- no real app names/ids/
-clinic vocabulary anywhere in this file, per repo policy.
+real-app vocabulary anywhere in this file, per repo policy.
 """
 from __future__ import annotations
 
@@ -44,6 +44,7 @@ from kfforge.design.diagram import (
     schema_diagram_xml,
 )
 from kfforge.design.mockup import (
+    _format_sequence,
     design_bundle_html,
     form_mockups_html,
     persona_pages_html,
@@ -440,6 +441,48 @@ def spec_with_two_routing_points_same_stage() -> AppSpec:
     )
 
 
+def spec_with_tiered_branches() -> AppSpec:
+    """The round-1 defect (major, decision_01 item 1): three service tiers that must each run to a
+    SHARED merge, not spill forward into a sibling branch's stages. A strict sequence whose one
+    fork at "Triage" fans into three on-spine branch entries [Self Service, Light Work, Full
+    Tier]; the light and full branches are multi-step and each carry a backward rework loop
+    whose `from_stage` marks the branch's terminal. The merge is "Summary": every branch feeds it
+    directly (in-degree 3), and no branch draws a spine edge into a sibling branch. Neutral-domain
+    mirror of a 'choose a service level, walk it to the merge' shape."""
+    stages = Stages(stages=(
+        Stage("Intake", "Requester", "Open the issue."),
+        Stage("Prepare", "Requester", "Gather details."),
+        Stage("Triage", "Lead", "Pick a service tier."),
+        Stage("Self Service", "Analyst", "Requester tries it alone."),
+        Stage("Light Work", "Analyst", "Do one light round."),
+        Stage("Light Confirm", "Analyst", "Confirm the light round."),
+        Stage("Full Tier", "Analyst", "Full tier entry."),
+        Stage("Full Work", "Analyst", "Do one full round."),
+        Stage("Full Confirm", "Analyst", "Confirm the full round."),
+        Stage("Summary", "Analyst", "Summarise with the requester."),
+        Stage("Lead Closure", "Lead", "Review and close."),
+    ))
+    routing = Routing(points=(
+        RoutingPoint(at_stage="Triage", field_name="Service Tier",
+                     options=("Self", "Light", "Full"),
+                     route_per_option=(("Self", "Self Service"), ("Light", "Light Work"),
+                                       ("Full", "Full Tier"))),
+    ))
+    rework_loops = ReworkLoops(loops=(
+        Loop(from_stage="Light Confirm", to_stage="Light Work", gate_field="Round Done"),
+        Loop(from_stage="Full Confirm", to_stage="Full Work", gate_field="Round Done"),
+    ))
+    empty_dm = DataModel(fields=(), tables=())
+    empty_md = MasterData(lists=())
+    empty_personas = Personas(views=())
+    return AppSpec(
+        app_name="Tiered Service", problem_goal=_empty_problem_goal(), stages=stages,
+        routing=routing, rework_loops=rework_loops, data_model=empty_dm, master_data=empty_md,
+        visibility=VisibilityMatrix(entries=()), personas=empty_personas,
+        test_cases=TestCases(cases=()),
+    )
+
+
 def spec_with_forward_loop() -> AppSpec:
     """A "loop" whose to_stage comes AFTER its from_stage in the spine -- not a genuine rework
     loop by kfforge.intake.schema.LoopSpec's own contract. Proves this package says so rather
@@ -723,6 +766,63 @@ class TestFlowDiagram:
             geo = cell.find("mxGeometry")
             ghost_coords.add((geo.get("x"), geo.get("y")))
         assert len(ghost_coords) == 4, f"fallback nodes stacked: {ghost_coords}"
+
+
+class TestFlowDiagramBranchMerge:
+    """Round-1 defect (major, decision_01 item 1): three service tiers must each reach the shared
+    merge directly -- NOT by spilling forward through a sibling branch. The merge's in-degree must
+    equal the number of branches, and no cross-branch spine edge may appear."""
+
+    @staticmethod
+    def _first_line(value: str) -> str:
+        # after ElementTree decodes the XML, an html=1 two-line label is
+        # "Name<br>Role"; split on the DECODED tag (the raw file keeps &lt;br&gt;, the
+        # parsed tree has <br>).
+        return value.split("<br>", 1)[0].strip()
+
+    def _vertex_id(self, root, name: str) -> str:
+        for c in root.findall(".//mxCell"):
+            if c.get("vertex") == "1" and self._first_line(c.get("value") or "") == name:
+                return c.get("id")
+        raise AssertionError(f"no vertex named {name!r}")
+
+    def _incoming(self, root, target_id: str) -> set[str]:
+        return {c.get("source") for c in root.findall(".//mxCell")
+                if c.get("edge") == "1" and c.get("target") == target_id}
+
+    def _edge_pairs(self, root) -> set[tuple[str, str]]:
+        return {(c.get("source"), c.get("target")) for c in root.findall(".//mxCell")
+                if c.get("edge") == "1"}
+
+    def _vertex_labels(self, root) -> dict[str, str]:
+        # vertex id -> its first line ("Self Service" out of "Self Service<br>Analyst")
+        return {c.get("id"): self._first_line(c.get("value") or "")
+                for c in root.findall(".//mxCell") if c.get("vertex") == "1"}
+
+    def test_merge_in_degree_equals_branch_count(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_tiered_branches()))
+        summary = self._vertex_id(root, "Summary")
+        labels = self._vertex_labels(root)
+        sources = {labels[c.get("source")] for c in root.findall(".//mxCell")
+                   if c.get("edge") == "1" and c.get("target") == summary and c.get("source")}
+        # every branch's terminal feeds the merge: Self Service, Light Confirm, Full Confirm
+        assert sources == {"Self Service", "Light Confirm", "Full Confirm"}, sources
+
+    def test_no_cross_branch_spine_edge(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_tiered_branches()))
+        pairs = self._edge_pairs(root)
+        assert (self._vertex_id(root, "Self Service"), self._vertex_id(root, "Light Work")) \
+            not in pairs, "self tier must not spill into the light tier"
+        assert (self._vertex_id(root, "Light Confirm"), self._vertex_id(root, "Full Tier")) \
+            not in pairs, "light tier must not spill into the full tier"
+
+    def test_each_branch_tail_feeds_the_merge_as_an_edge(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_tiered_branches()))
+        pairs = self._edge_pairs(root)
+        summary = self._vertex_id(root, "Summary")
+        assert (self._vertex_id(root, "Self Service"), summary) in pairs
+        assert (self._vertex_id(root, "Light Confirm"), summary) in pairs
+        assert (self._vertex_id(root, "Full Confirm"), summary) in pairs
 
 
 class TestSchemaDiagram:
@@ -1084,6 +1184,12 @@ class TestSequenceRendering:
         doc = form_mockups_html(spec)
         seq = spec.data_model.sequence
         assert f"{seq.prefix}-{seq.padding}" in doc
+
+    def test_prefix_already_carrying_a_dash_does_not_double_wire(self):
+        """decision_01 item 2: a prefix may already end with the separator (e.g. `RPT-`); joining
+        that with another dash double-wires it into `RPT--0001`. A trailing dash must not double."""
+        assert _format_sequence("RPT-", "0001") == "RPT-0001"
+        assert _format_sequence("RPR", "0001") == "RPR-0001"
 
     def test_no_sequence_means_no_note(self):
         base = sample_spec()
