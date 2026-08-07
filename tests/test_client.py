@@ -7,6 +7,7 @@ import pytest
 
 from kfforge.client import (
     ApplyReport,
+    BranchConditionReport,
     Err,
     EventReport,
     GotoGateReport,
@@ -16,6 +17,7 @@ from kfforge.client import (
     StyleReport,
     TableReport,
     WorkflowReport,
+    apply_branch_conditions,
     apply_field_events,
     apply_fields,
     apply_fields_and_layout,
@@ -31,6 +33,7 @@ from kfforge.client import (
     run_doctor,
 )
 from kfforge.graph import apply_changes as _apply_changes
+from kfforge.graph import build_workflow as _build_workflow
 from kfforge.graph import ensure_process_def as _ensure_process_def
 from kfforge.types import FieldSpec, FieldType
 
@@ -359,6 +362,258 @@ def test_apply_goto_gate_non_boolean_field_rejected_by_gate_polarity() -> None:
     got = apply_goto_gate(c, "F1", target_activity_name="Review", field_name="Choice")
     assert isinstance(got, Err) and got.kind == "verify"
     assert c.puts == 0
+
+
+# ---- apply_goto_gate — branch_name (Node M, conditional routing) ------------------------------
+
+def _process_with_branches(deciding_field_type: FieldType = FieldType.SELECT) -> dict:
+    """1 root step -> a 2-branch Parallel (1 step each) -> a Select (or Text) deciding field."""
+    draft = _build_workflow(
+        _bare_process_draft(), [("Intake", None)],
+        parallel=("Route", [("Branch A", [("Shared Step", None)]),
+                            ("Branch B", [("Shared Step", None)])]),
+        parallel_after=0,
+    )
+    kwargs: dict[str, Any] = {}
+    if deciding_field_type == FieldType.SELECT:
+        kwargs["referred_list"] = "List_Sample01"
+    return _apply_changes(draft, [FieldSpec(name="Track", type=deciding_field_type, **kwargs)])
+
+
+def test_apply_goto_gate_with_branch_name_scopes_target_into_that_branch() -> None:
+    """Both branches carry a step named "Shared Step" -- without branch_name this is ambiguous;
+    WITH it, the GotoTask must land inside the NAMED branch, never the other one."""
+    draft = _process_with_branches()
+    branch_a_pd_id = next(v["Id"] for v in draft.values()
+                          if isinstance(v, dict) and v.get("Kind") == "ProcessDef"
+                          and v.get("Name") == "Branch A")
+    branch_b_pd_id = next(v["Id"] for v in draft.values()
+                          if isinstance(v, dict) and v.get("Kind") == "ProcessDef"
+                          and v.get("Name") == "Branch B")
+    draft = _apply_changes(draft, [FieldSpec(name="Done Flag", type=FieldType.BOOLEAN)])
+    c = FakeClient(draft)
+
+    rep = apply_goto_gate(c, "F1", target_activity_name="Shared Step", field_name="Done Flag",
+                          branch_name="Branch A")
+    assert isinstance(rep, GotoGateReport)
+    assert rep.verified is True and rep.branch_name == "Branch A"
+    assert rep.as_tool_result()["isError"] is False
+
+    goto_id = rep.goto_activity_id
+    assert goto_id is not None
+    assert c.draft[goto_id]["ProcessDef"] == branch_a_pd_id
+    assert goto_id in c.draft[branch_a_pd_id]["ProcessDef::Activity"]
+    assert goto_id not in c.draft[branch_b_pd_id]["ProcessDef::Activity"]
+
+
+def test_apply_goto_gate_unknown_branch_name_rejected_before_any_write() -> None:
+    draft = _apply_changes(_process_with_branches(), [FieldSpec(name="Done Flag", type=FieldType.BOOLEAN)])
+    c = FakeClient(draft)
+    got = apply_goto_gate(c, "F1", target_activity_name="Shared Step", field_name="Done Flag",
+                          branch_name="No Such Branch")
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0
+
+
+def test_apply_goto_gate_branch_name_target_not_in_that_branch_rejected() -> None:
+    draft = _apply_changes(_process_with_branches(), [FieldSpec(name="Done Flag", type=FieldType.BOOLEAN)])
+    c = FakeClient(draft)
+    got = apply_goto_gate(c, "F1", target_activity_name="Intake", field_name="Done Flag",
+                          branch_name="Branch A")
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0
+
+
+def test_apply_goto_gate_no_branch_name_is_unchanged_from_before_the_parameter_existed() -> None:
+    """A plain, unambiguous root-chain call with no branch_name must behave exactly as it always
+    did — the new parameter must never change default behavior."""
+    c = FakeClient(_process_with_boolean_field())
+    rep = apply_goto_gate(c, "F1", target_activity_name="Review", field_name="Done Flag")
+    assert isinstance(rep, GotoGateReport)
+    assert rep.verified is True and rep.branch_name is None
+    assert rep.as_tool_result()["branch_name"] is None
+
+
+def test_apply_goto_gate_ambiguous_target_without_branch_name_rejected_before_any_write() -> None:
+    """Node M review (2026-08-07): a step name that repeats across branches, resolved with NO
+    branch_name, used to silently pick whichever match dict iteration found first and report a
+    clean `verified: True` — a wrong graph with a clean report. Both branches in
+    _process_with_branches() carry a step literally named "Shared Step"; this must now be a loud,
+    pre-write rejection that names both candidate branches, not a silent pick."""
+    draft = _apply_changes(_process_with_branches(), [FieldSpec(name="Done Flag", type=FieldType.BOOLEAN)])
+    c = FakeClient(draft)
+    got = apply_goto_gate(c, "F1", target_activity_name="Shared Step", field_name="Done Flag")
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0
+    assert "ambiguous" in got.message
+    assert "Branch A" in got.message and "Branch B" in got.message
+    assert "branch_name" in got.message
+
+
+# ---- apply_branch_conditions (Node M, conditional routing) ------------------------------------
+
+def test_apply_branch_conditions_wires_and_verifies_both_branches() -> None:
+    c = FakeClient(_process_with_branches())
+    c.list_items["List_Sample01"] = ["Alpha", "Beta"]
+
+    rep = apply_branch_conditions(c, "F1", "Track", {"Branch A": "Alpha", "Branch B": "Beta"})
+    assert isinstance(rep, BranchConditionReport)
+    assert rep.verified == ("Branch A", "Branch B") and rep.missing == ()
+    assert rep.as_tool_result()["isError"] is False
+
+
+def test_apply_branch_conditions_writes_the_correct_owner_key_and_ast_shape() -> None:
+    draft = _process_with_branches()
+    branch_a_pd_id = next(v["Id"] for v in draft.values()
+                          if isinstance(v, dict) and v.get("Kind") == "ProcessDef"
+                          and v.get("Name") == "Branch A")
+    field_id = next(k for k, v in draft.items()
+                    if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Track")
+    c = FakeClient(draft)
+    c.list_items["List_Sample01"] = ["Alpha", "Beta"]
+
+    apply_branch_conditions(c, "F1", "Track", {"Branch A": "Alpha"})
+
+    expr_ids = c.draft[branch_a_pd_id]["ProcessDef::Expression"]
+    assert len(expr_ids) == 1
+    expr = c.draft[expr_ids[0]]
+    assert expr["ProcessDef"] == branch_a_pd_id, "owner key must be ProcessDef, a branch condition"
+    root_id = expr["Expression::Node"][0]
+    root = c.draft[root_id]
+    lhs_id, rhs_id = root["Node::Node"]
+    assert c.draft[lhs_id]["Type"] == "Field" and c.draft[lhs_id]["Field"] == field_id
+    assert c.draft[rhs_id]["Type"] == "Static" and c.draft[rhs_id]["Value"] == "Alpha"
+
+
+def test_apply_branch_conditions_rejects_literal_not_in_real_options_before_any_write() -> None:
+    """CLAUDE.md's own war story: a branch that never fires over one mis-cased/unreal literal —
+    caught HERE, before the write, never discovered live."""
+    c = FakeClient(_process_with_branches())
+    c.list_items["List_Sample01"] = ["Alpha", "Beta"]
+
+    got = apply_branch_conditions(c, "F1", "Track", {"Branch A": "Not A Real Option"})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0
+
+
+def test_apply_branch_conditions_unknown_branch_name_rejected_before_any_write() -> None:
+    c = FakeClient(_process_with_branches())
+    c.list_items["List_Sample01"] = ["Alpha", "Beta"]
+    got = apply_branch_conditions(c, "F1", "Track", {"No Such Branch": "Alpha"})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0
+
+
+def test_apply_branch_conditions_unknown_field_rejected_before_any_write() -> None:
+    c = FakeClient(_process_with_branches())
+    got = apply_branch_conditions(c, "F1", "No Such Field", {"Branch A": "Alpha"})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0
+
+
+def test_apply_branch_conditions_requires_exactly_one_parallel_gateway() -> None:
+    c = FakeClient(_process_with_boolean_field())  # a plain sequential process, no Parallel at all
+    got = apply_branch_conditions(c, "F1", "Done Flag", {"Branch A": "Alpha"})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0
+
+
+def test_apply_branch_conditions_text_field_skips_option_validation() -> None:
+    """A Text-typed deciding field has no ReferredList to validate against — the literal is
+    written as given (expr.build_branch_condition's own options=None contract), never blocked for
+    lack of a live list, matching the field types _BRANCH_FIELD_DATA_TYPE actually supports."""
+    c = FakeClient(_process_with_branches(deciding_field_type=FieldType.TEXT))
+    rep = apply_branch_conditions(c, "F1", "Track", {"Branch A": "Anything At All"})
+    assert isinstance(rep, BranchConditionReport)
+    assert rep.verified == ("Branch A",) and rep.missing == ()
+
+
+def test_apply_branch_conditions_is_idempotent_replacing_not_accumulating() -> None:
+    """Re-running with a DIFFERENT literal for the same branch must REPLACE the condition, never
+    stack a second one on the same ProcessDef."""
+    draft = _process_with_branches()
+    branch_a_pd_id = next(v["Id"] for v in draft.values()
+                          if isinstance(v, dict) and v.get("Kind") == "ProcessDef"
+                          and v.get("Name") == "Branch A")
+    c = FakeClient(draft)
+    c.list_items["List_Sample01"] = ["Alpha", "Beta"]
+
+    apply_branch_conditions(c, "F1", "Track", {"Branch A": "Alpha"})
+    rep = apply_branch_conditions(c, "F1", "Track", {"Branch A": "Beta"})
+    assert isinstance(rep, BranchConditionReport)
+    assert rep.verified == ("Branch A",)
+
+    expr_ids = c.draft[branch_a_pd_id]["ProcessDef::Expression"]
+    assert len(expr_ids) == 1, f"expected exactly one condition on Branch A, got {len(expr_ids)}"
+    root_id = c.draft[expr_ids[0]]["Expression::Node"][0]
+    _lhs_id, rhs_id = c.draft[root_id]["Node::Node"]
+    assert c.draft[rhs_id]["Value"] == "Beta"
+
+
+def test_apply_branch_conditions_only_touches_the_named_branches() -> None:
+    """A branch NOT named in branch_literals must be left completely alone."""
+    draft = _process_with_branches()
+    branch_b_pd_id = next(v["Id"] for v in draft.values()
+                          if isinstance(v, dict) and v.get("Kind") == "ProcessDef"
+                          and v.get("Name") == "Branch B")
+    c = FakeClient(draft)
+    c.list_items["List_Sample01"] = ["Alpha", "Beta"]
+
+    apply_branch_conditions(c, "F1", "Track", {"Branch A": "Alpha"})
+    assert "ProcessDef::Expression" not in c.draft[branch_b_pd_id]
+
+
+# ---- apply_branch_conditions — uncovered (Node M review, fail-OPEN hazard) ---------------------
+# A value matching NO branch condition does not park and does not error: it silently skips the
+# WHOLE Parallel and the item completes with no work done (verified live 2026-08-07). `uncovered`
+# is the audit bucket that states this instead of letting a caller discover it later.
+
+def test_apply_branch_conditions_reports_uncovered_real_options() -> None:
+    c = FakeClient(_process_with_branches())
+    c.list_items["List_Sample01"] = ["Alpha", "Beta", "Gamma"]
+
+    rep = apply_branch_conditions(c, "F1", "Track", {"Branch A": "Alpha", "Branch B": "Beta"})
+    assert isinstance(rep, BranchConditionReport)
+    assert rep.uncovered == ("Gamma",)
+    assert rep.as_tool_result()["uncovered"] == ["Gamma"]
+
+
+def test_apply_branch_conditions_uncovered_is_never_an_error() -> None:
+    """A caller may genuinely want a value to end the case with no work done -- uncovered must
+    never flip isError on its own, only missing does."""
+    c = FakeClient(_process_with_branches())
+    c.list_items["List_Sample01"] = ["Alpha", "Beta", "Gamma"]
+
+    rep = apply_branch_conditions(c, "F1", "Track", {"Branch A": "Alpha"})
+    assert isinstance(rep, BranchConditionReport)
+    assert rep.uncovered != ()
+    assert rep.missing == ()
+    assert rep.as_tool_result()["isError"] is False
+
+
+def test_apply_branch_conditions_uncovered_accounts_for_branches_this_call_never_touched() -> None:
+    """uncovered must reflect the FULL branch set on the gateway, not just this call's own
+    branch_literals -- otherwise a value an EARLIER call already covered on a different branch
+    would false-alarm here every time that other branch is left untouched."""
+    c = FakeClient(_process_with_branches())
+    c.list_items["List_Sample01"] = ["Alpha", "Beta"]
+
+    apply_branch_conditions(c, "F1", "Track", {"Branch A": "Alpha"})
+    rep = apply_branch_conditions(c, "F1", "Track", {"Branch B": "Beta"})
+    assert isinstance(rep, BranchConditionReport)
+    assert rep.uncovered == (), (
+        "Branch A's earlier condition still covers Alpha -- must not be reported as uncovered "
+        "just because THIS call only touched Branch B"
+    )
+
+
+def test_apply_branch_conditions_uncovered_is_empty_for_a_text_field() -> None:
+    """A Text-typed deciding field has no enumerable option universe -- uncovered is () meaning
+    "nothing checked," never a false claim of full coverage."""
+    c = FakeClient(_process_with_branches(deciding_field_type=FieldType.TEXT))
+    rep = apply_branch_conditions(c, "F1", "Track", {"Branch A": "Anything At All"})
+    assert isinstance(rep, BranchConditionReport)
+    assert rep.uncovered == ()
 
 
 # ---- apply_field_events -----------------------------------------------------------------------

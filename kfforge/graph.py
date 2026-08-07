@@ -690,7 +690,13 @@ def build_workflow(
     return new
 
 
-def add_goto_task(draft: Draft, *, target_activity_id: str, name: str | None = None) -> tuple[Draft, str]:
+def add_goto_task(
+    draft: Draft,
+    *,
+    target_activity_id: str,
+    name: str | None = None,
+    branch_process_def_id: str | None = None,
+) -> tuple[Draft, str]:
     """Add a GotoTask: a backward-jump edge node targeting `target_activity_id`. Pure.
 
     `build_workflow` only ever produces a straight-line/parallel chain — nothing else in this
@@ -712,25 +718,60 @@ def add_goto_task(draft: Draft, *, target_activity_id: str, name: str | None = N
     inserts there when the chain ends in one, and only falls back to a plain append (matching the
     original minimal capture exactly) when it doesn't.
 
+    ⚠️ Node M (2026-08-07): `branch_process_def_id` is a NEW, opt-in lever — the gap it closes.
+    Without it, the chain that hosts the new GotoTask was always DERIVED from the target's own
+    `ProcessDef`, with no way for a caller to say which chain they actually meant. That is silently
+    wrong exactly when a caller resolves `target_activity_id` to a step OUTSIDE the branch they
+    intended (a shared root-chain step, say) while meaning to build a per-branch loop: the GotoTask
+    lands last in THAT step's own chain instead — for a root-chain target, that means after the
+    LAST root-chain activity (i.e. after the Parallel gateway itself), evaluated once for the whole
+    item instead of scoped to one branch (reproduced live 2026-08-07, node M: a target 2 steps
+    before a 2-branch Parallel landed the GotoTask after the LAST root step, not inside either
+    branch). Passing `branch_process_def_id` explicitly turns that silent misplacement into a loud,
+    pre-write ValueError: the target must ALREADY belong to that exact ProcessDef, or this raises
+    rather than building a shape `verify.doctor`'s own rule 2b ("jumps out of its own branch") would
+    flag anyway — CLAUDE.md Workflow's "branch-local jump, never cross-branch" is proven live on
+    the oracle app's own two GotoTasks (both same-branch) and is enforced here, not relaxed:
+    `branch_process_def_id` PINS and VALIDATES the intended branch, it does not enable a cross-
+    branch jump. Omit it (the default, `None`) and behavior is BYTE-IDENTICAL to before this
+    parameter existed — the chain is derived from the target's own ProcessDef, root-chain callers
+    included.
+
     Carries no condition of its own and no Permission (like every GotoTask/Parallel — see
     NO_PERMISSION_NODETYPES): pair with `kfforge.expr.build_goto_gate` to add the Boolean loop
     condition, or the Goto loops forever (verify.doctor's rule 2b flags a bare one).
 
     `name` defaults to "Goto-<target activity name>", the convention every UI-built one followed
     (shapes/goto_task.json's own note). The new activity's id is deterministic on the TARGET (like
-    every other id this module mints), so re-running with the same target is idempotent: same id,
-    no duplicate chain entry, no duplicate back-ref.
+    every other id this module mints) — unaffected by `branch_process_def_id`, which can only ever
+    equal the target's own ProcessDef or raise, never redirect the id elsewhere — so re-running with
+    the same target is idempotent: same id, no duplicate chain entry, no duplicate back-ref.
 
     Returns (new draft, new GotoTask activity id). Raises ValueError, draft entirely unmutated, when
-    `target_activity_id` is not a real Activity node, or that Activity has no valid `ProcessDef`
-    back-reference to join.
+    `target_activity_id` is not a real Activity node, that Activity has no valid `ProcessDef`
+    back-reference to join, `branch_process_def_id` is given but is not a real ProcessDef node, or
+    `branch_process_def_id` is given but does not match the target's own ProcessDef.
     """
     target = draft.get(target_activity_id)
     if not isinstance(target, dict) or target.get("Kind") != "Activity":
         raise ValueError(f"no Activity {target_activity_id!r} in draft to jump back to")
-    pd_id = target.get("ProcessDef")
-    if not isinstance(pd_id, str) or pd_id not in draft:
+    target_pd_id = target.get("ProcessDef")
+    if not isinstance(target_pd_id, str) or target_pd_id not in draft:
         raise ValueError(f"target activity {target_activity_id!r} has no valid ProcessDef back-ref")
+
+    if branch_process_def_id is None:
+        pd_id = target_pd_id
+    else:
+        branch = draft.get(branch_process_def_id)
+        if not isinstance(branch, dict) or branch.get("Kind") != "ProcessDef":
+            raise ValueError(f"no ProcessDef {branch_process_def_id!r} in draft")
+        if branch_process_def_id != target_pd_id:
+            raise ValueError(
+                f"target activity {target_activity_id!r} belongs to ProcessDef {target_pd_id!r}, "
+                f"not the requested branch {branch_process_def_id!r} — a GotoTask must stay within "
+                f"its own branch (CLAUDE.md Workflow: 'a branch-local jump, never cross-branch')"
+            )
+        pd_id = branch_process_def_id
 
     new: Draft = copy.deepcopy(draft)
     target = new[target_activity_id]

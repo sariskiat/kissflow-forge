@@ -249,6 +249,59 @@ class ForgeKeywords:
             raise TypeError(f"detail had no string _status field: {detail!r}")
         return status
 
+    def get_current_step(self, flow_id: str, iid: str) -> str:
+        """Direct (non-MCP) read of a runtime item's OWN `_current_step` field — the SAME pattern
+        as `get_item_status`, reading a different key. `forge_simulate_case`'s own WalkReport is an
+        ECHO of the planned step NAMES (dataplane.walk() appends `plan.name` on success, never
+        reads it back from the item — same caveat `resolve_assigned_role_ids`'s docstring already
+        flags for a different field), so it can never prove WHICH branch an item actually landed
+        on after crossing a conditional Parallel — only a live read of the item's own
+        `_current_step` can. Used by forge_branching.robot (Node M, conditional routing) to prove
+        two items with different values of the deciding field land on genuinely DIFFERENT steps —
+        the real proof; a branch that never fires looks identical to one that works until you read
+        this (CLAUDE.md > THE RULE).
+        """
+        if str(WORKTREE_ROOT) not in sys.path:
+            sys.path.insert(0, str(WORKTREE_ROOT))
+        from kfforge.client import Err, KfClient, KfConfig
+        from kfforge.dataplane import LiveDataPlane
+
+        cfg = KfConfig.from_env()
+        if isinstance(cfg, Err):
+            raise TypeError(f"KfConfig.from_env failed: {cfg.message}")
+        detail = LiveDataPlane(KfClient(cfg)).get_detail(flow_id, iid)
+        if isinstance(detail, Err):
+            raise TypeError(f"get_detail({flow_id!r}, {iid!r}) failed: {detail.message}")
+        step = detail.get("_current_step")
+        if not isinstance(step, str):
+            raise TypeError(f"detail had no string _current_step field: {detail!r}")
+        return step
+
+    def get_item_detail(self, flow_id: str, iid: str) -> dict[str, Any]:
+        """Direct (non-MCP) read of a runtime item's FULL admin detail dict — the general-purpose
+        escape hatch `get_item_status`/`get_current_step` intentionally are not: both are STRICT
+        (raise if the field they want is missing or not a string), which is exactly right for
+        proving a real bug on the CORE divergence proof (test 10 — a None `_current_step` there
+        would be a genuine regression), but wrong for a test that needs to observe a value that is
+        LEGITIMATELY absent. Node M review (2026-08-07): a deciding-field value matching no branch
+        condition leaves an item with NO `_current_step` at all (it skipped the whole Parallel and
+        completed) — `get_current_step` would raise on that by design, so the no-match test in
+        forge_branching.robot reads the raw detail here instead and asserts on it directly
+        (`${detail}[_current_step]` / `${detail}[_status]` via Robot's own dict-item syntax).
+        """
+        if str(WORKTREE_ROOT) not in sys.path:
+            sys.path.insert(0, str(WORKTREE_ROOT))
+        from kfforge.client import Err, KfClient, KfConfig
+        from kfforge.dataplane import LiveDataPlane
+
+        cfg = KfConfig.from_env()
+        if isinstance(cfg, Err):
+            raise TypeError(f"KfConfig.from_env failed: {cfg.message}")
+        detail = LiveDataPlane(KfClient(cfg)).get_detail(flow_id, iid)
+        if isinstance(detail, Err):
+            raise TypeError(f"get_detail({flow_id!r}, {iid!r}) failed: {detail.message}")
+        return detail
+
     # ------------------------------------------------------------------ assertion helpers
 
     def result_should_not_error(self, result: dict[str, Any], context: str = "") -> None:

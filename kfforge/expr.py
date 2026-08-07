@@ -112,6 +112,95 @@ def build_branch_condition(
     return new
 
 
+def remove_condition(draft: Draft, *, expression_id: str) -> Draft:
+    """Delete a branch or goto condition — the Expression node, its WHOLE Node AST subtree at ANY
+    depth, and the `Field::Node` back-ref(s) it left on every field it referenced anywhere in that
+    subtree. Pure: returns a NEW draft, input untouched.
+
+    The counterpart to `build_branch_condition`/`build_goto_gate`, for a caller that wants SET
+    semantics ("this branch's condition is now X") rather than ADD semantics: remove whatever
+    condition was already on the owner before attaching a new one, so a re-run with a changed field
+    or literal never leaves two conditions stacked on the same ProcessDef/Activity — matching
+    `graph.set_step_permissions`/`graph.set_field_events`'s own "delete existing, then rebuild"
+    idiom rather than inventing a new one (build_branch_condition/build_goto_gate are already
+    idempotent on their own for a repeat call with IDENTICAL args — same deterministic id, same
+    dict — but NOT for a repeat call whose field or literal changed, since that mints a different
+    id and simply appends alongside the stale one).
+
+    ⚠️ Node M review (2026-08-07): the subtree walk below is a full traversal, not a fixed
+    root-then-children walk. Every `build_*` function in THIS module only ever writes a 2-level AST
+    (root `=`, two leaf children), which a shallower walk would have looked correct against — but
+    `apply_branch_conditions` calls this on ANY pre-existing ProcessDef Expression, including one a
+    HUMAN built in the UI (a compound `AND`/`OR` of several comparisons is a deeper tree, unproven
+    here but entirely plausible from the builder), and a walk that stops after one level would
+    delete the Expression and its immediate children while stranding the INNER comparisons' own
+    leaf nodes — plus leaving `Field::Node` pointed at now-deleted node ids for every field only
+    those deeper leaves referenced. The walk here follows `Node::Node` all the way down, however
+    deep, and a `doomed_nodes` revisit-guard means a malformed cycle (never produced by any builder
+    in this pack, but a hand-edited draft could carry one) degrades to "already handled," never an
+    infinite loop.
+
+    Works on either owner kind (`expression_owner`: "branch" -> `ProcessDef`, "goto" -> `Activity`)
+    — a "property" owner (a SequenceNumber prefix, not a condition at all) is refused, same
+    restriction `rewire_condition` already applies, since removing one would silently break
+    whatever value-generator depends on it.
+
+    Raises ValueError, draft entirely unmutated, when `expression_id` is not in the draft, or its
+    owner is Property-owned.
+    """
+    if expression_id not in draft:
+        raise ValueError(f"no Expression {expression_id!r} in draft")
+    expr = draft[expression_id]
+    owner = expression_owner(expr)
+    if owner == "property":
+        raise ValueError(
+            f"Expression {expression_id!r} is Property-owned (a value-generator prefix, not a "
+            f"branch/goto condition) — remove_condition only removes ProcessDef or Activity conditions"
+        )
+    owner_key = "ProcessDef" if owner == "branch" else "Activity"
+    owner_id = expr.get(owner_key)
+    back_ref_key = f"{owner_key}::Expression"
+
+    # Full subtree walk (iterative, not recursive: no Python call-stack depth concern on a
+    # deliberately-crafted or unusually large AST). `doomed_nodes` doubles as the visited-set, so a
+    # cycle just stops re-expanding instead of looping forever.
+    doomed_nodes: set[str] = set()
+    field_ids: set[str] = set()
+    stack = list(expr.get("Expression::Node") or [])
+    while stack:
+        node_id = stack.pop()
+        if node_id in doomed_nodes:
+            continue
+        doomed_nodes.add(node_id)
+        node = draft.get(node_id) or {}
+        if node.get("Type") == "Field" and isinstance(node.get("Field"), str):
+            field_ids.add(node["Field"])
+        stack.extend(node.get("Node::Node") or [])
+
+    new: Draft = copy.deepcopy(draft)
+    for nid in doomed_nodes:
+        new.pop(nid, None)
+    new.pop(expression_id, None)
+
+    if isinstance(owner_id, str) and owner_id in new:
+        remaining = [e for e in (new[owner_id].get(back_ref_key) or []) if e != expression_id]
+        if remaining:
+            new[owner_id][back_ref_key] = remaining
+        else:
+            new[owner_id].pop(back_ref_key, None)
+
+    for fid in field_ids:
+        if fid not in new:
+            continue
+        remaining_nodes = [n for n in (new[fid].get("Field::Node") or []) if n not in doomed_nodes]
+        if remaining_nodes:
+            new[fid]["Field::Node"] = remaining_nodes
+        else:
+            new[fid].pop("Field::Node", None)
+
+    return new
+
+
 def build_goto_gate(draft: Draft, *, goto_activity_id: str, field_id: str) -> Draft:
     """Attach an Activity-owned loop condition to a GotoTask: `<field> = false()`.
 

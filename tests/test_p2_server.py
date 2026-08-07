@@ -19,6 +19,7 @@ import pytest
 from test_client import (  # tests/ is on sys.path, see conftest.py
     FakeClient,
     _bare_process_draft,
+    _process_with_branches,
 )
 
 import kfforge.server as srv
@@ -26,7 +27,8 @@ from kfforge.client import Err
 
 FORGE_TOOLS = {
     "forge_create_process", "forge_member_batch", "forge_apply_fields", "forge_add_table",
-    "forge_build_workflow", "forge_add_goto_gate", "forge_set_visibility", "forge_set_events",
+    "forge_build_workflow", "forge_add_goto_gate", "forge_set_branch_conditions",
+    "forge_set_visibility", "forge_set_events",
     "forge_set_styles", "forge_publish", "forge_doctor", "forge_create_page", "forge_build_page",
     "forge_set_navigation", "forge_share_report", "forge_simulate_case", "forge_create_app",
     "forge_delete_flow",
@@ -48,6 +50,7 @@ DUMMY_ARGS: dict[str, dict[str, Any]] = {
     "forge_add_table": {"flow_id": "x", "name": "t", "columns": []},
     "forge_build_workflow": {"flow_id": "x", "steps": []},
     "forge_add_goto_gate": {"flow_id": "x", "target_activity_name": "a", "field_name": "f"},
+    "forge_set_branch_conditions": {"flow_id": "x", "field_name": "f", "branch_literals": {}},
     "forge_set_visibility": {"flow_id": "x", "owners": {}},
     "forge_set_events": {"flow_id": "x", "events": {}},
     "forge_set_styles": {"flow_id": "x", "styles": {}},
@@ -288,3 +291,44 @@ def test_forge_share_report_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert got["isError"] is False
     assert got["verified"] is None, "no documented read-back route -- must not fake True"
     assert fake.report_member_batches == [("F1", "Rep1", members)]
+
+
+# ---- 7. Node M — forge_set_branch_conditions / forge_add_goto_gate branch_name ----------------
+
+def test_forge_set_branch_conditions_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeClient(_process_with_branches())
+    fake.list_items["List_Sample01"] = ["Alpha", "Beta"]
+    monkeypatch.setattr(srv, "_client", lambda: fake)
+    got = srv.forge_set_branch_conditions(
+        flow_id="F1", field_name="Track", branch_literals={"Branch A": "Alpha", "Branch B": "Beta"})
+    assert got["isError"] is False
+    assert got["verified"] == ["Branch A", "Branch B"] and got["missing"] == []
+
+
+def test_forge_set_branch_conditions_rejects_bad_literal_before_any_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeClient(_process_with_branches())
+    fake.list_items["List_Sample01"] = ["Alpha", "Beta"]
+    monkeypatch.setattr(srv, "_client", lambda: fake)
+    got = srv.forge_set_branch_conditions(
+        flow_id="F1", field_name="Track", branch_literals={"Branch A": "Not Real"})
+    assert got["isError"] is True
+    assert fake.puts == 0
+
+
+def test_forge_add_goto_gate_branch_name_scopes_into_that_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kfforge.graph import apply_changes as _apply_changes
+    from kfforge.types import FieldSpec, FieldType
+
+    draft = _apply_changes(_process_with_branches(), [FieldSpec(name="Done Flag", type=FieldType.BOOLEAN)])
+    branch_a_pd_id = next(v["Id"] for v in draft.values()
+                          if isinstance(v, dict) and v.get("Kind") == "ProcessDef"
+                          and v.get("Name") == "Branch A")
+    fake = FakeClient(draft)
+    monkeypatch.setattr(srv, "_client", lambda: fake)
+
+    got = srv.forge_add_goto_gate(flow_id="F1", target_activity_name="Shared Step",
+                                  field_name="Done Flag", branch_name="Branch A")
+    assert got["isError"] is False and got["branch_name"] == "Branch A"
+    assert got["goto_activity_id"] in fake.draft[branch_a_pd_id]["ProcessDef::Activity"]

@@ -190,6 +190,33 @@ Row        { Id:"Row_Sample01", Kind:"Row", Button:<root model id> }
   live Activity list before blaming the form. The same rebuild also **deletes
   every `Permission` node** — any step-visibility matrix you had configured is
   gone and must be rebuilt after any workflow rebuild, every time.
+- **A `Parallel`'s branches are UNCONDITIONAL by default.** `build_workflow`'s
+  `parallel` argument alone produces an and-fork — every branch always runs.
+  Making a branch conditional is a separate, later step; see Conditional
+  routing.
+- **A `GotoTask` placed inside a branch must be told which branch, explicitly
+  — it cannot always be inferred from the target alone.** `add_goto_task`
+  gained a `branch_process_def_id` parameter (node M, 2026-08-07) that PINS
+  and VALIDATES which `ProcessDef` chain hosts the new GotoTask, instead of
+  always deriving it from `target_activity_id`'s own `ProcessDef` (the
+  original, still-default behavior — unaffected when this parameter is
+  omitted). The gap this closed, reproduced live: a target 2 root-chain steps
+  before a 2-branch `Parallel`, added with no way to say "put this inside
+  branch A," landed the GotoTask **after the LAST root-chain activity** —
+  right before the trailing `EndEvent`, exactly where a root-chain target is
+  *supposed* to land (see the workflow bullet above) — evaluated once for the
+  whole item instead of scoped to the one branch that actually needed the
+  rework loop. `branch_process_def_id` does **not** enable a cross-branch
+  jump — passing it REQUIRES the target to already belong to that exact
+  `ProcessDef`, and raises a loud `ValueError` before any write otherwise.
+  This is deliberate, not a missing feature: `verify.doctor`'s own rule 2b
+  already flags any GotoTask whose target sits in a different `ProcessDef` as
+  "jumps out of its own branch," and the oracle app's own two GotoTasks are
+  both branch-local (see Conditional routing) — there is no proven live shape
+  for a cross-branch jump to reproduce. What the parameter buys is an
+  explicit, validated lever where none existed before, so a caller resolving
+  a target by (name, branch) — needed the moment two branches share a step
+  name — gets a clean rejection instead of a silently wrong graph.
 
 ## Expressions
 
@@ -280,6 +307,111 @@ human. A silently-skipped rework round is invisible and unfixable after the
 fact — nobody knows to go looking for it. When in doubt about which way a gate
 should fail, make it the Boolean, and make the failure mode "stuck," not
 "skipped."
+
+## Conditional routing
+
+A `Parallel` gateway built by `build_workflow` is an unconditional and-fork on
+its own — every branch always runs. **Conditional routing** (service-tier /
+triage / approval-routing: "this branch runs when field X equals value Y") is
+that gateway plus one `Expression` per branch, wired to the branch's own
+`ProcessDef` (see Expressions' owner-key table). Node M (2026-08-07) is where
+this became reachable from the tool surface — `expr.build_branch_condition`
+existed since the branching AST work but had ZERO callers until then.
+
+**The oracle shape** (a working app on this same tenant, read-only, months in
+production): one `Parallel` Activity, N branch `ProcessDef`s each carrying
+exactly one `ProcessDef`-owned `Expression` (`<field> = "<literal>"`, the same
+AST as any other branch condition), and — on the branches that need rework —
+its own `GotoTask` sitting **last within that branch's own
+`ProcessDef::Activity`**, targeting an early step of the SAME branch. Never a
+cross-branch or branch-to-root jump (see the Workflow section's
+`branch_process_def_id` note). All fields tie together: the deciding field is
+a plain `Select`, one distinct literal per branch, no branch left without a
+condition (a genuine switch, not an if/else-if with an implicit "else").
+
+⚠️ **Fail OPEN, not closed — a value matching no branch condition SKIPS THE
+WHOLE PARALLEL and the item completes with no work done, silently.** Verified
+live 2026-08-07 (node M's own negative control, independently reproduced, then
+pinned as a permanent regression test — `tests/robot/forge_branching.robot`
+test 11): walked with a deciding-field value that matched none of 3 branch
+literals, the item never touched any branch step — the admin detail response
+carries **NO `_current_step` key at all** (confirmed via `Dictionary Should
+Not Contain Key`, not merely a null value under that key — a first draft of
+this note said "came back null" from a paraphrase, and the live run corrected
+it: code that does `detail["_current_step"]` would `KeyError` here, code that
+does `detail.get("_current_step")` reads `None` either way — write it the
+`.get()` way) and `_status` comes back `"Completed"` on the very next submit
+past the step before the gateway. This is the SAME fail-open hazard Gate polarity already
+names for a loop (a blank optional Select silently "escapes"), now confirmed
+for a switch: an item that silently finishes is *worse* than one that gets
+stuck, because a stuck item is visible on a dashboard and a finished one looks
+identical to a real success — nobody ever goes looking for it. This is why
+the oracle leaves NO branch without a condition (previous paragraph): every
+value your users can actually pick needs a branch that claims it, or that
+value quietly ends the case. `forge_set_branch_conditions`'s own result
+carries an `uncovered` bucket for exactly this — every real Select option
+(when the deciding field is one) that no branch on the gateway claims, across
+the WHOLE gateway, not just the branches one call happened to touch.
+`uncovered` is never folded into `isError` (a caller may genuinely want an
+ending value) — it exists so the gap is stated, never discovered later.
+
+**The tool**: `forge_set_branch_conditions(flow_id, field_name,
+branch_literals, kind, publish)` — `branch_literals` maps a branch NAME to the
+literal that selects it. Requires the flow to have **exactly one** `Parallel`
+gateway (this engine can only build one anyway, via `build_workflow`'s single
+`parallel` argument) — fails loud rather than guessing which one on a flow
+with zero or more than one. Every literal is validated against the deciding
+field's REAL live list options (fetched via its `ReferredList`) before any
+write, same "never guess a literal — read it" discipline as everywhere else —
+CLAUDE.md's own war story is a branch that silently never fired over one
+mis-cased literal. Idempotent per branch in the SET sense: re-running with a
+changed literal REPLACES that branch's condition (`expr.remove_condition`
+strips the old Expression + AST subtree + back-refs first) rather than
+accumulating a second one alongside the stale first; a branch not named in
+`branch_literals` is left untouched. Pair with `forge_add_goto_gate`'s
+`branch_name` parameter (see Workflow) for the per-branch loop half of the
+shape.
+
+⚠️ **A tenant-state limitation, not an engine limitation, logged rather than
+silently worked around**: KF_APP's list inventory was EMPTY (0 lists) as of
+2026-08-07 (same finding `forge_lifecycle.robot` already logged for its own
+Select-field fallback) — no human has wired a Kissflow List into this app yet.
+`build_branch_condition` also accepts a Text-typed deciding field (the same
+plain-string wire shape as a Select's value — see `_BRANCH_FIELD_DATA_TYPE`),
+so the live proof below used Text and got the real literal-validation-against-
+options codepath exercised only by the OFFLINE tests (a fake list). The
+Select-backed path is offline-proven and code-reviewable, but **its live
+option-fetch-and-validate behavior remains unverified on THIS tenant** until a
+human wires a real List — do not upgrade that to "proven" without re-running
+against one.
+
+⚠️ **A live-verified mechanic, worth recording because it is easy to guess
+wrong**: crossing a conditional `Parallel` gateway needs **no separate
+submit**. An item sitting on the step immediately before the `Parallel`
+(`ProcessDef::Activity` order) that gets submitted lands **directly** on the
+selected branch's own first step, in the SAME API call — the gateway itself
+is never a `_current_step` a caller submits against, conditional or not (it
+carries no Permissions either — see `NO_PERMISSION_NODETYPES`). Verified live
+2026-08-07 (node M): two items, submitted past the same step with different
+values of the deciding field, landed on `Handle Alpha` and `Handle Beta`
+respectively after that ONE submit each — not on the `Parallel` itself, and
+not requiring a second hop.
+
+**Two-item divergence is the only real proof.** Every check up to and
+including a clean `forge_doctor` can pass with a branch condition silently
+inverted, missing a literal, or pointed at the wrong field — a branch that
+never fires looks identical to one that works (THE RULE, restated for this
+specific shape). The only oracle is walking two real items with different
+values of the deciding field and reading back — directly, never an echo of
+the plan — which concrete step each one actually landed on
+(`tests/robot/forge_branching.robot`'s `Get Current Step` keyword; a plain
+`_current_step` read via the item data plane — `Get Item Detail` is the
+general-purpose sibling for a test that needs a field `Get Current Step`'s own
+strictness would raise on, like test 11's legitimately-absent one). `tests/
+robot/forge_branching.robot` is the permanent regression suite for this whole
+section, including the fail-open negative control above — 11/11 live
+against KF_APP as of 2026-08-07, artifact deleted and deletion verified via
+the app-scoped flow-list route in its Suite Teardown.
 
 ## Tables
 
@@ -608,6 +740,17 @@ options  GET  /flow/2/{acct}/list/{list_id}/items               -> bare array of
 lists    GET  /flow/2/{acct}/list?page_size=100                 -> inventory of every list in the app
 ```
 
+⚠️ **The `lists` route needs `_application_id` scoping too, the SAME leakage
+class the flow-list route already has (see Members first)** — confirmed live
+2026-08-07: `GET /flow/2/{acct}/list?page_size=100` with no `_application_id`
+returned 100 lists (paginated) from an UNRELATED app in the same account;
+adding `&_application_id={app_id}` to the SAME call returned the true,
+correctly-scoped count for KF_APP (0, on the tenant checked). No client
+method wraps this route yet (only `KfClient.get_list_items`, which is already
+scoped by a specific `list_id` and has no leakage risk) — this note exists so
+nobody hand-rolls the unscoped URL and reads, or later writes against an id
+sourced from, a DIFFERENT app's list.
+
 - **The aiid trap:** the activity-instance id returned by a "my items"-style
   listing is the initiator's already-CONSUMED instance — submitting or
   rejecting against it fails with an "already used" style error. Never
@@ -867,10 +1010,16 @@ The proven end-to-end sequence, most foundational first:
    field onward (see Node-graph invariants).
 4. **Tables**, if any — as their own nested Model, in their own root Row,
    never nested in a Section (see Tables).
-5. **Workflow** — ProcessDef, Activities, any GotoTask loops (see Workflow).
+5. **Workflow** — ProcessDef, Activities, any GotoTask loops (see Workflow). A
+   `Parallel` gateway built here is UNCONDITIONAL — every branch always runs
+   — until step 7's branch conditions attach (see Conditional routing).
 6. **Assignees** — only once members exist (see Members first).
-7. **Goto gates** — the loop conditions on any backward edges, gated on a
-   Boolean, fail-closed (see Expressions, Gate polarity).
+7. **Goto gates and branch conditions** — the loop conditions on any backward
+   edges, gated on a Boolean, fail-closed (see Expressions, Gate polarity); a
+   `Parallel`'s branches, made conditional on a deciding field's real values,
+   never guessed (see Conditional routing). A per-branch goto gate is placed
+   with `add_goto_task`'s `branch_process_def_id` / `forge_add_goto_gate`'s
+   `branch_name`, last within its own branch, never cross-branch.
 8. **Visibility matrix** — section-level where a whole section shares a rule,
    field-level otherwise; re-run this step after any later workflow rebuild,
    since a rebuild silently deletes every Permission (see Visibility).

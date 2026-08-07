@@ -58,6 +58,7 @@ from .client import (
     Err,
     KfClient,
     KfConfig,
+    apply_branch_conditions,
     apply_field_events,
     apply_fields,
     apply_fields_and_layout,
@@ -356,6 +357,7 @@ def forge_add_goto_gate(
     flow_id: str,
     target_activity_name: str,
     field_name: str,
+    branch_name: str | None = None,
     kind: str = "process",
     publish: bool = False,
 ) -> dict[str, Any]:
@@ -364,12 +366,58 @@ def forge_add_goto_gate(
     `<field> = false()`). Gate polarity is enforced (CLAUDE.md Gate polarity): only a Boolean may
     gate a loop, never an optional Select — rejected offline, before any write, if `field_name`
     is not Type Boolean.
+
+    `branch_name`, when given, scopes `target_activity_name` to ONE branch of the flow's single
+    Parallel gateway (built via forge_build_workflow's `parallel`) and pins the new GotoTask
+    inside that SAME branch's own chain, last within it — the per-branch loop shape a working
+    conditional-routing app uses (CLAUDE.md Workflow: a GotoTask never crosses branches; a target
+    resolved to a step outside the named branch is rejected offline, before any write). Required
+    whenever `target_activity_name` is not unique across branches; omit it for a plain root-chain
+    (or otherwise unambiguous) target — unchanged from before this parameter existed.
     """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_goto_gate(c, flow_id, target_activity_name, field_name,  # type: ignore[arg-type]
-                                   publish=publish, kind=kind))
+                                   branch_name=branch_name, publish=publish, kind=kind))
+
+
+@mcp.tool()
+def forge_set_branch_conditions(
+    flow_id: str,
+    field_name: str,
+    branch_literals: dict[str, str],
+    kind: str = "process",
+    publish: bool = False,
+) -> dict[str, Any]:
+    """LIVE write (dev only, KF_APP): make an existing Parallel's branches CONDITIONAL — each
+    branch named in `branch_literals` fires only when the field named `field_name` equals that
+    branch's literal (a ProcessDef-owned Expression, `<field> = "<literal>"` — CLAUDE.md
+    Expressions). This is the centerpiece of service-tier/triage/approval-routing workflows: a
+    forge_build_workflow `parallel` gateway is an UNCONDITIONAL and-fork on its own (every branch
+    always runs) until this tool attaches the deciding condition to each one.
+
+    Requires the flow to have exactly ONE Parallel gateway. Every literal is validated against the
+    deciding field's REAL live list options — when it is a Select backed by a ReferredList — before
+    any write (CLAUDE.md's own war story: a branch that never fired over one mis-cased literal). A
+    Text-typed deciding field has no list to validate against and is written as given. Idempotent
+    per branch: re-running with a changed literal REPLACES that branch's condition rather than
+    accumulating a second one; a branch not named in `branch_literals` is left untouched.
+
+    ⚠️ FAIL-OPEN HAZARD (CLAUDE.md > Conditional routing, verified live 2026-08-07): a value that
+    matches NO branch's condition does not park and does not error — the item silently skips the
+    WHOLE Parallel and completes with zero work done. The result's `uncovered` list names every
+    real Select option (when the deciding field is one) that, after this write, no branch on the
+    gateway claims — across the WHOLE gateway, not just the branches this call touched. `uncovered`
+    is never an error on its own (a caller may genuinely want an ending value) — it is stated so it
+    is never discovered later, exactly the failure mode Gate polarity already warns about for a
+    loop, now for a switch.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_branch_conditions(c, flow_id, field_name, branch_literals,  # type: ignore[arg-type]
+                                           publish=publish, kind=kind))
 
 
 @mcp.tool()

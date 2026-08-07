@@ -16,10 +16,11 @@ import json
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from .expr import build_goto_gate
+from .expr import build_branch_condition, build_goto_gate, remove_condition
 from .graph import (
     Matrix,
     add_goto_task,
@@ -827,14 +828,91 @@ class GotoGateReport:
     verified: bool
     meta_version: str | None
     published: bool
+    branch_name: str | None = None
 
     def as_tool_result(self) -> dict[str, Any]:
         return {
             "flow_id": self.flow_id, "goto_activity_id": self.goto_activity_id,
             "target_activity": self.target_activity, "field_name": self.field_name,
-            "verified": self.verified, "meta_version": self.meta_version,
+            "branch_name": self.branch_name, "verified": self.verified,
+            "meta_version": self.meta_version,
             "published": self.published, "isError": not self.verified,
         }
+
+
+def _parallel_branches(draft: Draft) -> dict[str, str] | Err:
+    """The flow's single Parallel gateway's branches, as {branch NAME: branch ProcessDef id}
+    (Node M, conditional routing). Requires EXACTLY ONE Parallel Activity on the draft — fails
+    loud rather than guessing which one a caller meant when there is more than one (CLAUDE.md:
+    never guess), and matches `graph.build_workflow`'s own ceiling of a single `parallel` gateway
+    per flow. A branch name that is not unique across the gateway's own ProcessDef::Expression
+    list (two branches given the SAME Name) is ALSO refused rather than silently keeping only the
+    last match — an ambiguous name is exactly the class of mistake this helper exists to catch
+    before a live write, not after.
+    """
+    parallels = [v for v in draft.values() if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "Parallel"]
+    if len(parallels) != 1:
+        return Err("verify",
+                   f"expected exactly one Parallel gateway on the flow, found {len(parallels)}")
+    names: list[str] = []
+    out: dict[str, str] = {}
+    for pd_id in parallels[0].get("Activity::ProcessDef") or []:
+        pd = draft.get(pd_id)
+        name = pd.get("Name") if isinstance(pd, dict) else None
+        if not isinstance(name, str):
+            continue
+        names.append(name)
+        out[name] = pd_id
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        return Err("verify", f"ambiguous branch name(s) on the Parallel gateway: {dupes}")
+    return out
+
+
+def _describe_owner(draft: Draft, pd_id: str | None) -> str:
+    """Human-readable label for a ProcessDef, for an ambiguity error message: its branch Name if
+    it's a branch, "the root chain" if it's the root Sequence ProcessDef, or the raw id as a last
+    resort (a malformed draft with a ProcessDef missing both)."""
+    pd = draft.get(pd_id) if isinstance(pd_id, str) else None
+    if isinstance(pd, dict):
+        name = pd.get("Name")
+        if isinstance(name, str):
+            return f"branch {name!r}"
+        if pd.get("WorkflowType") == "Sequence":
+            return "the root chain"
+    return f"ProcessDef {pd_id!r}"
+
+
+def _resolve_activity_by_name(
+    draft: Draft, name: str, *, process_def_id: str | None = None,
+) -> str | Err:
+    """Resolve an Activity by NAME, raising on ambiguity rather than silently taking the first
+    match by dict iteration order (Node M review, 2026-08-07): a step name that repeats across
+    branches used to resolve to "whichever one is iterated first," with a clean `verified: True`
+    report on a GotoTask built in the WRONG branch — a wrong graph with a clean report is exactly
+    the silent-success class this project bans (CLAUDE.md > output-invariant audits).
+
+    `process_def_id`, when given, scopes the search to ONE ProcessDef's own activities (raises if
+    that SAME branch somehow carries the name twice — still an ambiguity, just a smaller one);
+    omitted, the search spans the whole draft, and an ambiguity across branches — or between a
+    branch and the root chain — is exactly the case `apply_goto_gate`'s `branch_name` exists to
+    resolve. The error message names every candidate's owning branch (or "the root chain") so the
+    caller knows what to pass, never just a bare count.
+    """
+    candidates = [k for k, v in draft.items()
+                 if isinstance(v, dict) and v.get("Kind") == "Activity" and v.get("Name") == name
+                 and (process_def_id is None or v.get("ProcessDef") == process_def_id)]
+    if not candidates:
+        where = f" in {_describe_owner(draft, process_def_id)}" if process_def_id else ""
+        return Err("verify", f"no workflow step named {name!r}{where}")
+    if len(candidates) > 1:
+        owners = sorted({_describe_owner(draft, draft.get(c, {}).get("ProcessDef"))
+                         for c in candidates})
+        return Err("verify",
+                   f"step name {name!r} is ambiguous — it exists in {len(candidates)} places "
+                   f"({', '.join(owners)}); pass branch_name to disambiguate which one you mean")
+    return candidates[0]
 
 
 def apply_goto_gate(
@@ -842,6 +920,7 @@ def apply_goto_gate(
     flow_id: str,
     target_activity_name: str,
     field_name: str,
+    branch_name: str | None = None,
     publish: bool = False,
     kind: FlowKind = "process",
 ) -> GotoGateReport | Err:
@@ -850,17 +929,42 @@ def apply_goto_gate(
     else in this pack creates one) + expr.build_goto_gate (attaches the `= false()` loop condition,
     gate-polarity-checked: only a Boolean may gate a loop, CLAUDE.md Gate polarity) -> read-back
     verify the condition landed -> optional publish.
+
+    `branch_name` (Node M, conditional routing), when given, scopes target resolution to ONE
+    branch of the flow's single Parallel gateway (`_parallel_branches`) — the target step is
+    looked up ONLY among that branch's own activities, and `graph.add_goto_task`'s
+    `branch_process_def_id` pins/validates the new GotoTask into that SAME branch's chain (last
+    within it, never the root chain or a sibling branch). Required whenever `target_activity_name`
+    is not unique across branches — without it, resolution spans the WHOLE draft
+    (`_resolve_activity_by_name` with no `process_def_id`), same as before this parameter existed
+    for a genuinely unambiguous name. ⚠️ Node M review (2026-08-07): a name that collides across
+    branches — or between a branch and the root chain — used to silently resolve to "whichever one
+    dict iteration finds first," building a structurally correct-looking GotoTask in the WRONG
+    branch with a clean `verified: True` report; `_resolve_activity_by_name` now raises loud,
+    naming every candidate's owning branch, instead of ever guessing. Omit `branch_name` only for a
+    target you know is genuinely unique.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
         return draft
     version = draft.get(_META_VERSION)
 
-    target_id = next((k for k, v in draft.items()
-                      if isinstance(v, dict) and v.get("Kind") == "Activity"
-                      and v.get("Name") == target_activity_name), None)
-    if target_id is None:
-        return Err("verify", f"no workflow step named {target_activity_name!r}")
+    branch_pd_id: str | None = None
+    if branch_name is not None:
+        branches = _parallel_branches(draft)
+        if isinstance(branches, Err):
+            return branches
+        branch_pd_id = branches.get(branch_name)
+        if branch_pd_id is None:
+            return Err("verify", f"no branch named {branch_name!r} on the Parallel gateway "
+                                  f"(real branches: {sorted(branches)})")
+        target_id = _resolve_activity_by_name(draft, target_activity_name,
+                                              process_def_id=branch_pd_id)
+    else:
+        target_id = _resolve_activity_by_name(draft, target_activity_name)
+    if isinstance(target_id, Err):
+        return target_id
+
     field_id = next((k for k, v in draft.items()
                      if isinstance(v, dict) and v.get("Kind") == "Field"
                      and v.get("Name") == field_name), None)
@@ -868,7 +972,8 @@ def apply_goto_gate(
         return Err("verify", f"no field named {field_name!r}")
 
     try:
-        with_goto, goto_id = add_goto_task(draft, target_activity_id=target_id)
+        with_goto, goto_id = add_goto_task(draft, target_activity_id=target_id,
+                                           branch_process_def_id=branch_pd_id)
         new = build_goto_gate(with_goto, goto_activity_id=goto_id, field_id=field_id)
     except ValueError as e:
         return Err("verify", f"offline goto-gate build rejected the spec: {e}")
@@ -892,8 +997,193 @@ def apply_goto_gate(
 
     return GotoGateReport(
         flow_id=flow_id, goto_activity_id=goto_id if verified else None,
-        target_activity=target_activity_name, field_name=field_name, verified=verified,
-        meta_version=read_back.get(_META_VERSION), published=published,
+        target_activity=target_activity_name, field_name=field_name, branch_name=branch_name,
+        verified=verified, meta_version=read_back.get(_META_VERSION), published=published,
+    )
+
+
+@dataclass(frozen=True)
+class BranchConditionReport:
+    """Output-invariant audit for forge_set_branch_conditions (Node M, conditional routing): every
+    branch name in `branches` lands in `verified` or `missing` after the read-back — never
+    silently unaccounted for.
+
+    `uncovered` (Node M review, 2026-08-07) is a SEPARATE, non-error bucket: the deciding field's
+    REAL live options (Select-backed only — see `_uncovered_options`) that, after this write, no
+    branch on the SAME Parallel gateway claims via a condition on THIS field — including branches
+    this call never touched. An item whose value matches none of them does not park and does not
+    error: it silently skips the ENTIRE Parallel and completes with no work done (verified live
+    2026-08-07 — CLAUDE.md > Conditional routing's own "fail OPEN, not closed" warning, the same
+    hazard class Gate polarity already names for a loop, now confirmed for a switch). A caller may
+    genuinely want an ending value like that (the CLAUDE.md war story is about an ACCIDENTAL gap,
+    not every gap being a bug) — `uncovered` is therefore never folded into `isError`, only stated,
+    so it is never silently discovered later.
+    """
+    flow_id: str
+    field_name: str
+    branches: tuple[str, ...]
+    verified: tuple[str, ...]
+    missing: tuple[str, ...]
+    uncovered: tuple[str, ...]
+    meta_version: str | None
+    published: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "flow_id": self.flow_id, "field_name": self.field_name,
+            "branches": list(self.branches), "verified": list(self.verified),
+            "missing": list(self.missing), "uncovered": list(self.uncovered),
+            "meta_version": self.meta_version,
+            "published": self.published, "isError": bool(self.missing),
+        }
+
+
+def _literals_for_field(draft: Draft, pd_id: str, field_id: str) -> set[str]:
+    """Every literal a branch ProcessDef's OWN condition(s) compare `field_id` against — normally
+    0 or 1, but read as a set defensively (a hand-edited or pre-existing draft could carry more
+    than one Expression on the same ProcessDef). Filters to conditions ON `field_id` specifically —
+    a branch conditioned on some OTHER field is not part of this field's coverage picture at all.
+    """
+    out: set[str] = set()
+    pd = draft.get(pd_id) or {}
+    for eid in pd.get("ProcessDef::Expression") or []:
+        e = draft.get(eid) or {}
+        for root_id in e.get("Expression::Node") or []:
+            children = [draft.get(c) or {}
+                       for c in (draft.get(root_id) or {}).get("Node::Node") or []]
+            if not any(c.get("Type") == "Field" and c.get("Field") == field_id for c in children):
+                continue
+            for c in children:
+                if c.get("Type") == "Static" and isinstance(c.get("Value"), str):
+                    out.add(c["Value"])
+    return out
+
+
+def _uncovered_options(
+    draft: Draft, branch_pd_ids: Iterable[str], field_id: str, options: list[str] | None,
+) -> tuple[str, ...]:
+    """Real Select options (see `BranchConditionReport.uncovered`) that NO branch among
+    `branch_pd_ids` currently conditions on `field_id`. `options=None` (a non-Select or list-less
+    deciding field, e.g. Text) has no enumerable option universe to check against — there is no
+    general way to prove "some string value has no matching branch" when the value space is
+    unbounded — so this returns `()`, meaning "nothing checked," not "fully covered."
+    """
+    if options is None:
+        return ()
+    covered: set[str] = set()
+    for pd_id in branch_pd_ids:
+        covered |= _literals_for_field(draft, pd_id, field_id)
+    return tuple(o for o in options if o not in covered)
+
+
+def apply_branch_conditions(
+    client: KfClient,
+    flow_id: str,
+    field_name: str,
+    branch_literals: dict[str, str],
+    publish: bool = False,
+    kind: FlowKind = "process",
+) -> BranchConditionReport | Err:
+    """Make an existing Parallel's branches CONDITIONAL (Node M — closes the gap that
+    `expr.build_branch_condition` had zero callers from the MCP surface, and `forge_build_workflow`
+    could only build an UNCONDITIONAL and-fork).
+
+    GET draft -> resolve the flow's single Parallel gateway's branches BY NAME (`_parallel_branches`
+    — exactly one Parallel required) -> resolve the deciding field BY NAME -> when that field is a
+    Select backed by a `ReferredList`, fetch its REAL live options and validate every literal in
+    `branch_literals` against them BEFORE any write (CLAUDE.md Expressions: "never guess a literal
+    — read it"; a Text-typed deciding field has no list to validate against, so its literals are
+    written as given — same `options=None` contract `expr.build_branch_condition` itself documents)
+    -> for each named branch, offline REMOVE any condition it already has
+    (`expr.remove_condition`) and ATTACH the new one (`expr.build_branch_condition`,
+    `<field> = "<literal>"`, a ProcessDef-owned Expression) -> ONE guarded PUT -> read-back verify
+    each branch's Expression carries the field+literal it was given -> optional publish.
+
+    Only the branches named in `branch_literals` are touched — any other branch on the same
+    Parallel keeps whatever condition (or lack of one) it already had. The remove-then-attach pair
+    makes this idempotent in the SET sense: re-running with a changed literal replaces that
+    branch's condition rather than accumulating a second one (`remove_condition`'s own docstring).
+    """
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    version = draft.get(_META_VERSION)
+
+    branches = _parallel_branches(draft)
+    if isinstance(branches, Err):
+        return branches
+    unknown = sorted(set(branch_literals) - set(branches))
+    if unknown:
+        return Err("verify", f"no branch(es) named {unknown} on the Parallel gateway "
+                              f"(real branches: {sorted(branches)})")
+
+    field_id = next((k for k, v in draft.items()
+                     if isinstance(v, dict) and v.get("Kind") == "Field"
+                     and v.get("Name") == field_name), None)
+    if field_id is None:
+        return Err("verify", f"no field named {field_name!r}")
+
+    options: list[str] | None = None
+    field_node = draft[field_id]
+    if field_node.get("Type") == "Select" and field_node.get("ReferredList"):
+        items = client.get_list_items(field_node["ReferredList"])
+        if isinstance(items, Err):
+            return items
+        options = list(items) if isinstance(items, list) else []
+
+    new = draft
+    try:
+        for branch_name, literal in branch_literals.items():
+            pd_id = branches[branch_name]
+            for existing_eid in list(new[pd_id].get("ProcessDef::Expression") or []):
+                new = remove_condition(new, expression_id=existing_eid)
+            new = build_branch_condition(new, process_def_id=pd_id, field_id=field_id,
+                                         literal=literal, options=options)
+    except ValueError as e:
+        return Err("verify", f"offline build_branch_condition rejected the spec: {e}")
+
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_draft(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+
+    def _landed(branch_name: str, literal: str) -> bool:
+        pd = read_back.get(branches[branch_name]) or {}
+        for eid in pd.get("ProcessDef::Expression") or []:
+            e = read_back.get(eid) or {}
+            for root_id in e.get("Expression::Node") or []:
+                children = [read_back.get(c) or {}
+                           for c in (read_back.get(root_id) or {}).get("Node::Node") or []]
+                has_field = any(c.get("Type") == "Field" and c.get("Field") == field_id
+                               for c in children)
+                has_literal = any(c.get("Type") == "Static" and c.get("Value") == literal
+                                  for c in children)
+                if has_field and has_literal:
+                    return True
+        return False
+
+    wanted = tuple(branch_literals)
+    verified = tuple(b for b in wanted if _landed(b, branch_literals[b]))
+    missing = tuple(b for b in wanted if b not in verified)
+    # against the FULL branch set (not just the ones this call touched) -- a value that some
+    # EARLIER call already covered on a different branch must never re-appear here as a false
+    # alarm, and a value nothing covers, ever, is exactly what a caller needs to see.
+    uncovered = _uncovered_options(read_back, branches.values(), field_id, options)
+
+    published = False
+    if publish and not missing:
+        pub = client.publish(kind, flow_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+
+    return BranchConditionReport(
+        flow_id=flow_id, field_name=field_name, branches=wanted, verified=verified,
+        missing=missing, uncovered=uncovered, meta_version=read_back.get(_META_VERSION),
+        published=published,
     )
 
 

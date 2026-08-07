@@ -15,6 +15,7 @@ from kfforge.expr import (
     build_branch_condition,
     build_goto_gate,
     expression_owner,
+    remove_condition,
     rewire_condition,
 )
 from kfforge.graph import progressive_matrix, set_step_permissions
@@ -403,6 +404,150 @@ def test_build_goto_gate_unknown_field_rejected(draft_with_bare_goto: tuple[Draf
     with pytest.raises(ValueError):
         build_goto_gate(draft, goto_activity_id=goto_id, field_id="Field_DoesNotExist99")
     assert draft == before
+
+
+# ---- remove_condition -------------------------------------------------------------------------
+# The SET-semantics counterpart to build_branch_condition/build_goto_gate: a caller that wants
+# "this branch/goto's condition is now X" needs the OLD one gone first, or a re-run with a changed
+# field/literal mints a second Expression alongside the stale one (different id, since the id is a
+# hash of the args) rather than replacing it.
+
+def test_remove_branch_condition_deletes_expression_and_node_subtree(
+    draft_with_branch_condition: tuple[Draft, str], branch_pd_id: str, select_field_id: str,
+) -> None:
+    draft, expr_id = draft_with_branch_condition
+    root_id = draft[expr_id]["Expression::Node"][0]
+    lhs_id, rhs_id = draft[root_id]["Node::Node"]
+
+    got = remove_condition(draft, expression_id=expr_id)
+
+    assert expr_id not in got and root_id not in got and lhs_id not in got and rhs_id not in got
+    assert expr_id not in (got[branch_pd_id].get("ProcessDef::Expression") or [])
+    assert lhs_id not in (got[select_field_id].get("Field::Node") or [])
+    assert doctor(got).ok()
+
+
+def test_remove_goto_condition_deletes_expression_and_node_subtree(
+    draft_with_goto_condition: tuple[Draft, str, str], boolean_field_id: str,
+) -> None:
+    draft, expr_id, goto_id = draft_with_goto_condition
+    root_id = draft[expr_id]["Expression::Node"][0]
+    lhs_id, rhs_id = draft[root_id]["Node::Node"]
+
+    got = remove_condition(draft, expression_id=expr_id)
+
+    assert expr_id not in got and root_id not in got and lhs_id not in got and rhs_id not in got
+    assert expr_id not in (got[goto_id].get("Activity::Expression") or [])
+    assert lhs_id not in (got[boolean_field_id].get("Field::Node") or [])
+    # doctor still complains the goto has NO condition -- correct, we just removed it on purpose
+    assert any("NO condition" in p for p in doctor(got).problems)
+
+
+def test_remove_condition_input_not_mutated(
+    draft_with_branch_condition: tuple[Draft, str],
+) -> None:
+    draft, expr_id = draft_with_branch_condition
+    before = copy.deepcopy(draft)
+    _ = remove_condition(draft, expression_id=expr_id)
+    assert draft == before
+
+
+def test_remove_condition_unknown_expression_rejected(clean_draft: Draft) -> None:
+    before = copy.deepcopy(clean_draft)
+    with pytest.raises(ValueError):
+        remove_condition(clean_draft, expression_id="Expression_DoesNotExist99")
+    assert clean_draft == before
+
+
+def test_remove_condition_rejects_property_owned_expression(clean_draft: Draft) -> None:
+    draft = copy.deepcopy(clean_draft)
+    draft["Property_SamplePrefix01"] = {"Id": "Property_SamplePrefix01", "Kind": "Property",
+                                        "Name": "PrefixExpression", "ValueType": "Expression"}
+    draft["Expression_SamplePrefix01"] = {
+        "Id": "Expression_SamplePrefix01", "Kind": "Expression",
+        "ExpressionStr": 'concatenate("SAMPLE")', "Property": "Property_SamplePrefix01",
+    }
+    before = copy.deepcopy(draft)
+    with pytest.raises(ValueError):
+        remove_condition(draft, expression_id="Expression_SamplePrefix01")
+    assert draft == before
+
+
+def test_remove_then_build_branch_condition_replaces_not_accumulates(
+    clean_draft: Draft, branch_pd_id: str, select_field_id: str,
+) -> None:
+    """The actual SET workflow: build with one literal, remove, build again with a DIFFERENT
+    literal on the SAME branch -> exactly one Expression on that ProcessDef, holding the NEW value,
+    never two."""
+    first = build_branch_condition(clean_draft, process_def_id=branch_pd_id,
+                                   field_id=select_field_id, literal="Option A", options=None)
+    first_expr_id = _one(first, Kind="Expression", ProcessDef=branch_pd_id)["Id"]
+
+    cleared = remove_condition(first, expression_id=first_expr_id)
+    second = build_branch_condition(cleared, process_def_id=branch_pd_id,
+                                    field_id=select_field_id, literal="Option B", options=None)
+
+    exprs = _nodes_of(second, Kind="Expression", ProcessDef=branch_pd_id)
+    assert len(exprs) == 1, f"expected exactly one condition on the branch, got {len(exprs)}"
+    assert exprs[0]["ExpressionStr"] == f'{select_field_id} = "Option B"'
+    assert doctor(second).ok()
+
+
+def test_remove_condition_recurses_into_a_nested_compound_condition(
+    clean_draft: Draft, branch_pd_id: str, select_field_id: str, urgency_field_id: str,
+) -> None:
+    """No `build_*` function in this module ever writes deeper than root+2-leaves — but
+    `apply_branch_conditions` calls `remove_condition` on ANY pre-existing ProcessDef Expression,
+    including one a human built in the UI, and a compound AND/OR of two comparisons is a plausible
+    deeper shape (uncaptured — this is a synthetic stand-in via raw dict surgery, the same
+    convention `draft_with_legacy_select_goto_condition` already uses for an uncaptured shape, NOT
+    a claim that "and" is the real captured operator string). A shallow (root, then direct
+    children only) walk would delete the AND root and its two comparison sub-roots but strand
+    THEIR leaf nodes — this pins that the walk goes all the way down instead.
+    """
+    draft = copy.deepcopy(clean_draft)
+    expr_id = "Expression_SCompound01"
+    and_root_id = "Node_SAndRoot01"
+    cmp1_root_id, cmp1_lhs_id, cmp1_rhs_id = (
+        "Node_SCmp1Root01", "Node_SCmp1Lhs01", "Node_SCmp1Rhs01",
+    )
+    cmp2_root_id, cmp2_lhs_id, cmp2_rhs_id = (
+        "Node_SCmp2Root01", "Node_SCmp2Lhs01", "Node_SCmp2Rhs01",
+    )
+
+    draft[cmp1_lhs_id] = {"Id": cmp1_lhs_id, "Kind": "Node", "Type": "Field", "Field": select_field_id,
+                          "DataType": "String", "Node": cmp1_root_id}
+    draft[cmp1_rhs_id] = {"Id": cmp1_rhs_id, "Kind": "Node", "Type": "Static", "Value": "Option A",
+                          "DataType": "String", "Node": cmp1_root_id}
+    draft[cmp1_root_id] = {"Id": cmp1_root_id, "Kind": "Node", "Type": "Function", "Value": "=",
+                           "Syntax": "Infix", "DataType": "Boolean", "Category": "String",
+                           "Node::Node": [cmp1_lhs_id, cmp1_rhs_id], "Node": and_root_id}
+    draft[cmp2_lhs_id] = {"Id": cmp2_lhs_id, "Kind": "Node", "Type": "Field", "Field": urgency_field_id,
+                          "DataType": "String", "Node": cmp2_root_id}
+    draft[cmp2_rhs_id] = {"Id": cmp2_rhs_id, "Kind": "Node", "Type": "Static", "Value": "High",
+                          "DataType": "String", "Node": cmp2_root_id}
+    draft[cmp2_root_id] = {"Id": cmp2_root_id, "Kind": "Node", "Type": "Function", "Value": "=",
+                           "Syntax": "Infix", "DataType": "Boolean", "Category": "String",
+                           "Node::Node": [cmp2_lhs_id, cmp2_rhs_id], "Node": and_root_id}
+    draft[and_root_id] = {"Id": and_root_id, "Kind": "Node", "Type": "Function", "Value": "and",
+                          "Syntax": "Infix", "DataType": "Boolean", "Expression": expr_id,
+                          "Node::Node": [cmp1_root_id, cmp2_root_id]}
+    draft[expr_id] = {"Id": expr_id, "Kind": "Expression",
+                      "ExpressionStr": f'{select_field_id} = "Option A" and {urgency_field_id} = "High"',
+                      "ProcessDef": branch_pd_id, "Expression::Node": [and_root_id]}
+    draft[branch_pd_id].setdefault("ProcessDef::Expression", []).append(expr_id)
+    draft[select_field_id].setdefault("Field::Node", []).append(cmp1_lhs_id)
+    draft[urgency_field_id].setdefault("Field::Node", []).append(cmp2_lhs_id)
+
+    got = remove_condition(draft, expression_id=expr_id)
+
+    for nid in (expr_id, and_root_id, cmp1_root_id, cmp1_lhs_id, cmp1_rhs_id,
+               cmp2_root_id, cmp2_lhs_id, cmp2_rhs_id):
+        assert nid not in got, f"{nid} must be gone -- a shallow walk would strand it"
+    assert expr_id not in (got[branch_pd_id].get("ProcessDef::Expression") or [])
+    assert cmp1_lhs_id not in (got[select_field_id].get("Field::Node") or [])
+    assert cmp2_lhs_id not in (got[urgency_field_id].get("Field::Node") or [])
+    assert doctor(got).ok()
 
 
 # ---- rewire_condition — branch (ProcessDef-owned) -------------------------------------------

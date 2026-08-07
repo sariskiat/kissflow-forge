@@ -456,6 +456,133 @@ def test_add_goto_task_is_idempotent_on_rerun() -> None:
     assert twice[review_id]["Goto::Activity"].count(goto_id_1) == 1, "back-ref must not duplicate either"
 
 
+# ---- add_goto_task — branch_process_def_id (Node M, conditional routing) ---------------------
+# The oracle app's own two GotoTasks each sit LAST within their own branch ProcessDef, targeting an
+# early step of that SAME branch (CLAUDE.md Workflow). Before this parameter, the chain that hosts
+# a new GotoTask was always DERIVED from the target's own ProcessDef, with no way for a caller to
+# say which chain they actually meant — reproduced live 2026-08-07 (node M): a target 2 root steps
+# before a 2-branch Parallel landed the GotoTask after the LAST root-chain activity, not scoped to
+# either branch. `branch_process_def_id` closes that by PINNING and VALIDATING the intended chain.
+
+def _process_with_parallel_branches() -> tuple[dict, str, str, str]:
+    """2 root steps -> a 2-branch Parallel (2 steps each) -> End. Returns (draft, root_pd_id,
+    branch_a_pd_id, branch_b_pd_id)."""
+    from kfforge.graph import build_workflow
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"}}
+    draft = build_workflow(
+        bare,
+        [("Root Step 1", None), ("Root Step 2", None)],
+        parallel=("Fork", [
+            ("Branch A", [("A1", None), ("A2", None)]),
+            ("Branch B", [("B1", None), ("B2", None)]),
+        ]),
+        parallel_after=1,
+    )
+    root_pd_id = draft["M1"]["RootProcessDef"]
+    branch_a_pd_id = next(v["Id"] for v in draft.values()
+                          if isinstance(v, dict) and v.get("Kind") == "ProcessDef"
+                          and v.get("Name") == "Branch A")
+    branch_b_pd_id = next(v["Id"] for v in draft.values()
+                          if isinstance(v, dict) and v.get("Kind") == "ProcessDef"
+                          and v.get("Name") == "Branch B")
+    return draft, root_pd_id, branch_a_pd_id, branch_b_pd_id
+
+
+def test_add_goto_task_branch_process_def_id_lands_inside_that_branch_not_root() -> None:
+    from kfforge.graph import add_goto_task
+
+    draft, root_pd_id, branch_a_pd_id, _branch_b_pd_id = _process_with_parallel_branches()
+    a1_id = next(a for a in draft[branch_a_pd_id]["ProcessDef::Activity"] if draft[a]["Name"] == "A1")
+
+    got, goto_id = add_goto_task(draft, target_activity_id=a1_id, branch_process_def_id=branch_a_pd_id)
+
+    assert got[goto_id]["ProcessDef"] == branch_a_pd_id
+    branch_a_chain = got[branch_a_pd_id]["ProcessDef::Activity"]
+    assert branch_a_chain[-1] == goto_id, "GotoTask must sit LAST within its own branch"
+    assert [got[a]["Name"] for a in branch_a_chain] == ["A1", "A2", "Goto-A1"]
+    # the root chain and the sibling branch must be completely untouched
+    root_chain_names = [got[a]["Name"] for a in got[root_pd_id]["ProcessDef::Activity"]]
+    assert root_chain_names == ["Start", "Root Step 1", "Root Step 2", "Fork", "End"]
+
+
+def test_add_goto_task_branch_process_def_id_matches_default_when_target_already_in_branch() -> None:
+    """Passing the target's OWN branch explicitly must be byte-identical to omitting the param —
+    the validation is a no-op when the caller's assumption was already correct."""
+    from kfforge.graph import add_goto_task
+
+    draft, _root_pd_id, branch_a_pd_id, _branch_b_pd_id = _process_with_parallel_branches()
+    a1_id = next(a for a in draft[branch_a_pd_id]["ProcessDef::Activity"] if draft[a]["Name"] == "A1")
+
+    with_branch, goto_id_1 = add_goto_task(draft, target_activity_id=a1_id,
+                                           branch_process_def_id=branch_a_pd_id)
+    without_branch, goto_id_2 = add_goto_task(draft, target_activity_id=a1_id)
+
+    assert goto_id_1 == goto_id_2
+    assert with_branch == without_branch
+
+
+def test_add_goto_task_branch_process_def_id_rejects_target_outside_that_branch() -> None:
+    """THE reproduced gap: a target OUTSIDE the named branch (here, a shared root-chain step before
+    the Parallel) must be a loud, pre-write ValueError — never a silent misplacement into the
+    wrong chain (which, for a root-chain target, used to mean landing after the LAST root-chain
+    activity, evaluated once for the whole item instead of scoped to one branch)."""
+    from kfforge.graph import add_goto_task
+
+    draft, root_pd_id, branch_a_pd_id, _branch_b_pd_id = _process_with_parallel_branches()
+    root_step_2_id = next(a for a in draft[root_pd_id]["ProcessDef::Activity"]
+                          if draft[a]["Name"] == "Root Step 2")
+    before = copy.deepcopy(draft)
+
+    with pytest.raises(ValueError, match="never cross-branch"):
+        add_goto_task(draft, target_activity_id=root_step_2_id, branch_process_def_id=branch_a_pd_id)
+    assert draft == before
+
+
+def test_add_goto_task_branch_process_def_id_rejects_target_in_sibling_branch() -> None:
+    from kfforge.graph import add_goto_task
+
+    draft, _root_pd_id, branch_a_pd_id, branch_b_pd_id = _process_with_parallel_branches()
+    b1_id = next(a for a in draft[branch_b_pd_id]["ProcessDef::Activity"] if draft[a]["Name"] == "B1")
+    before = copy.deepcopy(draft)
+
+    with pytest.raises(ValueError):
+        add_goto_task(draft, target_activity_id=b1_id, branch_process_def_id=branch_a_pd_id)
+    assert draft == before
+
+
+def test_add_goto_task_branch_process_def_id_rejects_unknown_process_def() -> None:
+    from kfforge.graph import add_goto_task
+
+    draft, _root_pd_id, branch_a_pd_id, _branch_b_pd_id = _process_with_parallel_branches()
+    a1_id = next(a for a in draft[branch_a_pd_id]["ProcessDef::Activity"] if draft[a]["Name"] == "A1")
+    before = copy.deepcopy(draft)
+
+    with pytest.raises(ValueError):
+        add_goto_task(draft, target_activity_id=a1_id, branch_process_def_id="ProcessDef_DoesNotExist99")
+    assert draft == before
+
+
+def test_add_goto_task_root_chain_behavior_unchanged_when_a_parallel_also_exists() -> None:
+    """A root-chain target with NO branch_process_def_id must still behave exactly like the
+    pre-existing (pre-node-M) root-chain tests, even in a draft that ALSO has a Parallel — the new
+    parameter must never change default behavior just because branches exist elsewhere."""
+    from kfforge.graph import add_goto_task
+
+    draft, root_pd_id, _branch_a_pd_id, _branch_b_pd_id = _process_with_parallel_branches()
+    root_step_1_id = next(a for a in draft[root_pd_id]["ProcessDef::Activity"]
+                          if draft[a]["Name"] == "Root Step 1")
+
+    got, goto_id = add_goto_task(draft, target_activity_id=root_step_1_id)
+
+    assert got[goto_id]["ProcessDef"] == root_pd_id
+    chain = got[root_pd_id]["ProcessDef::Activity"]
+    names = [got[a]["Name"] for a in chain]
+    # last among the REAL activities, but before the trailing EndEvent — same rule as ever
+    assert names == ["Start", "Root Step 1", "Root Step 2", "Fork", "Goto-Root Step 1", "End"]
+    assert got[chain[-1]]["NodeType"] == "EndEvent"
+
+
 def test_add_goto_task_can_pair_with_build_goto_gate_and_reads_clean() -> None:
     """Integration: add_goto_task + expr.build_goto_gate together produce a loop verify.doctor
     accepts, using a REAL Boolean field and a REAL permission matrix (not raw dict surgery) —
