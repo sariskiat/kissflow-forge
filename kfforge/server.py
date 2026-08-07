@@ -4,7 +4,7 @@ Write/publish are LIVE as of the §2 compliance sign-off (Kissflow AUP §1.10, 2
 DEV-ONLY by construction: kfforge.client reads only KF_DEV_* and refuses any domain without "dev-".
 Every write is read-verify-write with a post-write read-back audit. See PLAN.md / FINDINGS.md.
 
-Two tool families:
+Three tool families:
   kf_*    the original P0/P1 surface (list types, plan/apply fields, create process, step
           visibility, publish). Unchanged by Node G — kept verbatim.
   forge_* the P2 surface (Node G): thin wrappers around kfforge.client / kfforge.pages_live /
@@ -13,6 +13,22 @@ Two tool families:
           READ-BACK verify -> optional publish; the logic lives in the modules, never here (see
           CLAUDE.md "How to work" — this file exists to expose that logic over MCP, not to
           reimplement it).
+  forge_* the P3 surface (Node K, bottom of the file): kfforge.intake (grill questions, AppSpec,
+          compile-to-BuildPlan) + kfforge.design (draw.io diagrams, HTML mockups, the confirmation
+          protocol) exposed over MCP. Fully OFFLINE — no Kissflow credentials, no network — and
+          STATELESS: the spec is passed in and returned as a plain dict on every call
+          (kfforge.intake.serde), since the server itself holds no session state. forge_plan_app
+          is the design-before-build gate: it refuses to compile a BuildPlan unless an
+          `approval_token` is supplied that matches an HMAC only forge_approve_spec can mint
+          (kfforge.server._mint_approval_token, keyed by a per-process secret generated once at
+          import time and never exposed by any tool) — a PLAIN content digest is deliberately
+          NOT accepted, because a review round proved any tool willing to hash a spec's content
+          (forge_request_confirmation/forge_apply_revisions/forge_update_spec included) mints a
+          value indistinguishable from "approved" the moment a caller hand-sets `approved: true`,
+          since a bare digest proves content-equals-content, never that an approve call happened
+          (see forge_plan_app's/forge_approve_spec's own docstrings for the exact bypasses this
+          closes, and the honest ceiling of what a stateless, secretless-to-the-caller design can
+          actually prove).
 
 ⚠️ NO SNAPSHOT, NO ROLLBACK (flagged in node G review, not yet fixed): every write-capable tool
 here that takes a `flow_id`/`page_id` you did not just create in the SAME call trusts
@@ -26,6 +42,13 @@ any tool here.
 """
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import hmac
+import re
+import secrets
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
@@ -51,7 +74,20 @@ from .client import (
     run_doctor,
 )
 from .dataplane import LiveDataPlane, StepPlan, walk
+from .design import (
+    apply_revisions,
+    design_bundle_html,
+    flow_diagram_xml,
+    is_approved,
+    request_confirmation,
+    schema_diagram_xml,
+    spec_digest,
+)
 from .graph import progressive_matrix
+from .intake.compile import compile_spec
+from .intake.questions import QUESTIONS, next_questions
+from .intake.schema import DIMENSION_NAMES, AppSpec, blank_spec
+from .intake.serde import spec_from_dict, spec_to_dict, to_wire
 from .pages_live import (
     PageBuildStep,
     apply_navigation,
@@ -584,6 +620,485 @@ def forge_delete_flow(kind: str, flow_id: str, app_id: str | None = None) -> dic
     if isinstance(c, Err):
         return c.as_tool_result()
     return delete_anything(c, kind, flow_id, app_id=app_id)
+
+
+# =====================================================================================
+# forge_* — P3 surface (Node K): kfforge.intake (grill questions, AppSpec, compile) + kfforge.
+# design (draw.io diagrams, HTML mockups, confirmation protocol) exposed over MCP, STATELESS —
+# the spec is a plain dict in and out of every call (kfforge.intake.serde), never held here
+# between calls. Every tool below is OFFLINE (no Kissflow credentials, no network); forge_plan_app
+# is the design-before-build gate: no BuildPlan without an `approval_token` — an HMAC only
+# forge_approve_spec can mint (see _mint_approval_token below) — matching this spec's CURRENT
+# content. A plain content digest (kfforge.design.spec_digest, freely computable by anyone from
+# forge_request_confirmation, forge_apply_revisions, or forge_update_spec) is NOT accepted here,
+# on purpose: a review round proved that any tool willing to hash a spec's content mints a value
+# indistinguishable from "this was approved" once a caller flips `approved: true` by hand, since a
+# bare digest only ever proves content-equals-content, never that an approve call happened for it.
+# =====================================================================================
+
+_DEFAULT_FORGE_OUT = Path(tempfile.gettempdir()) / "kfforge_forge_out"
+
+# Question id -> dimension number (1..11), derived from kfforge.intake.questions.QUESTIONS (a
+# public dict already keyed by dimension) rather than adding a new accessor to that module —
+# next_questions() itself returns a flat tuple of Question with no dimension attached, so this is
+# the one piece forge_intake_questions needs that nothing in kfforge.intake exposes directly.
+_QUESTION_DIMENSION: dict[str, int] = {q.id: dim for dim, qs in QUESTIONS.items() for q in qs}
+
+# Per-process secret for forge_approve_spec's approval token (see _mint_approval_token). Generated
+# ONCE at import time, never logged, never returned by any tool, never derivable from anything a
+# caller can observe over MCP — the entire security property of the token rests on this value
+# staying inside the process. A restart mints a NEW secret, which is fine and intended: a token
+# from a previous process is exactly as stale as a spec that changed after approval, and is
+# refused the same way (forge_plan_app has no notion of "this token used to be valid").
+_APPROVAL_SECRET: bytes = secrets.token_bytes(32)
+
+
+def _content_digest(spec: AppSpec) -> str:
+    """The one content digest forge_approve_spec and forge_plan_app must always agree on: spec's
+    content with `approved` normalized to False before hashing (kfforge.design.spec_digest).
+    Shared so the two can never independently drift the way an earlier round found them to (F:
+    forge_approve_spec used to digest the spec AS GIVEN while forge_plan_app always normalized, so
+    re-approving an already-approved spec minted a digest forge_plan_app then rejected as "the
+    spec changed" even though nothing had — normalizing identically on both sides fixes that).
+    """
+    return spec_digest(dataclasses.replace(spec, approved=False))
+
+
+def _mint_approval_token(content_digest: str) -> str:
+    """HMAC-SHA256 of a content digest under `_APPROVAL_SECRET` — the ONLY value forge_plan_app
+    accepts as proof of approval. Only `forge_approve_spec` calls this; nothing else in this
+    module ever does, which is the entire point: a caller (or another tool) can always recompute
+    `_content_digest` for any content they like — that function is pure and public knowledge — but
+    cannot recompute THIS without the secret, so a plain content digest can never be mistaken for
+    an approval token, however it was obtained.
+    """
+    return hmac.new(_APPROVAL_SECRET, content_digest.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _decode(spec: dict[str, Any]) -> AppSpec | dict[str, Any]:
+    """A real AppSpec, or a ready-to-return Err dict on anything that isn't one — every forge_*
+    P3 tool starts here so a malformed `spec` argument is reported the same way `_client()`
+    reports a missing config, never an unhandled exception escaping through MCP."""
+    if not isinstance(spec, dict):
+        return Err("verify", f"spec must be an object, got {type(spec).__name__}").as_tool_result()
+    try:
+        return spec_from_dict(spec)
+    except ValueError as e:
+        return Err("verify", f"invalid spec: {e}").as_tool_result()
+
+
+def _blank_or_decode(spec: dict[str, Any] | None) -> AppSpec | dict[str, Any]:
+    """Like `_decode`, but `spec=None` means "no answers yet" — the correct starting point for
+    forge_intake_questions/forge_update_spec, the only pair of P3 tools a caller may legally
+    invoke before any spec exists at all."""
+    return blank_spec() if spec is None else _decode(spec)
+
+
+def _artifact_dir(spec: AppSpec, out_dir: str | None) -> Path:
+    """Where a render/confirm tool writes its files: `<out_dir>/<app_name>_<digest>/`, namespaced
+    by a content digest so re-rendering the SAME spec overwrites the same files (idempotent) while
+    two DIFFERENT specs never collide. `out_dir` defaults to a fixed folder under the system temp
+    dir — a server default, not this-or-that caller's own scratch space, since the MCP server has
+    no notion of who is calling it or from where."""
+    base = Path(out_dir) if out_dir else _DEFAULT_FORGE_OUT
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", spec.app_name).strip("_") or "app"
+    # _content_digest, so approving a spec does not relocate its own artifacts to a second folder.
+    directory = base / f"{safe_name}_{_content_digest(spec)[:12]}"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _write_artifact(directory: Path, filename: str, content: str) -> str:
+    path = directory / filename
+    path.write_text(content, encoding="utf-8")
+    return str(path)
+
+
+@mcp.tool()
+def forge_intake_questions(spec: dict[str, Any] | None = None, limit: int = 4) -> dict[str, Any]:
+    """OFFLINE, stateless: the next questions to ask, most-blocking dimension first, for the gaps
+    THIS spec still has (kfforge.intake.questions.next_questions). `spec=None` returns the OPENING
+    questions (kfforge.intake.schema.blank_spec() — every one of the 11 dimensions is a gap). Each
+    returned question carries its dimension number/name alongside the Thai text/why/example/
+    follow-ups `next_questions` itself returns — a caller restricted to MCP has no other way to
+    learn which of the 11 dimensions a given question id belongs to. Also returns the spec's
+    current gap list (all 11) and blocking-gap list (excludes the advisory timing dimension —
+    kfforge.intake.schema.ADVISORY_DIMENSIONS) so a caller can tell how much is left without a
+    second round trip.
+
+    The echoed `spec` always carries `approved: false`, regardless of what the input spec's was —
+    matching forge_update_spec/forge_apply_revisions (both force it too): this tool is a read
+    step, never a place `approved` should survive a round trip unexamined. Without this, asking
+    "what's left to answer" on an already-approved spec handed back `approved: true` verbatim —
+    one more tool a caller could launder that flag through without ever calling
+    forge_approve_spec.
+    """
+    decoded = _blank_or_decode(spec)
+    if isinstance(decoded, dict):
+        return decoded
+    questions = next_questions(decoded, limit=limit)
+    echoed = dataclasses.replace(decoded, approved=False)
+    return {
+        "questions": [
+            {
+                "id": q.id,
+                "dimension": _QUESTION_DIMENSION[q.id],
+                "dimension_name": DIMENSION_NAMES[_QUESTION_DIMENSION[q.id] - 1],
+                "text_th": q.text_th,
+                "why": q.why,
+                "example": q.example,
+                "follow_ups": list(q.follow_ups),
+            }
+            for q in questions
+        ],
+        "gaps": list(decoded.gaps()),
+        "blocking_gaps": list(decoded.blocking_gaps()),
+        "spec": spec_to_dict(echoed),
+        "isError": False,
+    }
+
+
+@mcp.tool()
+def forge_update_spec(spec: dict[str, Any] | None, patch: dict[str, Any]) -> dict[str, Any]:
+    """OFFLINE, stateless: merge Q&A answers into a spec and return the new spec plus its
+    remaining gaps. `spec=None` starts from kfforge.intake.schema.blank_spec(). `patch` is a
+    SHALLOW merge at AppSpec's own top-level DIMENSION keys (app_name, problem_goal, roles,
+    stages, routing, rework_loops, data_model, master_data, visibility, timing, personas,
+    test_cases) — each key given REPLACES that whole dimension wholesale; a key omitted from
+    `patch` keeps whatever the base spec already had. This is deliberately NOT a deep merge:
+    kfforge.intake.schema defines no append/upsert-by-name semantics for e.g. "add one more field
+    to data_model.fields", so a caller wanting to change one field reads the whole data_model back
+    from the returned spec and supplies it again in full — one unambiguous rule beats a guessed-at
+    deep merge. The merged result is re-validated through spec_from_dict, so a structurally bad
+    patch (unknown key, wrong shape, bad enum value) is refused naming exactly where, never
+    silently applied.
+
+    `approved` is NOT a legal patch key: it is the confirmation gate (forge_approve_spec's own
+    job), never a spec dimension a Q&A answer can fill in — a patch naming it is refused outright,
+    even to re-assert the same value the base spec already has. A caller round-tripping a WHOLE
+    spec back through this tool as its own patch (e.g. `spec_to_dict(...)` verbatim) must strip
+    that one key first. The returned spec's `approved` is ALSO always forced to False regardless
+    of what the base spec's was — updated content is, by definition, unapproved content, even when
+    nothing in `patch` touched `approved` at all (this was a live bypass: update a field on an
+    ALREADY-approved spec, and the old `approved: true` rode along untouched into a plan built
+    from content nobody actually re-confirmed). Call forge_request_confirmation +
+    forge_approve_spec again after any update.
+    """
+    base = _blank_or_decode(spec)
+    if isinstance(base, dict):
+        return base
+    if not isinstance(patch, dict):
+        return Err("verify", f"patch must be an object, got {type(patch).__name__}").as_tool_result()
+    if "approved" in patch:
+        return Err(
+            "verify",
+            "'approved' may not be set via forge_update_spec — it is the confirmation gate, not "
+            "a spec dimension; strip it from the patch and call forge_approve_spec to grant it",
+        ).as_tool_result()
+    merged_wire = {**spec_to_dict(base), **patch}
+    try:
+        merged = spec_from_dict(merged_wire)
+    except ValueError as e:
+        return Err("verify", f"invalid patch: {e}").as_tool_result()
+    merged = dataclasses.replace(merged, approved=False)  # an update is, by definition, unapproved
+    return {
+        "spec": spec_to_dict(merged),
+        "gaps": list(merged.gaps()),
+        "blocking_gaps": list(merged.blocking_gaps()),
+        "isError": False,
+    }
+
+
+@mcp.tool()
+def forge_render_flow_diagram(spec: dict[str, Any], out_dir: str | None = None) -> dict[str, Any]:
+    """OFFLINE: render the flow-shape draw.io diagram (kfforge.design.flow_diagram_xml) — stage
+    boxes down the spine, decision diamonds, dashed rework-loop back-edges, an unreachable stage
+    flagged rather than silently drawn as fine. Written to
+    `<out_dir>/<app_name>_<digest>/flow_diagram.drawio` (out_dir defaults to a namespaced folder
+    under the system temp dir — see _artifact_dir) and returned inline too, so a caller can hand
+    either the text or the path to a human. This tool never refuses on an incomplete spec — it
+    renders whatever is there — but ALWAYS echoes `gaps`/`blocking_gaps` alongside the diagram, so
+    a caller cannot hand a human a design artifact for a spec that still has gaps without also
+    knowing it does.
+    """
+    decoded = _decode(spec)
+    if isinstance(decoded, dict):
+        return decoded
+    try:
+        xml = flow_diagram_xml(decoded)
+    except (ValueError, TypeError) as e:
+        return Err("verify", f"failed to render flow diagram: {e}").as_tool_result()
+    path = _write_artifact(_artifact_dir(decoded, out_dir), "flow_diagram.drawio", xml)
+    return {
+        "xml": xml, "path": path,
+        "gaps": list(decoded.gaps()), "blocking_gaps": list(decoded.blocking_gaps()),
+        "isError": False,
+    }
+
+
+@mcp.tool()
+def forge_render_schema_diagram(spec: dict[str, Any], out_dir: str | None = None) -> dict[str, Any]:
+    """OFFLINE: render the data-shape draw.io diagram (kfforge.design.schema_diagram_xml) — fields
+    grouped by stage, tables with their columns/row cap, reference lists with their REAL values.
+    Same file-writing contract as forge_render_flow_diagram (see its docstring); file named
+    schema_diagram.drawio. Same gaps/blocking_gaps echo too — see forge_render_flow_diagram.
+    """
+    decoded = _decode(spec)
+    if isinstance(decoded, dict):
+        return decoded
+    try:
+        xml = schema_diagram_xml(decoded)
+    except (ValueError, TypeError) as e:
+        return Err("verify", f"failed to render schema diagram: {e}").as_tool_result()
+    path = _write_artifact(_artifact_dir(decoded, out_dir), "schema_diagram.drawio", xml)
+    return {
+        "xml": xml, "path": path,
+        "gaps": list(decoded.gaps()), "blocking_gaps": list(decoded.blocking_gaps()),
+        "isError": False,
+    }
+
+
+@mcp.tool()
+def forge_render_mockups(spec: dict[str, Any], out_dir: str | None = None) -> dict[str, Any]:
+    """OFFLINE: render the combined HTML mockup bundle (kfforge.design.design_bundle_html) —
+    per-stage form cards with FAITHFUL field rendering (a Hidden/ReadOnly/computed field never
+    renders as a plain live input — CLAUDE.md THE RULE), tables, reference lists, a plain-language
+    process summary, and both diagrams inline as collapsible draw.io XML. Written to
+    `<out_dir>/<app_name>_<digest>/mockups.html`, same directory-naming contract as the diagram
+    tools (see forge_render_flow_diagram). Also returns a short plain-text `summary` (stage/table/
+    reference-list/persona-view counts) alongside the full HTML — an agent driving this tool
+    cannot itself read rendered HTML, so `summary` and `path` are what it can actually act on; a
+    human opens `path` for the real mockup. Same gaps/blocking_gaps echo as the diagram tools.
+    """
+    decoded = _decode(spec)
+    if isinstance(decoded, dict):
+        return decoded
+    try:
+        html = design_bundle_html(decoded)
+    except (ValueError, TypeError) as e:
+        return Err("verify", f"failed to render mockups: {e}").as_tool_result()
+    path = _write_artifact(_artifact_dir(decoded, out_dir), "mockups.html", html)
+    summary = (
+        f"{len(decoded.stages.stages)} stage(s), {len(decoded.data_model.tables)} table(s), "
+        f"{len(decoded.master_data.lists)} reference list(s), "
+        f"{len(decoded.personas.views)} persona view(s)"
+    )
+    return {
+        "html": html, "path": path, "summary": summary,
+        "gaps": list(decoded.gaps()), "blocking_gaps": list(decoded.blocking_gaps()),
+        "isError": False,
+    }
+
+
+@mcp.tool()
+def forge_request_confirmation(spec: dict[str, Any], out_dir: str | None = None) -> dict[str, Any]:
+    """OFFLINE: build the ConfirmationRequest (kfforge.design.request_confirmation) — both draw.io
+    diagrams plus the HTML mockup bundle written to disk, a content digest that changes whenever
+    the spec's content does, and one Thai confirm/revise question per risky choice the spec makes
+    (each routing literal, loop gate polarity, terminal state, required field, master-data list's
+    values). THE RULE (CLAUDE.md): nothing downstream may write to Kissflow until a human has read
+    these artifacts and forge_approve_spec has been called with THIS digest. Also echoes
+    `gaps`/`blocking_gaps` — this tool does NOT refuse to build a confirmation package for an
+    incomplete spec (a customer may reasonably want to see a partial design mid-interview), but a
+    human handed only `design.html` with no other signal would have no way to tell "empty because
+    nobody has answered dimension 6 yet" from "empty because the app genuinely has no fields."
+    """
+    decoded = _decode(spec)
+    if isinstance(decoded, dict):
+        return decoded
+    try:
+        req = request_confirmation(decoded)
+    except (ValueError, TypeError) as e:
+        return Err("verify", f"failed to build confirmation request: {e}").as_tool_result()
+    directory = _artifact_dir(decoded, out_dir)
+    paths = {name: _write_artifact(directory, name, content)
+             for name, content in req.artifacts.items()}
+    return {
+        # _content_digest, NOT req.spec_digest: request_confirmation hashes the spec AS GIVEN, so
+        # confirming an already-approved spec would mint a digest forge_approve_spec always
+        # rejects as "the spec changed" when nothing changed, and the error's own remedy would
+        # return that same wrong digest forever. Both sides must normalize `approved` identically.
+        "digest": _content_digest(decoded),
+        "artifact_paths": paths,
+        "questions": list(req.questions),
+        "gaps": list(decoded.gaps()),
+        "blocking_gaps": list(decoded.blocking_gaps()),
+        "isError": False,
+    }
+
+
+@mcp.tool()
+def forge_apply_revisions(spec: dict[str, Any], revisions: dict[str, str]) -> dict[str, Any]:
+    """OFFLINE: apply a customer's corrections (kfforge.design.apply_revisions — an explicit key
+    vocabulary, e.g. "stage:<name>:rename" / "list:<name>:value:<old>", never a general
+    dotted-path setter) and return the new spec plus its NEW digest (kfforge.design.spec_digest —
+    ANY revision changes the spec's content, so the digest a customer must approve next is this
+    one, never the one they were shown before the revision). The RETURNED spec's `approved` flag
+    is ALWAYS forced to False, regardless of what the input spec's was — a revision is, by
+    definition, unapproved content, even one applied to an already-approved spec (this used to be
+    a live bypass: approve, then revise routing/fields/anything with `approved: true` riding along
+    untouched, then plan clean against content nobody actually confirmed).
+
+    Also reports whether the revised spec still compiles, tested against a TEMPORARILY
+    force-approved COPY purely to probe structural validity — that probe never affects the
+    returned spec's own (always-False) `approved` flag. A KNOWN DEFECT (kfforge.design.confirm's
+    own docstring) makes `field:<stage>:<name>:rename` return an uncompilable spec whenever that
+    field is referenced elsewhere (a routing point, a loop gate, a computed field, a visibility
+    entry, or a test case fill) — this is exactly the case `compiles=False` exists to surface, not
+    hide. A revision that fails to APPLY (unknown key, or a key naming something not in this spec)
+    is a real tool error (`isError=True`); an applied revision that merely fails to compile is NOT
+    an error — the tool did what was asked, and is reporting a true fact about the result.
+    """
+    decoded = _decode(spec)
+    if isinstance(decoded, dict):
+        return decoded
+    if not isinstance(revisions, dict):
+        return Err(
+            "verify", f"revisions must be an object, got {type(revisions).__name__}"
+        ).as_tool_result()
+    try:
+        revised = apply_revisions(decoded, revisions)
+    except ValueError as e:
+        return Err("verify", f"failed to apply revisions: {e}").as_tool_result()
+    revised = dataclasses.replace(revised, approved=False)  # a revision is, by definition, unapproved
+    try:
+        compile_spec(dataclasses.replace(revised, approved=True))
+        compiles, compile_error = True, None
+    except ValueError as e:
+        compiles, compile_error = False, str(e)
+    return {
+        "spec": spec_to_dict(revised),
+        "digest": spec_digest(revised),
+        "compiles": compiles,
+        "compile_error": compile_error,
+        "isError": False,
+    }
+
+
+@mcp.tool()
+def forge_approve_spec(spec: dict[str, Any], digest: str, decision: str) -> dict[str, Any]:
+    """OFFLINE: record approval and mint the ONLY value forge_plan_app accepts.
+
+    Refuses unless `digest` matches THIS spec's content digest (kfforge.design.spec_digest, with
+    `approved` normalized to False before hashing — see _content_digest. EVERY producer of a
+    digest normalizes the same way: this tool, forge_plan_app, forge_request_confirmation and
+    _artifact_dir. They must stay in lockstep — when they did not, re-approving an already-approved
+    spec was refused as "the spec changed" when nothing had, and the error's own suggested remedy
+    returned that same rejected digest forever) and `decision` is the exact literal "approve"
+    (kfforge.design.is_approved — a typo, "Approve", "approved", or a revise request are all
+    refused, never guessed into a yes). A stale digest means the spec changed (e.g. via
+    forge_apply_revisions) after the customer looked at the confirmation artifacts — refused,
+    naming both digests, rather than silently approving content the customer never actually saw.
+
+    Returns the spec with `approved` set True, its plain content `digest` (harmless to expose —
+    kept for a caller that just wants to show/detect drift, same meaning forge_request_confirmation/
+    forge_apply_revisions already return under that name), AND `approval_token`: an HMAC of that
+    digest under a secret generated once per server process (_APPROVAL_SECRET), never logged,
+    never returned by any other tool. forge_plan_app now demands `approval_token`, never a plain
+    `digest` — a review round proved that ANY tool willing to hash a spec's content (this one
+    included, and forge_request_confirmation/forge_apply_revisions besides) mints a value
+    indistinguishable from "approved" once a caller flips `approved: true` by hand, since a bare
+    digest proves only "this content was hashed once," never that an explicit approve call
+    happened for it. Only this function holds the secret, so only a real call here can produce a
+    token forge_plan_app accepts — hashing the same bytes anywhere else, however many times,
+    cannot forge one.
+
+    HONEST CEILING: this proves "exactly one explicit forge_approve_spec call happened, bound to
+    this exact content, and no other route can forge that fact." It does NOT and CANNOT prove a
+    HUMAN, rather than the calling agent, made the decision — no stateless MCP surface with no
+    out-of-band channel to a person can prove that; `decision` is still just a string an agent
+    could type "approve" into itself. The gate closes every route from "content nobody signed off
+    on through this call" to a live build — it is not, and cannot be, human authentication.
+    """
+    decoded = _decode(spec)
+    if isinstance(decoded, dict):
+        return decoded
+    current = _content_digest(decoded)
+    if digest != current:
+        return Err(
+            "verify",
+            f"stale digest: given {digest!r}, current spec digest is {current!r} — the spec "
+            f"changed since this digest was shown to the customer; re-run "
+            f"forge_request_confirmation and show the NEW digest before approving",
+        ).as_tool_result()
+    if not is_approved(decoded, decision):
+        return Err(
+            "verify",
+            f"decision {decision!r} is not an explicit approval — must be exactly 'approve'",
+        ).as_tool_result()
+    approved_spec = dataclasses.replace(decoded, approved=True)
+    return {
+        "spec": spec_to_dict(approved_spec),
+        "approved": True,
+        "digest": current,
+        "approval_token": _mint_approval_token(current),
+        "isError": False,
+    }
+
+
+@mcp.tool()
+def forge_plan_app(spec: dict[str, Any], approval_token: str) -> dict[str, Any]:
+    """OFFLINE: compile an APPROVED, COMPLETE spec to its ordered BuildPlan
+    (kfforge.intake.compile.compile_spec) — THE GATE.
+
+    Refuses UNLESS `approval_token` is the exact HMAC forge_approve_spec minted for this spec's
+    CURRENT content digest (approved normalized to False before hashing — see _content_digest).
+    This is deliberately NOT a plain content digest. A review round proved that a content-digest
+    gate is forgeable four ways, because ANY tool that hashes the same content mints a value
+    indistinguishable from what the gate wants, with no approve call required at all:
+      - call forge_request_confirmation (read-only), hand-set `approved: true`, plan with its digest
+      - mutate an approved spec's routing/owner_role, RE-confirm the mutant for a fresh matching
+        digest, plan the mutant with THAT — the customer approved design A, the plan is A-prime
+      - forge_apply_revisions returns a plain digest for its (approved-forced-False) result — flip
+        `approved` back to true by hand, plan with that digest
+      - same shape through forge_update_spec chained into forge_request_confirmation
+    All four share one root cause (a bare digest proves content-equals-content, never "an approve
+    call happened") and one fix: only forge_approve_spec holds `_APPROVAL_SECRET`, so only an
+    actual call to it can mint a token this check accepts. A caller who never called
+    forge_approve_spec, or whose content changed afterward by so much as one field, has no
+    token that verifies — refused here, before `compile_spec` ever runs, naming that the spec was
+    never approved (or changed since).
+
+    HONEST CEILING: this proves "exactly one explicit forge_approve_spec call happened, bound to
+    this exact content, and nothing else can forge that fact." It does NOT and CANNOT prove a
+    HUMAN, rather than the calling agent, approved — see forge_approve_spec's own docstring.
+
+    Only past the token check does this refuse a spec whose `approved` flag is not True (call
+    forge_approve_spec first), or one with blocking gaps, NAMING every dimension still missing (so
+    a caller can go straight back to forge_intake_questions) — compile_spec's own two refusals,
+    unchanged, kept as a second (weaker) check: a valid token only proves the CONTENT was approved,
+    since the token verification normalizes `approved` away — a caller could in principle present
+    approved content with `approved: false` re-set by hand, which the token alone would not catch,
+    but compile_spec's own check does. No build may ever start before an explicit approval bound
+    to the EXACT design being built (CLAUDE.md "THE RULE").
+    """
+    decoded = _decode(spec)
+    if isinstance(decoded, dict):
+        return decoded
+    current = _content_digest(decoded)
+    expected_token = _mint_approval_token(current)
+    # Compare as BYTES: hmac.compare_digest raises TypeError on str carrying any non-ASCII
+    # character (a smart quote from a paste, a Thai-speaking agent), and this tool's contract is
+    # to return a structured refusal, never to raise through MCP.
+    if not hmac.compare_digest(approval_token.encode("utf-8"), expected_token.encode("utf-8")):
+        return Err(
+            "verify",
+            "invalid or stale approval_token — this exact content was never approved with "
+            "forge_approve_spec (or was, then changed afterward); a plain digest from "
+            "forge_request_confirmation/forge_apply_revisions/forge_update_spec is NOT an "
+            "approval_token, no matter how it was obtained — re-run forge_request_confirmation, "
+            "get an explicit forge_approve_spec call, and plan with the approval_token IT returns",
+        ).as_tool_result()
+    try:
+        plan = compile_spec(decoded)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
+    return {
+        "ops": [to_wire(op) for op in plan.ops],
+        "summary": plan.summary(),
+        "op_count": len(plan.ops),
+        "isError": False,
+    }
 
 
 def main() -> None:

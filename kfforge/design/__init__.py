@@ -258,6 +258,7 @@ from .confirm import (
     apply_revisions,
     is_approved,
     request_confirmation,
+    spec_digest,
 )
 from .diagram import flow_diagram_xml, schema_diagram_xml
 from .mockup import (
@@ -295,4 +296,5 @@ __all__ = [
     "persona_pages_html",
     "request_confirmation",
     "schema_diagram_xml",
+    "spec_digest",
 ]

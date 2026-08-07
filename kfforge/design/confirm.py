@@ -93,6 +93,17 @@ def _digest(spec: AppSpecLike) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def spec_digest(spec: AppSpecLike) -> str:
+    """Public accessor for this module's own digest computation. Added for `kfforge.server`'s
+    `forge_approve_spec` MCP tool, which needs to check whether a spec's CURRENT digest still
+    matches the one a customer was shown -- without paying to re-render two diagrams and an HTML
+    bundle just to get one hash back out, which calling the full `request_confirmation` would
+    otherwise require. Same computation `ConfirmationRequest.spec_digest` already carries; this is
+    only a name for it that doesn't require rebuilding the whole request to reach.
+    """
+    return _digest(spec)
+
+
 # ---------------------------------------------------------------------------------------------
 # Questions: one per risky choice, in Thai, covering routing literals / loop gates / terminal
 # states / required fields / master-data list values.

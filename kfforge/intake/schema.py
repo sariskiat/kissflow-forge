@@ -527,6 +527,33 @@ class AppSpec:
         return tuple(s for n, s in _gap_dimensions(self).items() if n not in ADVISORY_DIMENSIONS)
 
 
+def blank_spec() -> AppSpec:
+    """An `AppSpec` with every dimension present but empty -- the correct starting point for a
+    Q&A session that has not collected any answers yet (`gaps()` returns all 11 dimensions,
+    `app_name` is `""`, `approved` is `False`). Added for `kfforge.server`'s stateless
+    `forge_intake_questions`/`forge_update_spec` MCP tools, which need a real starting `AppSpec`
+    when a caller passes no spec at all (there is no session to remember one from between calls) --
+    every field below is instantiated with its own container's empty default, mirroring the
+    synthetic `_EMPTY_SPEC` fixture `tests/test_intake.py` already builds by hand for the same
+    reason, now promoted to a real, reusable function instead of a test-only constant.
+    """
+    return AppSpec(
+        app_name="",
+        problem_goal=ProblemGoal(pain="", goal="", done_definition="", terminal_states=(),
+                                 result_values=()),
+        roles=Roles(roles=()),
+        stages=Stages(stages=()),
+        routing=Routing(points=()),
+        rework_loops=ReworkLoops(loops=()),
+        data_model=DataModel(fields=(), tables=(), computed=()),
+        master_data=MasterData(lists=()),
+        visibility=VisibilityMatrix(entries=()),
+        timing=Timing(sla_notes="", batch_days=(), reminders=()),
+        personas=Personas(views=()),
+        test_cases=TestCases(cases=()),
+    )
+
+
 def _gap_dimensions(spec: AppSpec) -> dict[int, str]:
     """Single source of truth for "is dimension N insufficient", keyed 1..11 in order.
 
