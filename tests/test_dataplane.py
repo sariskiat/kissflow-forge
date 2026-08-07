@@ -22,6 +22,7 @@ from kfforge.dataplane import (
     advance,
     fill_and_verify,
     live_aiid,
+    usable_aiid,
     wait_new_aiid,
     walk,
 )
@@ -119,6 +120,42 @@ def test_live_aiid_never_returns_the_myitems_decoy() -> None:
     assert got != DECOY_AIID
 
 
+# -------------------------------------------------------------------------------- usable_aiid
+# The two-phase aiid rule (CLAUDE.md > Item data plane, proven live 2026-08-07): hop 1 (a Draft
+# item still at Start, never submitted) has no _current_context at all, so the only usable aiid
+# for THAT submit is the one create_item's own response returned. usable_aiid is live_aiid plus
+# exactly that one documented fallback, supplied by the caller, never inferred.
+
+def test_usable_aiid_prefers_live_context_over_the_create_fallback() -> None:
+    """Context wins whenever it's present -- the fallback is a last resort, not a first choice."""
+    got = usable_aiid(_detail("ITEM-1"), create_aiid="SOME-CREATE-AIID")
+    assert got == LIVE_AIID
+
+
+def test_usable_aiid_falls_back_to_create_aiid_when_context_is_absent() -> None:
+    d = _detail("ITEM-1", with_context=False)
+    got = usable_aiid(d, create_aiid="SOME-CREATE-AIID")
+    assert got == "SOME-CREATE-AIID"
+
+
+def test_usable_aiid_without_a_fallback_behaves_exactly_like_live_aiid() -> None:
+    """create_aiid defaults to None -- omitting it must reproduce live_aiid's own Err verbatim,
+    so every existing live_aiid caller is unaffected by usable_aiid's addition."""
+    d = _detail("ITEM-1", with_context=False)
+    got_usable = usable_aiid(d)
+    got_live = live_aiid(d)
+    assert isinstance(got_usable, Err) and isinstance(got_live, Err)
+    assert got_usable.message == got_live.message
+
+
+def test_usable_aiid_fallback_never_shadows_the_myitems_decoy_check() -> None:
+    """Even if a caller carelessly supplies something decoy-shaped as create_aiid, real context
+    still wins -- the fallback is never a way to smuggle the myitems decoy past live_aiid."""
+    got = usable_aiid(_detail("ITEM-1"), create_aiid=DECOY_AIID)
+    assert got == LIVE_AIID
+    assert got != DECOY_AIID
+
+
 # ---------------------------------------------------------------------------- fill_and_verify
 def test_fill_and_verify_all_landed() -> None:
     fake = FakeClient()
@@ -185,6 +222,27 @@ def test_advance_propagates_missing_context_as_err() -> None:
     assert isinstance(got, Err)
     assert not any(name == "submit" for name, _ in fake.calls), \
         "must never submit without a live aiid"
+
+
+def test_advance_uses_the_create_aiid_fallback_when_context_missing() -> None:
+    """Two-phase rule at the advance() level directly (not via walk): a caller that supplies
+    create_aiid can still submit hop 1 even though the item's own context has nothing yet."""
+    fake = FakeClient()
+    fake.create_item(FLOW)
+    fake.items["ITEM-1"].pop("_current_context")
+    got = advance(fake, flow_id=FLOW, iid="ITEM-1", create_aiid="CREATE-AIID-DIRECT")
+    assert isinstance(got, StepResult)
+    assert got.aiid == "CREATE-AIID-DIRECT"
+    submit_calls = [args for name, args in fake.calls if name == "submit"]
+    assert submit_calls == [(FLOW, "ITEM-1", "CREATE-AIID-DIRECT")]
+
+
+def test_advance_prefers_live_context_over_create_aiid_when_both_available() -> None:
+    fake = FakeClient()
+    fake.create_item(FLOW)  # _detail()'s default already carries a live context
+    got = advance(fake, flow_id=FLOW, iid="ITEM-1", create_aiid="SHOULD-NOT-BE-USED")
+    assert isinstance(got, StepResult)
+    assert got.aiid == LIVE_AIID
 
 
 # --------------------------------------------------------------------------------------- walk
@@ -268,6 +326,103 @@ def test_walk_empty_step_list_still_creates() -> None:
     assert rep.created == 1 and rep.iid is not None
     assert rep.filled == () and rep.advanced == () and rep.failed == ()
     assert rep.ok() is True
+
+
+# --------------------------------------------------------- walk() from Draft: two-phase aiid rule
+# Models the shape proven live 2026-08-07: create_item's response carries a usable aiid, but the
+# item's OWN detail has NO _current_context until AFTER the first submit succeeds. This is exactly
+# what stranded `forge_simulate_case` before the fix -- live_aiid alone can never derive hop 1's
+# aiid from a Draft item's detail, only from the create response.
+
+class _TwoPhaseFakeClient:
+    """No _current_context until the first submit lands; every submitted aiid is recorded so a
+    test can assert exactly which source (create-response vs. context) each hop actually used."""
+
+    def __init__(self) -> None:
+        self.create_aiid = "CREATE-AIID"
+        self.context_aiid = "CONTEXT-AIID-1"
+        self.submitted = False
+        self.submit_calls: list[str] = []
+        self.fields: dict[str, Any] = {}
+
+    def create_item(self, flow_id: str) -> dict[str, Any]:
+        return {"_id": "ITEM-1", "_activity_instance_id": self.create_aiid}
+
+    def put_fields(self, flow_id: str, iid: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.fields.update(payload)  # so fill_and_verify's read-back sees what was just sent
+        return {"ok": True}
+
+    def get_detail(self, flow_id: str, iid: str) -> dict[str, Any]:
+        base: dict[str, Any] = {"_id": iid, **self.fields}
+        if not self.submitted:
+            base["_current_step"] = "Start"  # no _current_context yet -- hop 1
+        else:
+            base["_current_step"] = "Next"
+            base["_current_context"] = [{"_context_activity_instance_id": self.context_aiid}]
+        return base
+
+    def submit(self, flow_id: str, iid: str, aiid: str) -> dict[str, Any]:
+        self.submit_calls.append(aiid)
+        self.submitted = True
+        return {"ok": True}
+
+    def reject(self, flow_id: str, iid: str, aiid: str, comment: str) -> dict[str, Any]:
+        raise NotImplementedError("not exercised by these tests")
+
+
+def test_walk_from_draft_uses_create_response_aiid_for_hop_one_then_context_after() -> None:
+    fake = _TwoPhaseFakeClient()
+    steps = [
+        _plan("Step One", values={"sample_field_a": "a1"}),
+        _plan("Step Two", values={"sample_field_b": "b2"}),
+    ]
+    rep = walk(fake, flow_id=FLOW, steps=steps)
+    assert rep.ok() is True
+    assert rep.advanced == ("Step One", "Step Two")
+    assert fake.submit_calls == ["CREATE-AIID", "CONTEXT-AIID-1"], \
+        "hop 1 must use the create-response aiid (no context yet); hop 2 must use the live context"
+
+
+class _NeverRolloverFakeClient:
+    """Context NEVER shows up, even after a submit succeeds -- the create-response fallback must
+    still never be reused past the first hop, which is exactly what keeps a genuinely-stuck LATER
+    hop a loud failure instead of a silently-wrong resubmit."""
+
+    def __init__(self) -> None:
+        self.submit_calls: list[str] = []
+        self.fields: dict[str, Any] = {}
+
+    def create_item(self, flow_id: str) -> dict[str, Any]:
+        return {"_id": "ITEM-1", "_activity_instance_id": "CREATE-AIID"}
+
+    def put_fields(self, flow_id: str, iid: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.fields.update(payload)
+        return {"ok": True}
+
+    def get_detail(self, flow_id: str, iid: str) -> dict[str, Any]:
+        # never gets _current_context, ever
+        return {"_id": iid, "_current_step": "Whatever", **self.fields}
+
+    def submit(self, flow_id: str, iid: str, aiid: str) -> dict[str, Any]:
+        self.submit_calls.append(aiid)
+        return {"ok": True}
+
+    def reject(self, flow_id: str, iid: str, aiid: str, comment: str) -> dict[str, Any]:
+        raise NotImplementedError("not exercised by this test")
+
+
+def test_walk_never_reuses_create_aiid_past_the_first_hop_even_if_context_stays_missing() -> None:
+    fake = _NeverRolloverFakeClient()
+    steps = [
+        _plan("Step One", values={"sample_field_a": "a1"}),
+        _plan("Step Two", values={"sample_field_b": "b2"}),
+    ]
+    rep = walk(fake, flow_id=FLOW, steps=steps)
+    assert rep.advanced == ("Step One",), "hop 1 succeeds via the create-response fallback"
+    assert rep.failed == ("Step Two",), \
+        "hop 2 has no context and gets NO fallback -- it must fail, never reuse hop 1's aiid"
+    assert rep.ok() is False
+    assert fake.submit_calls == ["CREATE-AIID"], "only the one hop-1 submit ever happened"
 
 
 # ------------------------------------------------------------------- LiveDataPlane (real impl)
@@ -395,6 +550,74 @@ def test_wait_new_aiid_retries_through_a_transient_get_detail_error() -> None:
     assert fake.get_detail_calls == 2
 
 
+# ------------------------------------------------------------- wait_new_aiid: terminal status
+# Found live 2026-08-07 walking a real item to actual completion: a submit that finishes the
+# WHOLE workflow leaves NO _current_context at all -- there is no next step to roll over INTO.
+# Before this fix that read exactly like "not rolled over yet" and the poll spun until `tries`
+# ran out, reporting a false failure on a submit that had, in fact, fully succeeded.
+
+class _TerminalStatusFake:
+    """Reports a non-terminal status (with a stale _current_context, matching a real "still
+    settling" read) for `stale_calls` reads, then flips to a TERMINAL status with NO
+    _current_context at all -- exactly what a truly-finished item's detail looks like live."""
+
+    def __init__(self, *, stale_calls: int, terminal_status: str, old_aiid: str) -> None:
+        self.stale_calls = stale_calls
+        self.terminal_status = terminal_status
+        self.old_aiid = old_aiid
+        self.get_detail_calls = 0
+
+    def get_detail(self, flow_id: str, iid: str) -> dict[str, Any]:
+        self.get_detail_calls += 1
+        if self.get_detail_calls <= self.stale_calls:
+            return {"_id": iid, "_status": "InProgress", "_current_step": "Whatever",
+                    "_current_context": [{"_context_activity_instance_id": self.old_aiid}]}
+        return {"_id": iid, "_status": self.terminal_status, "_current_step": None}
+
+
+def test_wait_new_aiid_returns_immediately_on_a_terminal_status_no_context_needed() -> None:
+    fake = _TerminalStatusFake(stale_calls=0, terminal_status="Completed", old_aiid="AIID-OLD")
+    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
+                        tries=8, delay=0, sleep_fn=lambda s: None)
+    assert got == "Completed"
+    assert fake.get_detail_calls == 1
+
+
+def test_wait_new_aiid_recognizes_terminal_status_after_some_stale_reads() -> None:
+    fake = _TerminalStatusFake(stale_calls=2, terminal_status="Completed", old_aiid="AIID-OLD")
+    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
+                        tries=8, delay=0, sleep_fn=lambda s: None)
+    assert got == "Completed"
+    assert fake.get_detail_calls == 3
+
+
+def test_wait_new_aiid_treats_rejected_as_terminal_too() -> None:
+    fake = _TerminalStatusFake(stale_calls=0, terminal_status="Rejected", old_aiid="AIID-OLD")
+    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
+                        tries=8, delay=0, sleep_fn=lambda s: None)
+    assert got == "Rejected"
+
+
+def test_wait_new_aiid_explicit_non_terminal_status_falls_through_to_aiid_check() -> None:
+    """An explicit non-terminal _status (InProgress) must NOT short-circuit -- only a status in
+    _TERMINAL_STATUSES does. Regression guard against the terminal check over-firing."""
+    class _InProgressWithNewAiid:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_detail(self, flow_id: str, iid: str) -> dict[str, Any]:
+            self.calls += 1
+            aiid = "AIID-OLD" if self.calls == 1 else "AIID-NEW"
+            return {"_id": iid, "_status": "InProgress", "_current_step": "Whatever",
+                    "_current_context": [{"_context_activity_instance_id": aiid}]}
+
+    fake = _InProgressWithNewAiid()
+    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
+                        tries=8, delay=0, sleep_fn=lambda s: None)
+    assert got == "AIID-NEW"
+    assert fake.calls == 2
+
+
 # --------------------------------------------------------------------- walk(poll_after_transition)
 # Node G addition: extending walk() itself with an OPTIONAL poll hook, rather than the Robot/
 # caller layer polling between steps — forge_simulate_case wraps the ENTIRE walk in one atomic MCP
@@ -484,6 +707,57 @@ def test_walk_poll_failure_is_reported_as_the_failed_step_not_a_false_success() 
     assert rep.error is not None and "poll failed" in rep.error
     assert not any("sample_field_b" in args[2] for name, args in fake.calls if name == "put_fields"), \
         "step-2 must never be attempted once the poll fails"
+
+
+class _CompletesOnLastSubmitFakeClient(FakeClient):
+    """Every submit gets a fresh 'generation' aiid (mirroring _DelayedTransitionFakeClient, so an
+    EARLIER step's own post-transition poll sees a genuine change and succeeds normally) EXCEPT
+    the LAST submit, which finishes the whole item instead: afterward, get_detail reports status
+    Completed with NO _current_context at all -- the real "walk finished, nothing left to poll
+    for" shape (2026-08-07 finding)."""
+
+    def __init__(self, *, total_steps: int) -> None:
+        super().__init__()
+        self.total_steps = total_steps
+        self._submit_count = 0
+        self._generation = 0
+        self._completed = False
+
+    def submit(self, flow_id: str, iid: str, aiid: str) -> dict[str, Any]:
+        self.calls.append(("submit", (flow_id, iid, aiid)))
+        self._submit_count += 1
+        self._generation += 1
+        if self._submit_count >= self.total_steps:
+            self._completed = True
+            self.items[iid]["_status"] = "Completed"
+        else:
+            self.items[iid]["_current_step"] = "Next"
+        return {"ok": True}
+
+    def get_detail(self, flow_id: str, iid: str) -> dict[str, Any]:
+        self.calls.append(("get_detail", (flow_id, iid)))
+        item = dict(self.items[iid])
+        if self._completed:
+            item.pop("_current_context", None)
+        else:
+            item["_current_context"] = [{"_context_activity_instance_id": f"AIID-GEN-{self._generation}"}]
+        return item
+
+
+def test_walk_poll_treats_final_submit_completion_as_success_not_a_false_failure() -> None:
+    """THE regression guard for the 2026-08-07 finding: a submit that finishes the WHOLE item
+    must be reported as a successful step, never a failed one, just because there is no more
+    context left to poll for. Before the fix, this exact shape reported step-2 as failed with
+    "post-advance transition poll failed" even though the item had, in fact, fully completed."""
+    fake = _CompletesOnLastSubmitFakeClient(total_steps=2)
+    steps = [_plan("step-1", values={"sample_field_a": "a1"}),
+            _plan("step-2", values={"sample_field_b": "b2"})]
+    rep = walk(fake, flow_id=FLOW, steps=steps, poll_after_transition=True, poll_tries=8,
+              poll_delay=0, poll_sleep_fn=lambda s: None)
+    assert rep.ok() is True
+    assert rep.advanced == ("step-1", "step-2")
+    assert rep.failed == ()
+    assert rep.error is None
 
 
 def test_wait_new_aiid_missing_current_context_is_treated_as_not_ready_yet() -> None:

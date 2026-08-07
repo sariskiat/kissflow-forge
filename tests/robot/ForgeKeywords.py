@@ -56,6 +56,7 @@ from __future__ import annotations
 import asyncio
 import os
 import pathlib
+import sys
 import tempfile
 from typing import Any
 
@@ -191,6 +192,62 @@ class ForgeKeywords:
             if isinstance(node, dict) and node.get("Kind") == "Field" and node.get("Name"):
                 out[node["Name"]] = node_id
         return out
+
+    def resolve_assigned_role_ids(self, flow_id: str, kind: str = "process") -> list[str]:
+        """Fetch the flow's draft and return the `Value` (AppRole id) of every `Resource` node
+        with `ValueType == "AppRole"` — a REAL read-back of who a workflow step is actually
+        assigned to, in `ProcessDef::Activity` order.
+
+        `forge_build_workflow`'s own `assigned` field is an ECHO of the INPUT `steps` list
+        (kfforge/client.py `apply_workflow`: `assigned = tuple(name for name, role in steps if
+        role)`) — it can never be empty or wrong as long as the CALLER passed a role, so asserting
+        on it proves nothing about what actually landed. This keyword reads the live graph
+        instead, the same way `resolve_field_ids` does for fields.
+        """
+        draft = self.call_forge_tool("kf_get_flow_schema", flow_kind=kind, flow_id=flow_id)
+        if draft.get("isError"):
+            raise RuntimeError(f"could not fetch draft to resolve assignee resources: {draft}")
+        return [
+            node["Value"] for node in draft.values()
+            if isinstance(node, dict) and node.get("Kind") == "Resource"
+            and node.get("ValueType") == "AppRole" and isinstance(node.get("Value"), str)
+        ]
+
+    # ------------------------------------------------------------------ direct (non-MCP) reads
+
+    def get_item_status(self, flow_id: str, iid: str) -> str:
+        """Direct (non-MCP) read of a runtime item's OWN `_status` field, via
+        `kfforge.dataplane.LiveDataPlane`. Not exposed as an MCP tool — `forge_simulate_case`'s
+        own result has no status field (its WalkReport only tracks which step NAMES advanced/
+        rejected/failed, never the item's final runtime status) — so this keyword reads it
+        directly through the SAME kfforge package the MCP server itself wraps, reusing its proven
+        client/config rather than re-implementing the HTTP call here. Used by
+        forge_lifecycle.robot's final step to assert the walked item actually reached Completed,
+        not just that every individual submit call returned 200 (CLAUDE.md > THE RULE: a 200
+        proves nothing on its own).
+
+        `kfforge.client`/`kfforge.dataplane` pull in ZERO third-party packages (plain stdlib +
+        internal modules only) but ARE a local, uninstalled package — Robot Framework's own
+        interpreter has no reason to already have WORKTREE_ROOT on sys.path. Imported HERE,
+        function-local, rather than at module level: a module-level import needs `sys.path`
+        mutated first, which E402-flags the import — a local import sidesteps that cleanly, with
+        no `noqa` needed under any ruleset.
+        """
+        if str(WORKTREE_ROOT) not in sys.path:
+            sys.path.insert(0, str(WORKTREE_ROOT))
+        from kfforge.client import Err, KfClient, KfConfig
+        from kfforge.dataplane import LiveDataPlane
+
+        cfg = KfConfig.from_env()
+        if isinstance(cfg, Err):
+            raise TypeError(f"KfConfig.from_env failed: {cfg.message}")
+        detail = LiveDataPlane(KfClient(cfg)).get_detail(flow_id, iid)
+        if isinstance(detail, Err):
+            raise TypeError(f"get_detail({flow_id!r}, {iid!r}) failed: {detail.message}")
+        status = detail.get("_status")
+        if not isinstance(status, str):
+            raise TypeError(f"detail had no string _status field: {detail!r}")
+        return status
 
     # ------------------------------------------------------------------ assertion helpers
 

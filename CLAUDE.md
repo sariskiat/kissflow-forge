@@ -149,6 +149,23 @@ Row        { Id:"Row_Sample01", Kind:"Row", Button:<root model id> }
   is last among the REAL activities, immediately BEFORE a trailing EndEvent. `add_goto_task`
   inserts there when the chain ends in one, and only plain-appends (matching the original minimal
   capture exactly) when it doesn't.
+
+  **Submit count for a walk that never loops: 1 (the StartEvent) + N (the UserTasks). A `GotoTask`
+  is never itself a hop — it never becomes `_current_step` and never consumes a submit.** When its
+  condition DOES fire the item jumps backward and the walk simply continues from there, so the
+  total then depends on how many times the loop runs; the 1+N figure is the non-firing case.
+  A Draft item's OWN first submit is a real hop (it leaves
+  `Start`, landing on the first UserTask) — miss counting it and every later hop's target looks
+  shifted by one, which reads exactly like "the last step needs a second submit" if you go by
+  hop COUNT alone instead of instrumenting `_current_step` at every submit. Re-verified live
+  2026-08-07 with `_current_step` read before and after every submit, on a workflow WITH a
+  `GotoTask` (condition deliberately false, so the Goto should not fire): submits landed on
+  `Start`, then each UserTask once, in order, with the LAST UserTask's own submit completing the
+  item directly — no step ever repeated, no extra hop anywhere. (An earlier version of this note
+  claimed the opposite — that a `GotoTask` forces the step before it to be submitted twice — from
+  a test that never separately counted the `Start` hop; a caller that believed it would have
+  double-submitted before every gate and silently skipped a real step at the same time. Deleted,
+  not appended, per this file's own rule: a corrected belief replaces the wrong one outright.)
 - **`IsSuspended` skips a step at runtime without deleting it:**
 
 ```json
@@ -411,10 +428,40 @@ KfClient.list_flows` already does this correctly
 hand-rolls the URL without it and silently starts reading (or, worse, later
 writing against an id sourced from) a DIFFERENT app's flow.
 
-There is no working route to list app roles from scratch (the obvious
-"external list" endpoint for roles returns an empty array) — harvest role ids
-by reading the member list of a flow that already has members, or by having a
-human add one role in the builder UI first so you have an id to reuse.
+⚠️ **A CORRECTED BELIEF, captured live 2026-08-07.** This used to say there is
+no working route to list app roles from scratch, and to harvest role ids only
+by reading the member list of a flow that already has members, or having a
+human add one role in the builder UI first. That was wrong about the route —
+it was actually describing a DIFFERENT, unrelated suffix (an "external list"
+endpoint that genuinely does return `[]`). The real account-level route works:
+
+```
+GET /app_role/2/{acct}/list?page_number={n}&page_size=100
+```
+
+A bare array, paginated (a probe tenant had 356 AppRoles spread across 4
+pages of 100/100/100/56 — stop paginating the moment a page comes back
+shorter than the page size, no need to probe an explicit empty page after
+that). Each record carries an `Applications` array scoping which app(s) it
+belongs to — **each entry is a `{"_id": ..., "Type": "Application"}` dict,
+not a bare id string**; filtering with a plain `app_id in record
+["Applications"]` silently matches zero roles (found live writing this note)
+— check each dict's own `_id` instead. `GET /app_role/2/{acct}/{role_id}`
+returns one role's own detail, including its `Members` list — which the list route's records
+never carry (verified across every record, not sampled). Do NOT generalise the rest of the
+list record's key-set: most records are
+`['Applications','Description','Name','Preference','UserCount','_application_id','_id']`,
+but a small minority also carry `GroupCount`, so treat every key beyond
+`_id`/`Name`/`Applications` as optional and use `.get`. `GroupCount` is nullable even on the
+detail route. (An earlier version of this note claimed the list route never has `GroupCount`,
+generalised from one sample — the same "absence in one sample is not absence in the API" trap
+this file already records twice.) Harvesting from an existing flow's member
+list (still below) remains a valid, still-working path; this account-level
+route is simply the ADDITIONAL one that also works when no sibling flow has
+ever been granted membership yet — as long as a human created at least one
+AppRole for the app at some point (the account-level list only ever shows
+roles a human already made in the builder UI; there is still no route that
+creates one from nothing, see below).
 
 - **`member/batch` Role names differ by flowtype.** A process flow accepts
   the role name `DataAdmin`; a list flow rejects it and expects `Admin` or
@@ -427,10 +474,37 @@ human add one role in the builder UI first so you have an id to reuse.
   `KISSFLOW_ERROR_00051 UserOrGroupDoesNotExistError`, `en_message: "The
   AppRole {Name} does not exist in your account."` — a DIFFERENT, more
   specific check than the `Role` value alone. On an app with zero
-  builder-UI-created AppRoles (confirmed live on the app under test),
-  `member/batch` is therefore FUNCTIONALLY BLOCKED end to end — there is no
-  API route that creates an AppRole either, so this can only ever re-grant a
-  role harvested from a flow where a human already set one up.
+  builder-UI-created AppRoles anywhere (confirmed live on the app under test
+  as of 2026-08-06 — no longer this app's state as of 2026-08-07, see the
+  corrected belief above and the member/batch grant recipe further below),
+  `member/batch` is FUNCTIONALLY BLOCKED end to end — there is still no API
+  route that creates an AppRole, so this can only ever re-grant a role a
+  human already set up somewhere, harvested either from a flow's member list
+  or from the account-level AppRole list above.
+- ⚠️ **The grant that actually lets the INITIATOR submit their own draft,
+  proven live 2026-08-07 (two-arm control on a throwaway flow):**
+  `"Permission"` must be `["InitiateItems"]`, not just any non-empty list and
+  never `[]`. `"Permission": []` still PUTs 200 on the `member/batch` call
+  itself — the grant looks like it worked — but the initiator still gets
+  refused when they try to submit their own item: `403
+  KISSFLOW_ERROR_050302 "You don't have permission to submit this item
+  anymore."` Re-granting the SAME role/flow pair with `"Permission":
+  ["InitiateItems"]` instead (a second `member/batch` call is an upsert, not
+  a duplicate) is what actually lets the walk proceed. A live reference app's
+  own AppRoles carry exactly `"Role": "DataAdmin", "Permission":
+  ["InitiateItems"]`.
+- ⚠️ **Membership alone is not enough — the step also needs a real ASSIGNEE,
+  or submit fails a different, more confusing way.** Granting membership with
+  `Permission: ["InitiateItems"]` but leaving every workflow step's assignee
+  as `role=None` still fails a first submit — not with the clean 403 above,
+  but with a generic `500 processError "An unexpected error has occurred"`,
+  persistent across 7 retries with backoff up to ~56s (ruled out as a
+  propagation delay). Wiring the SAME AppRole id as the step's own assignee
+  (`Resource{ValueType:"AppRole", Value:<role id>}`, written by passing that
+  id — not `None` — as the step's role when building the workflow) is what
+  turns the generic 500 into a working submit. Both pieces are required
+  together: membership with the right `Permission` grants the ability to act
+  at all, the assignee Resource is what tells the runtime WHO owns the step.
 - **⚠️ A CORRECTED MECHANISM, re-verified live 2026-08-07 (node G review).** An
   earlier version of this note claimed an unassigned step's item had NO
   derivable activity-instance id "so advance/submit can never even derive a
@@ -458,6 +532,23 @@ human add one role in the builder UI first so you have an id to reuse.
     create-response id directly; `walk`/`advance` never do that, so in
     practice this pack's own code stops one step earlier, at `live_aiid`'s
     refusal, for the SAME underlying reason (no AppRole membership).
+
+  ⚠️ **SUPERSEDED 2026-08-07 — the conclusion above, not the facts it was
+  built on.** Everything this bullet observed on 2026-08-06 was real: on THAT
+  app, at THAT time, there was no grantable AppRole anywhere, so a fresh
+  Draft item's context genuinely never carried a live aiid, and stopping at
+  `live_aiid`'s refusal was the only honest thing the code could do. But "the
+  create-response id is the myitems consumed-instance trap, so `walk`/
+  `advance` never use it" is no longer how this pack behaves, and was never
+  quite the right reason even at the time — the create-response id and the
+  myitems-listing id are two DIFFERENT reads (one fresh off `create_item`,
+  never yet consumed; one off a LATER listing, already consumed by that
+  point), not the same trap wearing two names. The two-phase aiid rule (Item
+  data plane) makes that distinction explicit: `usable_aiid` now uses the
+  create-response id as the documented, deliberate first-hop source — the
+  case this bullet's own 403 was symptomatic of (an unassigned step with a
+  membership gap) is now avoidable by granting membership AND an assignee
+  (bullets above), at which point hop 1 succeeds instead of 403ing.
 - A step's assignee is `Resource{ValueType:"AppRole", Value:<role_id>,
   Activity:<id>}`. Writing `ValueType:"User"` instead persists and even
   publishes without error, but the builder appears to simply ignore it at
@@ -519,10 +610,35 @@ lists    GET  /flow/2/{acct}/list?page_size=100                 -> inventory of 
 
 - **The aiid trap:** the activity-instance id returned by a "my items"-style
   listing is the initiator's already-CONSUMED instance — submitting or
-  rejecting against it fails with an "already used" style error. The LIVE
-  activity-instance id is nested inside the detail response, at
-  `detail._current_context[0]._context_activity_instance_id`. Always fetch
-  detail and use that id, never the one off a list view.
+  rejecting against it fails with an "already used" style error. Never
+  resurrect a myitems-style id as a fallback for anything below — that trap
+  is exactly what the two-phase rule's own fallback (next paragraph) is NOT.
+
+  ⚠️ **A CORRECTED BELIEF on "always fetch detail, use that id," captured
+  live 2026-08-07 walking a real item from its start step through to
+  completion.** The rule used to say the live activity-instance id is
+  *always* `detail._current_context[0]._context_activity_instance_id` — true
+  from the SECOND submit on, but wrong for the very first one. An item still
+  sitting at its start step, never yet submitted, has no `_current_context`
+  at all; the only usable id for THAT submit is the one the CREATE call's own
+  response returned. The real rule is **two-phase**:
+
+  | hop | step (example)  | ctx activity-instance id | id actually used   | result |
+  |-----|------------------|--------------------------|---------------------|--------|
+  | 1   | start step       | absent                   | the CREATE response's id | 200 |
+  | 2   | 1st user step    | present                  | detail's context id | 200 |
+  | 3   | 2nd user step    | present                  | detail's context id | 200 |
+  | 4   | last user step   | present                  | detail's context id | 200 |
+  | 5   | (none)           | —                        | —                    | status = Completed |
+
+  So: fetch detail and use `_current_context[0]._context_activity_instance_id`
+  whenever it is present — that part of the old rule still holds on every hop
+  past the first. Only when it is genuinely absent, and only on the very
+  first submit right after create, fall back to the id the create call
+  itself returned. A missing context id on any LATER hop is still a real
+  problem, not a second excuse to reuse the create-time id — reusing it
+  there would recreate exactly the "stale/consumed id" failure mode this
+  whole trap exists to avoid.
 - **Select values PUT 200 and silently discard when the value isn't in the
   field's option list** — the write succeeds, and a read-back shows the field
   as empty. **Always read back after writing a Select**, and validate the
@@ -590,9 +706,26 @@ creating USER — and zero AppRole entries. `member/batch` against that app with
   `_context_activity_instance_id` and submit STILL returned `403
   KISSFLOW_ERROR_050302` on a real live item.
 - There is no API route that creates an AppRole, or adds a user to one — both
-  are builder-UI-only, matching the "no route to list app roles from scratch"
-  note above. This is a structural gap, not something a build script can work
-  around with a different request shape.
+  are builder-UI-only, matching the account-level AppRole list route
+  documented in Members first (that route only ever shows roles a human
+  already made — it does not create anything).
+
+⚠️ **The "structural gap" framing above, narrowed 2026-08-07.** Everything in
+this block still stands exactly as written — the APPLICATION-level
+`member/batch` 500 and the `ValueType:"User"` assignee dead end were both
+independently proven and are untouched here. But "not something a build
+script can work around" turned out to be too broad a conclusion to draw from
+those two dead ends alone. A build script CAN work around it, on a DIFFERENT
+pair of routes from the two tested above: grant membership at the PROCESS
+(flow) level, not the application level (`POST /flow/2/{acct}/process/{flow}
+/member/batch`, `Role: "DataAdmin"`, `Permission: ["InitiateItems"]` — see
+Members first), and wire the assignee as `ValueType:"AppRole"`, not `"User"`.
+Proven live end to end: a real item walked from its start step through every
+user step to completion under exactly that combination. The genuine
+structural gap is narrower than originally stated — there is still no route
+that CREATES an AppRole from nothing, but discovering and re-granting one a
+human already set up for the app (via the account-level list route) is fully
+possible and sufficient for a build script to make an item submittable.
 
 Each page is its own draft/publish unit:
 

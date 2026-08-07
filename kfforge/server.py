@@ -252,15 +252,19 @@ def forge_member_batch(
     source_flow_id: str | None = None,
     kind: str = "process",
 ) -> dict[str, Any]:
-    """LIVE (dev only, KF_APP): harvest AppRole members from an existing flow in KF_APP and grant
-    them on `target_flow_id` — MEMBERS FIRST per CLAUDE.md Permissions (assignees cannot be
-    written before members exist; publish then fails MetadataError). Run this BEFORE
-    forge_build_workflow's `roles` assignments.
+    """LIVE (dev only, KF_APP): grant AppRole members on `target_flow_id` — MEMBERS FIRST per
+    CLAUDE.md Permissions (assignees cannot be written before members exist; publish then fails
+    MetadataError). Run this BEFORE forge_build_workflow's `roles` assignments; the granted
+    `role_ids` in the result are exactly the ids that belong there.
 
-    `source_flow_id` names the flow to harvest FROM; omit it to auto-discover the first other flow
-    of `kind` in KF_APP that has at least one member. When KF_APP has no such flow yet (a fresh
-    tenant state), this reports harvested=[] with an explanatory `note` rather than failing — a
-    caller must be able to tell "nothing to harvest yet" apart from a real error.
+    Two sources, tried in order: (1) harvest from an existing flow in KF_APP — `source_flow_id`
+    names it, or omit to auto-discover the first other flow of `kind` with at least one member;
+    (2) when neither is available, grant the app's OWN AppRoles instead, discovered at the
+    ACCOUNT level (`Role: "DataAdmin"`, `Permission: ["InitiateItems"]` — proven live 2026-08-07 as
+    the exact grant that lets the initiator submit their own draft; `Permission: []` 200s the grant
+    but still leaves the initiator refused). Only when BOTH sources come up empty does this report
+    harvested=[]/role_ids=[] with an explanatory `note` rather than failing — a caller must be able
+    to tell "nothing to grant yet" apart from a real error.
     """
     c = _client()
     if isinstance(c, Err):

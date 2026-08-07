@@ -210,6 +210,52 @@ class KfClient:
         return self._json("GET", f"{c.base}/flow/2/{c.account}/{kind}/{flow_id}/member"
                                  f"?_application_id={c.app_id}")
 
+    def list_app_roles(self, app_id: str | None = None) -> list[dict[str, Any]] | Err:
+        """Every AppRole in the ACCOUNT (paginated `page_number`/`page_size=100`), optionally
+        filtered to the ones scoped to `app_id`. Proven live 2026-08-07: this account-level route
+        genuinely lists AppRoles — 356 of them in the probe tenant, 2 scoped to one app under test
+        — CORRECTING the older CLAUDE.md belief that "no route lists app roles from scratch" (that
+        belief was about a DIFFERENT suffix, `/app_role/.../external/list`, which really does
+        return `[]`; this is not that route).
+
+        Each record's `Applications` key is a list of `{"_id": ..., "Type": "Application"}` dicts,
+        NOT bare id strings — filtering with a plain `app_id in record["Applications"]` silently
+        matches nothing (found live while writing this method); the filter below checks each
+        dict's own `_id`.
+        """
+        c = self._cfg
+        out: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            got = self._json("GET", f"{c.base}/app_role/2/{c.account}/list"
+                                     f"?page_number={page}&page_size=100")
+            if isinstance(got, Err):
+                return got
+            items = got if isinstance(got, list) else []
+            if not items:
+                break
+            out.extend(items)
+            if len(items) < 100:
+                break
+            page += 1
+        if app_id is None:
+            return out
+        return [r for r in out if isinstance(r, dict) and any(
+            isinstance(a, dict) and a.get("_id") == app_id for a in (r.get("Applications") or []))]
+
+    def get_app_role(self, role_id: str) -> dict[str, Any] | Err:
+        """One AppRole's own detail, including its `Members` list — which `list_app_roles` never
+        carries (verified across every record on that route, not sampled), making this the only
+        source for the harvest-worthy `Members` signal. `GroupCount` is nullable here.
+
+        Do NOT assume the list route's key-set: most of its records are
+        `['Applications', 'Description', 'Name', 'Preference', 'UserCount', '_application_id',
+        '_id']`, but a minority also carry `GroupCount`. Read anything beyond
+        `_id`/`Name`/`Applications` with `.get` — an earlier note here generalised a key-set from
+        one sample and was wrong."""
+        c = self._cfg
+        return self._json("GET", f"{c.base}/app_role/2/{c.account}/{role_id}")
+
     def post_member_batch(self, kind: FlowKind, flow_id: str, members: list[dict[str, Any]]) -> Any | Err:
         """CLAUDE.md Permissions: body=[{_id,Name,Kind:"AppRole",Role,Permission}]. Proven live
         2026-08-06: `Name` is validated against AppRoles that ALREADY exist in the account —
@@ -1072,12 +1118,20 @@ class MemberReport:
     verified: tuple[str, ...]
     missing: tuple[str, ...]
     note: str | None
+    role_ids: tuple[str, ...] = ()       # the ACTUAL AppRole `_id`s granted -- needed by a caller
+                                          # that wants to wire one as a workflow step's assignee
+                                          # (e.g. build_workflow's `roles=`). Only populated by the
+                                          # account-level path (`_apply_own_app_roles`); the
+                                          # sibling-harvest path's `harvested`/`verified`/`missing`
+                                          # already carry the harvested member's `Role` TYPE string
+                                          # (e.g. "DataAdmin"), a different thing, unchanged here.
 
     def as_tool_result(self) -> dict[str, Any]:
         return {
             "target_flow_id": self.target_flow_id, "source_flow_id": self.source_flow_id,
             "harvested": list(self.harvested), "applied": list(self.applied),
             "verified": list(self.verified), "missing": list(self.missing), "note": self.note,
+            "role_ids": list(self.role_ids),
             "isError": bool(self.missing),
         }
 
@@ -1103,6 +1157,69 @@ def discover_member_source(
     return None
 
 
+# Grant proven live 2026-08-07 (throwaway flow, two-arm control): `Permission: []` 200s the
+# member/batch call itself, but the initiator still can't submit their own draft (403
+# KISSFLOW_ERROR_050302 "You don't have permission to submit this item anymore"). Only
+# `Permission: ["InitiateItems"]` actually lets the initiator advance their own item.
+# `_ACCOUNT_GRANT_ROLE` is PROCESS-flow-specific — CLAUDE.md Members first notes list flows want
+# `Admin`/`Member` instead of `DataAdmin`; unverified for those kinds, don't reuse blind.
+_ACCOUNT_GRANT_ROLE = "DataAdmin"
+_ACCOUNT_GRANT_PERMISSION = ("InitiateItems",)
+
+
+def _apply_own_app_roles(client: KfClient, target_flow_id: str, kind: FlowKind) -> MemberReport | Err:
+    """Fallback used when NO sibling flow has members to harvest from: grant the APP'S OWN
+    AppRoles, discovered at the ACCOUNT level (`KfClient.list_app_roles`). CLAUDE.md Members first
+    used to claim no route lists app roles from scratch — CORRECTED 2026-08-07, that belief was
+    about a different suffix (`/app_role/.../external/list`, which really is empty); the
+    account-level `/app_role/2/{acct}/list` route lists every AppRole, filterable to the ones
+    scoped to this app.
+
+    Same read-verify-write shape as every other apply_* here: grant -> read back `get_members` ->
+    every AppRole `_id` we posted lands in `verified` or `missing`, never silently unaccounted for.
+    """
+    app_id = client._cfg.app_id
+    roles = client.list_app_roles(app_id)
+    if isinstance(roles, Err):
+        return roles
+    usable = [r for r in roles if isinstance(r, dict) and r.get("_id") and r.get("Name")]
+    if not usable:
+        return MemberReport(
+            target_flow_id=target_flow_id, source_flow_id=None, harvested=(), applied=(),
+            verified=(), missing=(),
+            note=f"no existing flow with members found in KF_APP to harvest from, AND the "
+                 f"account-level AppRole list has no role scoped to app {app_id!r} either — a "
+                 f"human must create at least one AppRole for this app in the builder UI first",
+        )
+
+    members = [
+        {"_id": r["_id"], "Name": r["Name"], "Kind": "AppRole",
+         "Role": _ACCOUNT_GRANT_ROLE, "Permission": list(_ACCOUNT_GRANT_PERMISSION)}
+        for r in usable
+    ]
+    role_ids = tuple(m["_id"] for m in members)
+    names = tuple(m["Name"] for m in members)
+
+    posted = client.post_member_batch(kind, target_flow_id, members)
+    if isinstance(posted, Err):
+        return posted
+
+    read_back = client.get_members(kind, target_flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+    live_ids = {str(m.get("_id")) for m in read_back if isinstance(m, dict)}
+    verified = tuple(r for r in role_ids if r in live_ids)
+    missing = tuple(r for r in role_ids if r not in live_ids)
+
+    return MemberReport(
+        target_flow_id=target_flow_id, source_flow_id=None, harvested=names, applied=role_ids,
+        verified=verified, missing=missing, role_ids=role_ids,
+        note=f"granted {len(members)} AppRole(s) discovered at the account level for app "
+             f"{app_id!r} (no sibling flow had members to harvest) — Role={_ACCOUNT_GRANT_ROLE!r} "
+             f"Permission={list(_ACCOUNT_GRANT_PERMISSION)!r}: {', '.join(names)}",
+    )
+
+
 def apply_member_batch(
     client: KfClient,
     target_flow_id: str,
@@ -1115,10 +1232,13 @@ def apply_member_batch(
 
     `source_flow_id` names the flow to harvest FROM; when omitted, the first OTHER flow of `kind`
     in KF_APP with at least one member is auto-discovered (`discover_member_source`). When no
-    source is given and none can be discovered (a fresh app/tenant has no such flow yet — the
-    documented state of KF_APP as of this build), this is REPORTED, not raised: harvested=(),
-    applied=(), with an explanatory `note` — a caller must be able to tell "genuinely nothing to
-    harvest yet" apart from a real failure, never silently treat one as the other.
+    source is given and none can be discovered either (no sibling flow in KF_APP has a member to
+    harvest from), this FALLS BACK to granting the app's own AppRoles discovered at the account
+    level (`_apply_own_app_roles`) rather than just reporting an empty harvest — proven live
+    2026-08-07 that this account-level route exists and works end to end. Only when THAT also
+    finds nothing (no AppRole is scoped to this app at all) is the "genuinely nothing to harvest
+    yet" empty report used — a caller must be able to tell that apart from a real failure, never
+    silently treat one as the other.
     """
     if source_flow_id is None:
         discovered = discover_member_source(client, kind, target_flow_id)
@@ -1127,13 +1247,7 @@ def apply_member_batch(
         source_flow_id = discovered
 
     if source_flow_id is None:
-        return MemberReport(
-            target_flow_id=target_flow_id, source_flow_id=None, harvested=(), applied=(),
-            verified=(), missing=(),
-            note="no existing flow with members found in KF_APP to harvest from (a fresh "
-                 "app/tenant state, not an error) — add at least one AppRole member to a flow "
-                 "via the builder UI, then re-run",
-        )
+        return _apply_own_app_roles(client, target_flow_id, kind=kind)
 
     raw = client.get_members(kind, source_flow_id)
     if isinstance(raw, Err):
@@ -1141,6 +1255,11 @@ def apply_member_batch(
 
     normalized = [n for r in raw if (n := _normalize_member(r)) is not None]
     harvested = tuple(str(n.get("Role")) for n in normalized)
+    # role_ids: the harvested AppRole `_id`s -- _normalize_member already keeps `_id` (one of the
+    # 5 documented member/batch keys), so this is populated on BOTH paths apply_member_batch can
+    # take, not just the account-level fallback (_apply_own_app_roles). A caller (e.g. a workflow
+    # step assignee) must be able to rely on `role_ids` regardless of which path granted them.
+    role_ids = tuple(str(n["_id"]) for n in normalized if n.get("_id"))
     if not normalized:
         return MemberReport(
             target_flow_id=target_flow_id, source_flow_id=source_flow_id, harvested=(),
@@ -1161,7 +1280,7 @@ def apply_member_batch(
 
     return MemberReport(
         target_flow_id=target_flow_id, source_flow_id=source_flow_id, harvested=harvested,
-        applied=harvested, verified=verified, missing=missing, note=None,
+        applied=harvested, verified=verified, missing=missing, role_ids=role_ids, note=None,
     )
 
 

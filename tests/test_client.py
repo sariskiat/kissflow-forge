@@ -75,6 +75,8 @@ class FakeClient(KfClient):
         self.members: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self.member_batches: list[tuple[str, str, list[dict[str, Any]]]] = []
         self.report_member_batches: list[tuple[str, str, list[dict[str, Any]]]] = []
+        # account-level AppRoles (Node L)
+        self.app_roles: list[dict[str, Any]] = []
         # applications / pages
         self.applications: dict[str, dict[str, Any]] = {}
         self.archived_apps: set[str] = set()
@@ -108,6 +110,15 @@ class FakeClient(KfClient):
 
     def get_members(self, kind, flow_id):  # type: ignore[override]
         return self.members.get((kind, flow_id), [])
+
+    def list_app_roles(self, app_id=None):  # type: ignore[override]
+        if app_id is None:
+            return list(self.app_roles)
+        return [r for r in self.app_roles
+               if app_id in {a.get("_id") for a in (r.get("Applications") or [])}]
+
+    def get_app_role(self, role_id):  # type: ignore[override]
+        return next((r for r in self.app_roles if r.get("_id") == role_id), {"_id": role_id})
 
     def post_member_batch(self, kind, flow_id, members):  # type: ignore[override]
         self.member_batches.append((kind, flow_id, list(members)))
@@ -445,14 +456,90 @@ def test_discover_member_source_returns_none_not_err_on_an_empty_app() -> None:
 
 
 def test_apply_member_batch_reports_a_clear_note_when_nothing_can_be_harvested() -> None:
+    """No sibling flow to harvest from AND the account-level AppRole list has nothing scoped to
+    this app either (c.app_roles defaults to []) -- the fully-empty case, still reported not
+    raised."""
     c = FakeClient(_bare_process_draft())
     c.flows["process"] = []
     rep = apply_member_batch(c, "F_target")
     assert isinstance(rep, MemberReport)
-    assert rep.harvested == () and rep.applied == ()
+    assert rep.harvested == () and rep.applied == () and rep.role_ids == ()
     assert rep.note is not None and "no existing flow" in rep.note
     assert rep.as_tool_result()["isError"] is False, "an empty tenant is not an error state"
     assert c.member_batches == [], "nothing to post must mean nothing gets posted"
+
+
+# ---- member batch: account-level AppRole fallback (Node L, 2026-08-07) -----------------------
+# Proven live: the account-level `/app_role/2/{acct}/list` route DOES list AppRoles (CORRECTING
+# the older belief that no such route exists) -- when no sibling flow has members to harvest,
+# apply_member_batch now grants the app's OWN AppRoles from that route instead of just reporting
+# an empty harvest. Role="DataAdmin", Permission=["InitiateItems"] is the exact grant proven live
+# to let the initiator submit their own draft (Permission=[] 200s the grant but the initiator
+# still gets refused, 403 KISSFLOW_ERROR_050302).
+
+def test_apply_member_batch_falls_back_to_account_level_app_roles() -> None:
+    c = FakeClient(_bare_process_draft())
+    c.flows["process"] = []  # nothing to auto-discover
+    c.app_roles = [
+        {"_id": "RoA", "Name": "Admin", "Applications": [{"_id": "App", "Type": "Application"}]},
+        {"_id": "RoB", "Name": "User", "Applications": [{"_id": "App", "Type": "Application"}]},
+        {"_id": "RoC", "Name": "Other App's Role",
+         "Applications": [{"_id": "SomeOtherApp", "Type": "Application"}]},
+    ]
+    rep = apply_member_batch(c, "F_target")
+    assert isinstance(rep, MemberReport)
+    assert rep.source_flow_id is None
+    assert rep.role_ids == ("RoA", "RoB"), "only roles scoped to THIS app (config's app_id)"
+    assert rep.harvested == ("Admin", "User")
+    assert rep.verified == ("RoA", "RoB") and rep.missing == ()
+    assert rep.note is not None and "account level" in rep.note
+    assert rep.as_tool_result()["isError"] is False
+    assert rep.as_tool_result()["role_ids"] == ["RoA", "RoB"]
+
+    assert len(c.member_batches) == 1
+    posted_kind, posted_flow, posted_members = c.member_batches[0]
+    assert posted_kind == "process" and posted_flow == "F_target"
+    assert posted_members == [
+        {"_id": "RoA", "Name": "Admin", "Kind": "AppRole", "Role": "DataAdmin",
+         "Permission": ["InitiateItems"]},
+        {"_id": "RoB", "Name": "User", "Kind": "AppRole", "Role": "DataAdmin",
+         "Permission": ["InitiateItems"]},
+    ]
+
+
+def test_apply_member_batch_account_level_fallback_reports_missing_on_partial_readback() -> None:
+    """Output-invariant audit: a role POSTed but absent on read-back lands in `missing`, never
+    silently unaccounted for."""
+    class Dropping(FakeClient):
+        def post_member_batch(self, kind, flow_id, members):  # type: ignore[override]
+            self.member_batches.append((kind, flow_id, list(members)))
+            self.members[(kind, flow_id)] = list(members)[:1]  # only the first one "lands"
+            return {"ok": True}
+
+    c = Dropping(_bare_process_draft())
+    c.flows["process"] = []
+    c.app_roles = [
+        {"_id": "RoA", "Name": "Admin", "Applications": [{"_id": "App", "Type": "Application"}]},
+        {"_id": "RoB", "Name": "User", "Applications": [{"_id": "App", "Type": "Application"}]},
+    ]
+    rep = apply_member_batch(c, "F_target")
+    assert isinstance(rep, MemberReport)
+    assert rep.verified == ("RoA",) and rep.missing == ("RoB",)
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_apply_member_batch_explicit_source_skips_the_account_level_fallback() -> None:
+    """An explicit source_flow_id, even one with zero members, must NOT silently fall through to
+    the account-level grant — the caller asked for THAT flow specifically."""
+    c = FakeClient(_bare_process_draft())
+    c.app_roles = [{"_id": "RoA", "Name": "Admin",
+                    "Applications": [{"_id": "App", "Type": "Application"}]}]
+    c.members[("process", "F_explicit")] = []
+    rep = apply_member_batch(c, "F_target", source_flow_id="F_explicit")
+    assert isinstance(rep, MemberReport)
+    assert rep.source_flow_id == "F_explicit"
+    assert rep.role_ids == () and rep.harvested == ()
+    assert c.member_batches == []
 
 
 def test_apply_member_batch_explicit_source_with_no_members_is_reported_not_raised() -> None:
@@ -481,6 +568,10 @@ def test_apply_member_batch_harvests_normalizes_and_verifies() -> None:
     assert posted_kind == "process" and posted_flow == "F_target"
     assert posted_members == [{"_id": "m1", "Name": "Front Desk", "Kind": "AppRole",
                                "Role": "Ro_front_001", "Permission": "Editable"}]
+    # role_ids must be populated on the HARVEST path too, not just the account-level fallback:
+    # callers (the lifecycle suite among them) read it to pick a step assignee, and which path
+    # granted membership depends on whether a sibling flow happens to exist.
+    assert rep.role_ids == ("m1",)
 
 
 # ---- apply_report_members ---------------------------------------------------------------------
@@ -534,3 +625,87 @@ def test_delete_anything_process_archives_and_deletes() -> None:
     got = delete_anything(c, "process", "F1")
     assert got["deleted"] is True and got["verified"] is True
     assert c.flows["process"] == []
+
+
+# ---- KfClient.list_app_roles / get_app_role (Node L, 2026-08-07) ------------------------------
+# Account-level AppRole listing, proven live: 356 AppRoles in the probe tenant, 2 scoped to the
+# app under test. These exercise the REAL KfClient methods (pagination + the Applications-dict
+# filter), with only `_json` stubbed -- the same pattern test_dataplane.py's _RouteAwareTransport
+# uses to pin LiveDataPlane's real URL construction without a socket.
+
+class _AppRoleRouteClient(KfClient):
+    """`_json` stubbed to serve canned account-level AppRole pages, so list_app_roles's real
+    pagination/filtering logic runs for real, offline."""
+
+    def __init__(self, pages: list[list[dict[str, Any]]]) -> None:
+        super().__init__(DEV)
+        self.pages = pages
+        self.urls: list[str] = []
+
+    def _json(self, method: str, url: str, data: Any = None) -> Any:  # type: ignore[override]
+        self.urls.append(url)
+        if method == "GET" and "/app_role/2/" in url and "/list?page_number=" in url:
+            n = int(url.split("page_number=")[1].split("&")[0])
+            idx = n - 1
+            return self.pages[idx] if 0 <= idx < len(self.pages) else []
+        if method == "GET" and url == f"{DEV.base}/app_role/2/{DEV.account}/Ro_X":
+            return {"_id": "Ro_X", "Name": "X", "Members": [{"_id": "U1"}]}
+        return Err("http", f"unexpected {method} {url}")
+
+
+def test_list_app_roles_paginates_until_a_short_page() -> None:
+    page1 = [{"_id": f"Ro{i}", "Name": f"R{i}", "Applications": []} for i in range(100)]
+    page2 = [{"_id": "Ro100", "Name": "R100", "Applications": []}]
+    c = _AppRoleRouteClient([page1, page2])
+    got = c.list_app_roles(None)
+    assert isinstance(got, list) and len(got) == 101
+    assert c.urls == [
+        f"{DEV.base}/app_role/2/{DEV.account}/list?page_number=1&page_size=100",
+        f"{DEV.base}/app_role/2/{DEV.account}/list?page_number=2&page_size=100",
+    ]
+
+
+def test_list_app_roles_stops_without_a_second_fetch_when_first_page_is_short() -> None:
+    c = _AppRoleRouteClient([[{"_id": "Ro1", "Name": "Only", "Applications": []}]])
+    got = c.list_app_roles(None)
+    assert isinstance(got, list) and len(got) == 1
+    assert c.urls == [f"{DEV.base}/app_role/2/{DEV.account}/list?page_number=1&page_size=100"], \
+        "a short first page must never trigger a second fetch"
+
+
+def test_list_app_roles_empty_first_page_returns_empty_list() -> None:
+    c = _AppRoleRouteClient([[]])
+    got = c.list_app_roles(None)
+    assert got == []
+
+
+def test_list_app_roles_filters_on_applications_dict_id_not_bare_string() -> None:
+    """`Applications` is a list of {"_id":..., "Type":"Application"} DICTS, not bare id strings —
+    proven live 2026-08-07 (an earlier `app_id in record["Applications"]` filter matched zero
+    roles for exactly this reason)."""
+    roles = [
+        {"_id": "RoA", "Name": "A", "Applications": [{"_id": "App1", "Type": "Application"}]},
+        {"_id": "RoB", "Name": "B", "Applications": [{"_id": "App2", "Type": "Application"}]},
+        {"_id": "RoC", "Name": "C", "Applications": []},
+    ]
+    c = _AppRoleRouteClient([roles])
+    got = c.list_app_roles("App1")
+    assert [r["_id"] for r in got] == ["RoA"]
+
+
+def test_list_app_roles_propagates_transport_err() -> None:
+    class _Failing(KfClient):
+        def __init__(self) -> None:
+            super().__init__(DEV)
+
+        def _json(self, method: str, url: str, data: Any = None) -> Any:  # type: ignore[override]
+            return Err("http", "boom")
+
+    got = _Failing().list_app_roles(None)
+    assert isinstance(got, Err)
+
+
+def test_get_app_role_fetches_role_detail_by_id() -> None:
+    c = _AppRoleRouteClient([[]])
+    got = c.get_app_role("Ro_X")
+    assert isinstance(got, dict) and got["Name"] == "X" and got["Members"] == [{"_id": "U1"}]

@@ -20,8 +20,8 @@ ${PAGE_NAME}          Sample Intake Hub
 ${FLOW_ID}            ${EMPTY}
 ${PAGE_ID}            ${EMPTY}
 ${APP_ID}             ${EMPTY}
-${PUBLISH_OK}         ${FALSE}
-${SUBMIT_LIMITATION}  ${FALSE}
+${ASSIGNEE_ROLE_ID}    ${EMPTY}
+${ASSIGNEE_ROLE_NAME}    ${EMPTY}
 
 *** Test Cases ***
 01 Create Sample Process
@@ -33,20 +33,26 @@ ${SUBMIT_LIMITATION}  ${FALSE}
     Log    Created process ${FLOW_ID}
 
 02 Harvest Role Members
-    [Documentation]    forge_member_batch: harvest AppRole members from an existing flow in
-    ...    KF_APP, if any. A fresh/empty tenant reports harvested=[] with a `note`, not an error —
-    ...    a LEGITIMATE outcome, but asserted EXPLICITLY (Should Be Empty), not just logged: the
-    ...    day an AppRole exists somewhere in KF_APP, `harvested` stops being empty and THIS test
-    ...    must change colour (fail, loudly, with the new content in the message) rather than
-    ...    silently keep passing while meaning something completely different — steps 05's
-    ...    "every step built with role=None" and 14's documented-limitation branch both assume
-    ...    the empty state this assertion pins.
+    [Documentation]    forge_member_batch: with no sibling flow in KF_APP to harvest members
+    ...    from, grants the app's OWN AppRoles instead, discovered at the ACCOUNT level
+    ...    (CLAUDE.md Members first, corrected 2026-08-07) — Role="DataAdmin",
+    ...    Permission=["InitiateItems"], the exact grant proven live to let the initiator submit
+    ...    their own draft (Permission=[] 200s the grant but still refuses the initiator).
+    ...
+    ...    `role_ids`/`harvested` are EXPECTED non-empty on this tenant (2 AppRoles scoped to
+    ...    KF_APP) — asserted EXPLICITLY, not just logged: the day this tenant has zero grantable
+    ...    AppRoles again, this test must change colour (fail loudly) rather than silently mean
+    ...    something completely different — steps 05's assignee wiring and 14's completion walk
+    ...    both depend on a real role id coming out of this step.
     Skip If    "${FLOW_ID}" == "${EMPTY}"    msg=no flow to grant members on — step 01 failed
     ${result}=    Call Forge Tool    forge_member_batch    target_flow_id=${FLOW_ID}
     Result Should Not Error    ${result}    member batch (harvest+apply)
-    Should Be Empty    ${result}[harvested]
-    ...    msg=harvested is NON-EMPTY (${result}[harvested]) -- tenant state changed since this suite was written; steps 05/14's "no AppRole to assign" assumptions may no longer hold, review them before treating this as a simple pass
-    Log    note=${result}[note]
+    Should Not Be Empty    ${result}[role_ids]
+    ...    msg=role_ids is EMPTY -- KF_APP now has no grantable AppRole at all; step 05's assignee wiring and step 14's completion walk cannot proceed as written, review before treating this as a simple pass
+    Should Be Empty    ${result}[missing]
+    Set Suite Variable    ${ASSIGNEE_ROLE_ID}    ${result}[role_ids][0]
+    Set Suite Variable    ${ASSIGNEE_ROLE_NAME}    ${result}[harvested][0]
+    Log    role_ids=${result}[role_ids] harvested=${result}[harvested] note=${result}[note]
 
 03 Apply Sample Fields And Sections
     [Documentation]    forge_apply_fields: ~8 fields across 3 named sections, one write.
@@ -87,19 +93,34 @@ ${SUBMIT_LIMITATION}  ${FALSE}
     Should Be Empty    ${result}[missing_columns]
 
 05 Build Sample Workflow
-    [Documentation]    forge_build_workflow: 3 sequential steps. DESTRUCTIVE — wipes the whole
-    ...    Permission matrix (CLAUDE.md), hence step 07 re-sets visibility right after this.
-    ...    Assignees come from whatever step 02 harvested — on the (confirmed live, 2026-08-06)
-    ...    empty KF_APP tenant this is legitimately nothing, so every step is built with role=None.
+    [Documentation]    forge_build_workflow: 3 sequential steps, each assigned the AppRole step
+    ...    02 granted. DESTRUCTIVE — wipes the whole Permission matrix (CLAUDE.md), hence step 07
+    ...    re-sets visibility right after this.
+    ...
+    ...    ⚠️ CORRECTED 2026-08-07 (Node L): membership alone is not enough for a submit to
+    ...    succeed cleanly — a step with no real assignee fails a first submit with a generic
+    ...    `500 processError`, not the clean 403 a plain membership gap gives (CLAUDE.md Members
+    ...    first). Every step below is therefore built with the SAME role id step 02 granted,
+    ...    not ${NONE} — the combination is what step 14's completion walk depends on.
     Skip If    "${FLOW_ID}" == "${EMPTY}"    msg=no flow to build a workflow on — step 01 failed
-    ${s1}=    Create List    Intake Review    ${NONE}
-    ${s2}=    Create List    Detail Review    ${NONE}
-    ${s3}=    Create List    Final Review    ${NONE}
+    ${s1}=    Create List    Intake Review    ${ASSIGNEE_ROLE_ID}
+    ${s2}=    Create List    Detail Review    ${ASSIGNEE_ROLE_ID}
+    ${s3}=    Create List    Final Review    ${ASSIGNEE_ROLE_ID}
     ${steps}=    Create List    ${s1}    ${s2}    ${s3}
+    ${roles}=    Create Dictionary    ${ASSIGNEE_ROLE_ID}    ${ASSIGNEE_ROLE_NAME}
     ${result}=    Call Forge Tool    forge_build_workflow    flow_id=${FLOW_ID}    steps=${steps}
+    ...    roles=${roles}
     Result Should Not Error    ${result}    build workflow
     Should Be Empty    ${result}[missing_steps]
     Log    assigned=${result}[assigned] unassigned=${result}[unassigned]
+    # `assigned` above is an ECHO of the INPUT steps (kfforge/client.py apply_workflow computes it
+    # from what was requested, never reads the draft back afterward) -- it can never be empty or
+    # wrong as long as a role was passed in, so it proves nothing on its own. The real proof is a
+    # live read-back of the Resource nodes this write actually produced.
+    ${assigned_role_ids}=    Resolve Assigned Role Ids    ${FLOW_ID}
+    ${expected_roles}=    Create List    ${ASSIGNEE_ROLE_ID}    ${ASSIGNEE_ROLE_ID}    ${ASSIGNEE_ROLE_ID}
+    Lists Should Be Equal    ${assigned_role_ids}    ${expected_roles}
+    ...    msg=read-back Resource nodes do not show all 3 steps assigned to the granted role -- step 14's walk cannot succeed without this (CLAUDE.md Members first)
 
 06 Add Sample Goto Gate
     [Documentation]    forge_add_goto_gate: a backward loop from "Final Review" to "Intake
@@ -160,19 +181,16 @@ ${SUBMIT_LIMITATION}  ${FALSE}
 
 10 Publish Sample Process
     [Documentation]    forge_publish -> Status Live, read back from the flow's OWN metadata
-    ...    record (never trust the publish response alone — THE RULE). The app under test has
-    ...    zero AppRole members (steps 02/05 confirmed this live), so a publish failure here tied
-    ...    to that gap is ALSO a legitimate, explicitly-asserted documented-limitation outcome,
-    ...    not a silent skip — logged as such, and the suite still proceeds to doctor/teardown.
+    ...    record (never trust the publish response alone — THE RULE).
+    ...
+    ...    ⚠️ CORRECTED 2026-08-07 (Node L): this used to branch on a documented-limitation outcome
+    ...    tied to the app under test having zero AppRole members. Steps 02/05 now grant real
+    ...    membership AND a real assignee, so this is a hard assertion — a publish failure here is
+    ...    a real regression, not a legitimate branch.
     Skip If    "${FLOW_ID}" == "${EMPTY}"    msg=no flow to publish — step 01 failed
     ${result}=    Call Forge Tool    forge_publish    kind=process    flow_id=${FLOW_ID}
-    IF    ${result}[isError]
-        Log    *** DOCUMENTED LIMITATION: publish did not reach Status=Live: ${result}    level=WARN
-        Set Suite Variable    ${PUBLISH_OK}    ${FALSE}
-    ELSE
-        Should Be Equal As Strings    ${result}[status]    Live
-        Set Suite Variable    ${PUBLISH_OK}    ${TRUE}
-    END
+    Result Should Not Error    ${result}    publish process
+    Should Be Equal As Strings    ${result}[status]    Live
 
 11 Doctor Reports The Process Clean
     [Documentation]    forge_doctor -> 0 problems (assert exact). Runs regardless of step 10's
@@ -238,31 +256,42 @@ ${SUBMIT_LIMITATION}  ${FALSE}
 14 Simulate A Sample Case End To End
     [Documentation]    forge_simulate_case: create an item, fill+verify per step (Text/Textarea/
     ...    Boolean only — Date/Table read-backs normalize server-side and would false-fail the
-    ...    verifier, per the Node G brief), submit through all 3 steps. "Done Flag" is filled
-    ...    TRUE so the goto's `= false()` condition never fires — this test proves the LINEAR
-    ...    path reaches the end, not the loop-back path (the loop's structural wiring is what
-    ...    step 06 + step 11's clean doctor report already prove).
+    ...    verifier, per the Node G brief), submit through Start then all 3 user steps to
+    ...    completion. "Done Flag" is filled TRUE so the goto's `= false()` condition never fires
+    ...    — this test proves the LINEAR path reaches the end, not the loop-back path (the loop's
+    ...    structural wiring is what step 06 + step 11's clean doctor report already prove).
     ...
     ...    The fill PAYLOAD MUST be keyed by field ID, never the human-readable name (CLAUDE.md
     ...    Item data plane: "fill PUT .../admin/{flow}/{iid} -> {field_id: value, ...}") — found
     ...    live: a name-keyed PUT 400s `KISSFLOW_ERROR_01003 FieldNotFound`. `Resolve Field Ids`
     ...    reads the draft once and maps every field NAME used below to its real ID.
     ...
-    ...    ⚠️ CORRECTED MECHANISM (re-verified live, node G review, matches CLAUDE.md's own
-    ...    correction): the activity instance ITSELF is not missing — it exists and is exposed in
-    ...    both the create response's `_activity_instance_id` and a myitems-style listing's
-    ...    `_activity_id`/`_activity_instance_id`. Submitting WITH that real id independently
-    ...    verified to return `403 KISSFLOW_ERROR_050302` ("You don't have permission to submit
-    ...    this item anymore") — a PERMISSION failure, because the step has no AppRole assignee
-    ...    the API user belongs to (step 02 already confirmed the app under test has nothing to
-    ...    harvest; there is no API route that grants one). What genuinely IS absent on an
-    ...    unassigned step is only the `_current_context[0]._context_activity_instance_id`
-    ...    MIRROR — the one source `live_aiid` (dataplane.py) is willing to trust, by design
-    ...    (falling back to the create-response/myitems id instead is exactly the "myitems
-    ...    consumed-instance" trap this pack refuses to risk, see Item data plane). So THIS
-    ...    pack's own `advance` stops one step earlier than a raw 403 — at `live_aiid`'s own
-    ...    refusal — for the identical underlying reason. Asserted EXPLICITLY below via that
-    ...    refusal's deterministic error text, never skipped.
+    ...    Each StepPlan's `name` is only a REPORTING label — `forge_simulate_case` submits
+    ...    whatever step the item actually sits at when that plan runs, never the name itself
+    ...    (dataplane.py StepPlan's own docstring). Submit count for a full walk is 1 (the
+    ...    StartEvent, a Draft item's own first submit) + N (the N UserTasks) — CLAUDE.md
+    ...    Workflow, re-verified live 2026-08-07 with `_current_step` instrumented at every
+    ...    submit. Four StepPlans below, one per hop, labeled by the step each one ACTUALLY
+    ...    leaves: "Start" (the create response's own aiid, no prior context — dataplane.py's
+    ...    two-phase rule), then "Intake Review", "Detail Review", "Final Review" — the last of
+    ...    which completes the item directly, no second submit needed and no `GotoTask` involved
+    ...    in the count (an earlier version of this suite mislabeled the hops one short — missing
+    ...    the Start hop shifted every later plan's fields onto the WRONG step and made the last
+    ...    step look like it needed submitting twice; it never did).
+    ...
+    ...    ⚠️ CORRECTED 2026-08-07 (Node L), replacing the earlier documented-limitation branch.
+    ...    That branch existed because `live_aiid` correctly refused to submit an item with no
+    ...    derivable context aiid — one step short of the raw `403 KISSFLOW_ERROR_050302` a bare
+    ...    create-response aiid would have hit, root-caused to the app under test having no
+    ...    grantable AppRole to assign a step to (CLAUDE.md Members first). That root cause no
+    ...    longer holds: step 02 now grants real membership (`Permission: ["InitiateItems"]`) and
+    ...    step 05 wires the same role as every step's real assignee. Layered on top,
+    ...    dataplane.py's two-phase aiid rule (CLAUDE.md Item data plane) lets `walk` derive hop
+    ...    1's aiid from the CREATE response instead of refusing outright — an item at its start
+    ...    step, never yet submitted, has no `_current_context` yet, which is expected, not an
+    ...    error. Together these let a real item walk all the way to Completed; this test now
+    ...    asserts that end-to-end outcome instead of the refusal that used to be the only
+    ...    reachable state.
     Skip If    "${FLOW_ID}" == "${EMPTY}"    msg=no flow to simulate a case on — step 01 failed
 
     ${field_ids}=    Resolve Field Ids    ${FLOW_ID}
@@ -274,8 +303,9 @@ ${SUBMIT_LIMITATION}  ${FALSE}
     ${id_reviewer_note}=    Get From Dictionary    ${field_ids}    Reviewer Note
     ${id_outcome}=       Get From Dictionary    ${field_ids}    Outcome
 
+    ${start_values}=    Create Dictionary
+    Set To Dictionary    ${start_values}    ${id_ref_code}    REF-0001    ${id_priority}    Normal
     ${step1_values}=    Create Dictionary
-    Set To Dictionary    ${step1_values}    ${id_ref_code}    REF-0001    ${id_priority}    Normal
     ${step2_values}=    Create Dictionary
     Set To Dictionary    ${step2_values}
     ...    ${id_summary}    Sample summary text    ${id_details}    Sample details text
@@ -283,23 +313,31 @@ ${SUBMIT_LIMITATION}  ${FALSE}
     Set To Dictionary    ${step3_values}    ${id_done_flag}    ${True}
     ...    ${id_reviewer_note}    Sample reviewer note    ${id_outcome}    Resolved
 
+    # "Intake" (Reference Code required=True + Priority) is owned by [Start, Intake Review] in
+    # step 07's visibility matrix -- it is visible, and Required-enforced, ALREADY at Start, so
+    # its values must land on the Start hop, not the Intake Review one, or the Start submit
+    # itself 400s KISSFLOW_ERROR_050312 FormValidationError (found live). "Description" (Summary
+    # required=True + Details) is owned by [Detail Review] only, so its values belong on the
+    # Detail Review hop; "Review" (Done Flag/Reviewer Note/Outcome) is owned by [Final Review]
+    # only, so its values belong on the Final Review hop.
+    ${hop0}=    Create Dictionary    name=Start    values=${start_values}
     ${step1}=    Create Dictionary    name=Intake Review    values=${step1_values}
     ${step2}=    Create Dictionary    name=Detail Review    values=${step2_values}
     ${step3}=    Create Dictionary    name=Final Review    values=${step3_values}
-    ${steps}=    Create List    ${step1}    ${step2}    ${step3}
+    ${steps}=    Create List    ${hop0}    ${step1}    ${step2}    ${step3}
 
     ${result}=    Call Forge Tool    forge_simulate_case    flow_id=${FLOW_ID}    steps=${steps}
     Log    ${result}
+    Result Should Not Error    ${result}    simulate case walk to completion
+    Should Be Empty    ${result}[failed]
+    # `advanced` is an ECHO of the planned step NAMES (dataplane.py's walk() appends plan.name on
+    # success, never reads it back from the item) -- Should Be Empty on `failed` already proves
+    # every planned hop succeeded; the REAL, non-echo proof this walk did what it claims is the
+    # live status read below.
 
-    IF    ${result}[isError]
-        Should Contain    ${result}[error]    _context_activity_instance_id
-        ...    msg=expected the documented AppRole-membership limitation (no live aiid derivable), got: ${result}[error]
-        Log    *** DOCUMENTED LIMITATION asserted: no AppRole membership -> no live aiid derivable -> ${result}[error]    level=WARN
-        Set Suite Variable    ${SUBMIT_LIMITATION}    ${TRUE}
-    ELSE
-        Lists Should Be Equal    ${result}[advanced]    ${{['Intake Review', 'Detail Review', 'Final Review']}}
-        Should Be Empty    ${result}[failed]
-    END
+    ${status}=    Get Item Status    ${FLOW_ID}    ${result}[iid]
+    Should Be Equal As Strings    ${status}    Completed
+    ...    msg=item did not reach Completed after every step advanced -- ${result}
 
 *** Keywords ***
 Set App Id From Env

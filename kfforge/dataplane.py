@@ -7,10 +7,18 @@ admin PUT accepts a Select value that isn't a real option, returns 200, and sile
 it — a read-back is the only way to know. `fill_and_verify` exists for exactly this reason.
 
 THE OTHER TRAP: a "my items"-style listing's activity-instance id is the initiator's already-
-CONSUMED instance. Submitting or rejecting against it fails ("...anymore"). The only LIVE
-activity-instance id lives inside `detail._current_context[0]._context_activity_instance_id` —
-`live_aiid` is that lookup, isolated as a pure function so both traps are exhaustively testable
+CONSUMED instance. Submitting or rejecting against it fails ("...anymore"). `live_aiid` is the
+lookup that refuses that decoy, isolated as a pure function so the trap is exhaustively testable
 without a network.
+
+THE TWO-PHASE aiid RULE (proven live 2026-08-07, walking a real item Start -> ... -> Completed):
+`detail._current_context[0]._context_activity_instance_id` is the correct source ONLY from the
+SECOND submit onward. A Draft item still sitting at Start, never yet submitted, has no such
+context at all — the only usable aiid for that FIRST submit is the one `create_item`'s own
+response returns (a DIFFERENT field read at a DIFFERENT time from the myitems decoy above, not a
+resurrection of it: this module never calls a myitems-style route at all). `usable_aiid` is
+`live_aiid` plus that one documented first-hop fallback; `walk` threads the create response's aiid
+through as that fallback for the first step only, never a later one.
 
 Everything that talks to Kissflow goes through the `DataPlaneClient` seam below. `LiveDataPlane` is
 the real implementation — it delegates to `KfClient`'s existing HTTP transport (`_json`/`_req`)
@@ -80,15 +88,23 @@ class LiveDataPlane:
 def live_aiid(detail: Item) -> str | Err:
     """THE aiid trap, isolated as a pure function. `myitems`' `_activity_instance_id` is the
     initiator's CONSUMED instance — submitting or rejecting against it fails with an "...anymore"
-    style error. The only correct source is `detail._current_context[0]._context_activity_instance_id`.
-    A detail with no (or empty) `_current_context` is refused rather than falling back to anything
-    else — there IS no safe fallback, only the myitems decoy, which is the trap itself.
+    style error. The only source THIS function will ever read is
+    `detail._current_context[0]._context_activity_instance_id`. A detail with no (or empty)
+    `_current_context` is refused rather than falling back to anything else — `live_aiid` itself
+    has no fallback, by design; it stays the strict, always-correct-from-hop-2-onward check.
+
+    ⚠️ Hop 1 (a Draft item still sitting at Start, never yet submitted) genuinely has no
+    `_current_context` at all — that is NOT this function malfunctioning, it is the documented
+    two-phase aiid rule (module docstring): the first hop's aiid comes from `create_item`'s own
+    response instead. `live_aiid` correctly refuses in that case; a caller that needs to submit the
+    very first hop wants `usable_aiid`, not this function directly.
     """
     ctx = detail.get("_current_context")
     if not ctx or not isinstance(ctx, list):
         return Err("verify",
-                   "detail has no _current_context — this is the myitems consumed-instance trap "
-                   "(CLAUDE.md > Item data plane): fetch ADMIN detail and read "
+                   "detail has no _current_context — this is either the myitems consumed-instance "
+                   "trap (CLAUDE.md > Item data plane), or a hop-1 Draft item that hasn't been "
+                   "submitted yet (see usable_aiid for that case): fetch ADMIN detail and read "
                    "_current_context[0]._context_activity_instance_id, never a myitems-style aiid")
     first = ctx[0]
     if not isinstance(first, dict) or not isinstance(first.get("_context_activity_instance_id"), str) \
@@ -97,6 +113,27 @@ def live_aiid(detail: Item) -> str | Err:
                    "detail._current_context[0] has no _context_activity_instance_id — cannot "
                    "submit or reject without the live aiid")
     return first["_context_activity_instance_id"]
+
+
+def usable_aiid(detail: Item, create_aiid: str | None = None) -> str | Err:
+    """`live_aiid` plus the documented two-phase first-hop fallback (module docstring). Tries the
+    live context first, exactly like `live_aiid` — always preferred when present, on ANY hop.
+    Falls back to `create_aiid` ONLY when the context is genuinely absent AND a caller supplied
+    one; with `create_aiid=None` (the default) this is byte-for-byte `live_aiid`.
+
+    The fallback must be supplied BY THE CALLER, never inferred from "context is missing" alone —
+    that is what keeps hop 2+ strict: `walk` passes `create_aiid` only for the very first step, so
+    a genuinely missing context on a LATER hop still refuses here exactly as `live_aiid` would,
+    rather than silently reusing a stale create-time id. Never touches the myitems decoy — this
+    function, like `live_aiid`, only ever reads `_current_context`; `create_aiid` is whatever the
+    caller's own `create_item` response returned, a different value read at a different time.
+    """
+    got = live_aiid(detail)
+    if not isinstance(got, Err):
+        return got
+    if create_aiid is not None:
+        return create_aiid
+    return got
 
 
 @dataclass(frozen=True)
@@ -155,22 +192,28 @@ class StepResult:
 
 
 def _detail_and_live_aiid(
-    cli: DataPlaneClient, *, flow_id: str, iid: str,
+    cli: DataPlaneClient, *, flow_id: str, iid: str, create_aiid: str | None = None,
 ) -> tuple[Item, str] | Err:
-    """detail -> live_aiid, bundled: `advance` and a reject both need this exact pair, fetched
-    fresh every time — the aiid trap means there is no other correct way to get one."""
+    """detail -> usable_aiid, bundled: `advance` and a reject both need this exact pair, fetched
+    fresh every time — the aiid trap means there is no other correct way to get one. `create_aiid`
+    is the two-phase rule's optional first-hop fallback (module docstring); omitted (the default)
+    this is exactly the old detail -> live_aiid pairing, unchanged for every hop past the first."""
     detail = cli.get_detail(flow_id, iid)
     if isinstance(detail, Err):
         return detail
-    aiid = live_aiid(detail)
+    aiid = usable_aiid(detail, create_aiid)
     if isinstance(aiid, Err):
         return aiid
     return detail, aiid
 
 
-def advance(cli: DataPlaneClient, *, flow_id: str, iid: str) -> StepResult | Err:
-    """Fetch detail -> derive the LIVE aiid (never a myitems-style one) -> submit."""
-    fetched = _detail_and_live_aiid(cli, flow_id=flow_id, iid=iid)
+def advance(
+    cli: DataPlaneClient, *, flow_id: str, iid: str, create_aiid: str | None = None,
+) -> StepResult | Err:
+    """Fetch detail -> derive the USABLE aiid (never a myitems-style one; the live context on any
+    hop, or — only when `create_aiid` is supplied and context is genuinely absent — the
+    create-response aiid, the two-phase rule's documented first-hop source) -> submit."""
+    fetched = _detail_and_live_aiid(cli, flow_id=flow_id, iid=iid, create_aiid=create_aiid)
     if isinstance(fetched, Err):
         return fetched
     detail, aiid = fetched
@@ -179,6 +222,15 @@ def advance(cli: DataPlaneClient, *, flow_id: str, iid: str) -> StepResult | Err
         return resp
     step = detail.get("_current_step")
     return StepResult(step=step if isinstance(step, str) else "?", aiid=aiid, response=resp)
+
+
+# A finished item has no _current_context at all -- live_aiid correctly Errs on it, same as the
+# hop-1 Draft case, but for the OPPOSITE reason (nothing left to transition INTO, not nothing yet
+# transitioned FROM). wait_new_aiid must tell these apart: only "Completed"/"Rejected" are ever
+# confirmed live as terminal (CLAUDE.md Item data plane: reject "sets status Rejected"; the
+# two-phase aiid walk table ends "status = Completed") -- no other value is treated as terminal,
+# never guessed.
+_TERMINAL_STATUSES = frozenset({"Completed", "Rejected"})
 
 
 def wait_new_aiid(
@@ -193,7 +245,7 @@ def wait_new_aiid(
 ) -> str | Err:
     """Bounded poll for the step transition after a submit/reject: keep re-deriving the LIVE aiid
     (via `live_aiid` — same trap-guard `advance`/`fill_and_verify` use) until it differs from
-    `prev_aiid`, or give up.
+    `prev_aiid`, or the item reaches a TERMINAL status, or give up.
 
     THE GAP this closes: `walk` has no step-transition wait at all — it submits, then immediately
     moves on to the next step's fill. Kissflow's own activity-instance transition is not always
@@ -202,14 +254,26 @@ def wait_new_aiid(
     `_current_context` on the FIRST read back). Calling `fill_and_verify` against a still-stale
     aiid's context risks filling the step the item just LEFT, or re-tripping the aiid trap.
 
+    ⚠️ A SECOND gap, found live 2026-08-07 walking a real item to actual completion: a submit that
+    finishes the whole workflow leaves the item with NO `_current_context` at all — there is no
+    next step to roll over INTO. Before this fix, that read the same as "not rolled over yet" and
+    the poll spun until `tries` ran out, reporting a false failure on a submit that had, in fact,
+    fully succeeded. Every `get_detail` read here is now checked for a TERMINAL `_status`
+    (`_TERMINAL_STATUSES`) BEFORE falling through to the aiid comparison; on a terminal status this
+    returns immediately, with the status STRING itself, never an aiid — nothing left to submit
+    against, so there is no aiid to return. Every caller in this module (`walk`, the only one) only
+    ever checks the return for `isinstance(..., Err)`, never interprets the string payload, so this
+    is safe — documented explicitly so a future caller does not assume the return is always a real
+    activity-instance id.
+
     Bounded, never a silent infinite retry: `tries` hard-caps the attempts (mirrors the timing the
     proven reference implementation already uses live — `tries=8, delay=0.9` by default). Any
-    failure along the way — a transport error from `get_detail`, or a not-yet-rolled-over
-    `_current_context` (exactly what `live_aiid` itself refuses to fabricate a fallback for) — is
-    treated as "not ready yet" and retried; a bounded poll's whole point is absorbing that class of
-    transient state. Exhausting `tries` without ever seeing a NEW aiid returns the last failure (or
-    a stuck-aiid message) as an `Err` — it never fabricates success, and never returns `prev_aiid`
-    as if that were one.
+    OTHER failure along the way — a transport error from `get_detail`, or a not-yet-rolled-over
+    `_current_context` on a still-InProgress item (exactly what `live_aiid` itself refuses to
+    fabricate a fallback for) — is treated as "not ready yet" and retried; a bounded poll's whole
+    point is absorbing that class of transient state. Exhausting `tries` without ever seeing a NEW
+    aiid OR a terminal status returns the last failure (or a stuck-aiid message) as an `Err` — it
+    never fabricates success, and never returns `prev_aiid` as if that were one.
 
     Callers integrate this as an OPTIONAL hook between `walk` steps (or drive it directly), rather
     than `walk` gaining an unconditional poll baked in — a caller with no latency in its own fake/
@@ -223,11 +287,17 @@ def wait_new_aiid(
     for attempt in range(tries):
         if attempt > 0:
             sleep_fn(delay)
-        fetched = _detail_and_live_aiid(cli, flow_id=flow_id, iid=iid)
-        if isinstance(fetched, Err):
-            last = fetched
+        detail = cli.get_detail(flow_id, iid)
+        if isinstance(detail, Err):
+            last = detail
             continue
-        _detail, aiid = fetched
+        status = detail.get("_status")
+        if status in _TERMINAL_STATUSES:
+            return status  # nothing left to transition into -- the wait is over, successfully
+        aiid = live_aiid(detail)
+        if isinstance(aiid, Err):
+            last = aiid
+            continue
         if aiid != prev_aiid:
             return aiid
         last = Err("verify",
@@ -284,6 +354,14 @@ def walk(
     Stops at the FIRST failure — including a fill that PUT 200 but didn't verify, which is exactly
     the silent-discard case this module exists to catch (fail loud, never continue past it).
 
+    The TWO-PHASE aiid rule (module docstring) is threaded through here: the create response's own
+    aiid is captured once, then offered as `usable_aiid`'s fallback ONLY for the FIRST step in
+    `steps` — a Draft item fresh off `create_item` has no `_current_context` yet, so without this a
+    walk starting from Draft could never even complete its first hop. Every step after the first
+    gets no such fallback (`create_aiid=None`), so a genuinely missing context on a later hop still
+    fails loud exactly as before this rule was added — the fallback never masks a real bug past hop
+    1, and it never touches the myitems decoy either (this module has no myitems call at all).
+
     `poll_after_transition` (default False — a caller/fake with no such latency, e.g. every OTHER
     test in this file, pays nothing extra): when True, calls `wait_new_aiid` right after each
     successful advance/reject, closing the gap `walk` otherwise has NO wait for at all. This is
@@ -302,12 +380,17 @@ def walk(
     if not isinstance(iid, str):
         return WalkReport(flow_id=flow_id, iid=None, created=False, planned=planned, filled=(), advanced=(),
                           rejected=(), failed=(), error=f"create: no _id in response {created!r}")
+    create_aiid = created.get("_activity_instance_id")
+    if not isinstance(create_aiid, str) or not create_aiid:
+        create_aiid = None  # no usable first-hop fallback in the create response; hop 1 then
+                            # behaves exactly like every later hop (context required, no fallback)
 
     filled: tuple[str, ...] = ()
     advanced: tuple[str, ...] = ()
     rejected: tuple[str, ...] = ()
 
-    for plan in steps:
+    for i, plan in enumerate(steps):
+        hop_create_aiid = create_aiid if i == 0 else None  # two-phase rule: first hop only
         report = fill_and_verify(cli, flow_id=flow_id, iid=iid, values=plan.values)
         if isinstance(report, Err):
             return WalkReport(flow_id=flow_id, iid=iid, created=True, planned=planned, filled=filled,
@@ -321,7 +404,7 @@ def walk(
         filled += (plan.name,)
 
         if plan.reject:
-            fetched = _detail_and_live_aiid(cli, flow_id=flow_id, iid=iid)
+            fetched = _detail_and_live_aiid(cli, flow_id=flow_id, iid=iid, create_aiid=hop_create_aiid)
             if isinstance(fetched, Err):
                 return WalkReport(flow_id=flow_id, iid=iid, created=True, planned=planned, filled=filled,
                                   advanced=advanced, rejected=rejected, failed=(plan.name,),
@@ -344,7 +427,7 @@ def walk(
                                             f"{waited.message}")
             continue
 
-        result = advance(cli, flow_id=flow_id, iid=iid)
+        result = advance(cli, flow_id=flow_id, iid=iid, create_aiid=hop_create_aiid)
         if isinstance(result, Err):
             return WalkReport(flow_id=flow_id, iid=iid, created=True, planned=planned, filled=filled,
                               advanced=advanced, rejected=rejected, failed=(plan.name,),
