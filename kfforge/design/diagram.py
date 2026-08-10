@@ -154,13 +154,17 @@ def _terminal_stages(spec: AppSpecLike) -> list[str]:
     stage_names = [st.name for st in _seq(spec.stages)]
     routing = _seq(spec.routing)
     loops = _seq(spec.rework_loops)
-    universe = list(stage_names)
+    universe = list(stage_names)  # a LIST, not a set: layout order matters downstream
     outgoing: set[str] = set(stage_names[:-1]) if stage_names else set()
     outgoing |= {rp.at_stage for rp in routing}
     for rp in routing:
-        for target in dict(rp.route_per_option).values():
-            if target not in universe:
-                universe.append(target)
+        for targets in dict(rp.route_per_option).values():
+            for target in targets:  # a branch is a SEQUENCE of stages now (P1) — every one counts
+                # ponytail: O(stages × options × seqlen) via `not in` on a list; all three are tiny
+                # bounded per-flow config (dozens, not unbounded input), so the list stays. If a flow
+                # ever carried unbounded stages, track membership in a parallel set.
+                if target not in universe:
+                    universe.append(target)
     for lp in loops:
         if lp.to_stage not in universe:
             universe.append(lp.to_stage)
@@ -183,7 +187,8 @@ def _reachable_stage_names(
         if stage_names[i - 1] not in routing_at_stages:
             reachable.add(stage_names[i])
     for rp in routing:
-        reachable.update(dict(rp.route_per_option).values())
+        for targets in dict(rp.route_per_option).values():
+            reachable.update(targets)  # every stage in every branch sequence receives an edge (P1)
     for lp in loops:
         reachable.add(lp.to_stage)
     return reachable
@@ -211,12 +216,14 @@ def _forward_next_stages(spec: AppSpecLike) -> dict[str, str | None]:
     routing_at_stages = {rp.at_stage for rp in routing}
     loops = _seq(spec.rework_loops)
 
-    # On-spine branch entries = routing targets that are actual stages.
+    # On-spine branch entries = the FIRST stage of each route sequence, when it's an actual stage.
+    # A branch ENTERS at its first stage (P1); the rest of the sequence runs forward on the spine,
+    # so only the entry is a fork target here — never a mid-branch stage.
     entries: set[str] = set()
     for rp in routing:
-        for target in dict(rp.route_per_option).values():
-            if target in idx:
-                entries.add(target)
+        for targets in dict(rp.route_per_option).values():
+            if targets and targets[0] in idx:
+                entries.add(targets[0])
 
     # owner[name] = the most recent entry at-or-before it; None before the first branch.
     owner: dict[str, str | None] = {}
@@ -453,7 +460,8 @@ def flow_diagram_xml(spec: AppSpecLike) -> str:
         mapping = dict(rp.route_per_option)
         column = 1
         for option in rp.options:
-            target_name = mapping.get(option, option)
+            route_seq = mapping.get(option)  # a branch is a stage SEQUENCE now (P1); the fork edge
+            target_name = route_seq[0] if route_seq else option  # lands on its first stage (fallback: option)
             if c.has(target_name):
                 target_id = c.id_of(target_name)
             else:

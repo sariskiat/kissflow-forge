@@ -74,7 +74,7 @@ class RoutingPoint:
     at_stage: str
     field_name: str
     options: tuple[str, ...]
-    route_per_option: tuple[tuple[str, str], ...]  # (option, target) pairs -- intake's own shape
+    route_per_option: tuple[tuple[str, tuple[str, ...]], ...]  # (option, stage-sequence) pairs
 
 
 @dataclasses.dataclass(frozen=True)
@@ -264,9 +264,9 @@ def sample_spec() -> AppSpec:
             field_name="Diagnosis Result",
             options=("Repairable", "Needs Parts", "Beyond Repair"),
             route_per_option=(
-                ("Repairable", "Repair"),
-                ("Needs Parts", "Repair"),
-                ("Beyond Repair", "Closed - Rejected"),
+                ("Repairable", ("Repair",)),
+                ("Needs Parts", ("Repair",)),
+                ("Beyond Repair", ("Closed - Rejected",)),
             ),
         ),
     ))
@@ -400,7 +400,7 @@ def spec_with_orphan_stage() -> AppSpec:
     ))
     routing = Routing(points=(
         RoutingPoint(at_stage="A", field_name="Choice", options=("X", "Y"),
-                     route_per_option=(("X", "C"), ("Y", "C"))),
+                     route_per_option=(("X", ("C",)), ("Y", ("C",)))),
     ))
     empty_dm = DataModel(fields=(), tables=())
     empty_md = MasterData(lists=())
@@ -426,9 +426,9 @@ def spec_with_two_routing_points_same_stage() -> AppSpec:
     ))
     routing = Routing(points=(
         RoutingPoint(at_stage="Middle", field_name="First Choice", options=("A", "B"),
-                     route_per_option=(("A", "End"), ("B", "End"))),
+                     route_per_option=(("A", ("End",)), ("B", ("End",)))),
         RoutingPoint(at_stage="Middle", field_name="Second Choice", options=("C", "D"),
-                     route_per_option=(("C", "End"), ("D", "Start"))),
+                     route_per_option=(("C", ("End",)), ("D", ("Start",)))),
     ))
     empty_dm = DataModel(fields=(), tables=())
     empty_md = MasterData(lists=())
@@ -465,8 +465,8 @@ def spec_with_tiered_branches() -> AppSpec:
     routing = Routing(points=(
         RoutingPoint(at_stage="Triage", field_name="Service Tier",
                      options=("Self", "Light", "Full"),
-                     route_per_option=(("Self", "Self Service"), ("Light", "Light Work"),
-                                       ("Full", "Full Tier"))),
+                     route_per_option=(("Self", ("Self Service",)), ("Light", ("Light Work",)),
+                                       ("Full", ("Full Tier",)))),
     ))
     rework_loops = ReworkLoops(loops=(
         Loop(from_stage="Light Confirm", to_stage="Light Work", gate_field="Round Done"),
@@ -1435,9 +1435,9 @@ class TestApplyRevisions:
         spec = spec_with_two_routing_points_same_stage()
         revised = apply_revisions(spec, {"routing-target:Middle:A": "Start"})
         by_field = {rp.field_name: rp for rp in revised.routing.points}
-        assert dict(by_field["First Choice"].route_per_option)["A"] == "Start"
+        assert dict(by_field["First Choice"].route_per_option)["A"] == ("Start",)
         # the SIBLING decision point (whose options are C/D, not A/B) must be untouched
-        assert dict(by_field["Second Choice"].route_per_option) == {"C": "End", "D": "Start"}
+        assert dict(by_field["Second Choice"].route_per_option) == {"C": ("End",), "D": ("Start",)}
 
     def test_routing_option_revision_at_a_shared_stage_touches_only_the_matching_point(self):
         spec = spec_with_two_routing_points_same_stage()
@@ -1456,9 +1456,9 @@ class TestApplyRevisions:
         revised = apply_revisions(spec, {"routing-target:Diagnosis:Beyond Repair": "Closed - Escalated"})
         rp = revised.routing.points[0]
         mapping = dict(rp.route_per_option)
-        assert mapping["Beyond Repair"] == "Closed - Escalated"
-        assert mapping["Repairable"] == "Repair"  # untouched
-        assert dict(spec.routing.points[0].route_per_option)["Beyond Repair"] == "Closed - Rejected"
+        assert mapping["Beyond Repair"] == ("Closed - Escalated",)
+        assert mapping["Repairable"] == ("Repair",)  # untouched
+        assert dict(spec.routing.points[0].route_per_option)["Beyond Repair"] == ("Closed - Rejected",)
 
     def test_routing_option_revision_fixes_a_miscased_literal_preserving_its_target(self):
         spec = sample_spec()
@@ -1466,7 +1466,7 @@ class TestApplyRevisions:
         rp = revised.routing.points[0]
         assert "Needs parts" in rp.options
         assert "Needs Parts" not in rp.options
-        assert dict(rp.route_per_option)["Needs parts"] == "Repair"  # target preserved
+        assert dict(rp.route_per_option)["Needs parts"] == ("Repair",)  # target preserved
 
     # ---- M10: stage rename must cascade into visibility/sections/test-cases too ----
 
@@ -1481,8 +1481,8 @@ class TestApplyRevisions:
 
         rp = revised.routing.points[0]
         mapping = dict(rp.route_per_option)
-        assert mapping["Repairable"] == "Fix"
-        assert mapping["Needs Parts"] == "Fix"
+        assert mapping["Repairable"] == ("Fix",)
+        assert mapping["Needs Parts"] == ("Fix",)
 
         lp = revised.rework_loops.loops[0]
         assert lp.to_stage == "Fix"
@@ -1557,7 +1557,7 @@ class TestApplyRevisions:
         rp = revised.routing.points[0]
         assert "Repairable (confirmed)" in rp.options
         assert "Repairable" not in rp.options
-        assert dict(rp.route_per_option)["Repairable (confirmed)"] == "Repair"
+        assert dict(rp.route_per_option)["Repairable (confirmed)"] == ("Repair",)
 
         case = revised.test_cases.cases[0]
         diagnosis_fill = next(f for f in case.fills if f.stage == "Diagnosis")

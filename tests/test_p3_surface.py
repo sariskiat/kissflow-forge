@@ -513,7 +513,7 @@ def test_bypass_b3_rewiring_after_approval_is_refused() -> None:
 
     rewired = copy.deepcopy(approval["spec"])
     rewired["routing"]["points"][0]["route_per_option"] = [
-        ["Yes", "Return to Customer"], ["No", "Return to Customer"],
+        ["Yes", ["Return to Customer"]], ["No", ["Return to Customer"]],
     ]
     rewired["stages"]["stages"][0]["owner_role"] = "Technician"  # was "Front Desk"; both real
     assert rewired["approved"] is True  # the flag itself was never touched by this mutation
@@ -576,7 +576,7 @@ def test_bypass_n2_reconfirming_a_mutated_spec_mints_no_usable_token() -> None:
 
     mutant = copy.deepcopy(approval["spec"])
     mutant["routing"]["points"][0]["route_per_option"] = [
-        ["Yes", "Return to Customer"], ["No", "Return to Customer"],
+        ["Yes", ["Return to Customer"]], ["No", ["Return to Customer"]],
     ]
     mutant["stages"]["stages"][0]["owner_role"] = "Technician"
     mutant["approved"] = False  # looks like an ordinary pre-approval spec to forge_request_confirmation

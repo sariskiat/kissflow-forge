@@ -107,8 +107,10 @@ class RoutingPointLike(Protocol):
     at_stage: str
     field_name: str
     options: Sequence[str]
-    route_per_option: Any  # Mapping[str, str] OR a tuple of (option, target) pairs -- dict(...)
-    # at every call site accepts either; kfforge.intake.schema.DecisionPoint uses the tuple form.
+    route_per_option: Any  # Mapping[str, Sequence[str]] OR a tuple of (option, stage-sequence)
+    # pairs -- dict(...) at every call site accepts either. A branch is an ordered SEQUENCE of
+    # stages now (P1), a one-element sequence being the old single-stage route;
+    # kfforge.intake.schema.DecisionPoint uses the tuple-of-pairs form.
 
 
 class LoopLike(Protocol):

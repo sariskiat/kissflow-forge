@@ -50,7 +50,26 @@ def test_round_trip_preserves_dataclass_types_not_just_equal_values() -> None:
     assert isinstance(got.roles.roles, tuple)
     assert isinstance(got.routing.points[0].route_per_option, tuple)
     assert isinstance(got.routing.points[0].route_per_option[0], tuple)
+    assert isinstance(got.routing.points[0].route_per_option[0][1], tuple)  # the target SEQUENCE
     assert isinstance(got.test_cases.cases[0].fills[0].values, tuple)
+
+
+def test_a_route_option_carrying_a_multi_stage_sequence_round_trips() -> None:
+    """P1 (#30): a DecisionPoint option routes to an ORDERED SEQUENCE of stages, not a single
+    stage; a one-element sequence is the old single-stage route. The round trip must preserve the
+    sequence, in order, in both directions -- the load-bearing boundary guarantee the reader skill
+    and the compile pipeline both lean on."""
+    base = _full_spec()
+    pt = base.routing.points[0]
+    seq_pt = dataclasses.replace(pt, route_per_option=(
+        ("Yes", ("Repair", "Quality Check")),  # a two-stage branch
+        ("No", ("Return to Customer",)),        # a one-element sequence == the old single-stage route
+    ))
+    spec = dataclasses.replace(base, routing=dataclasses.replace(base.routing, points=(seq_pt,)))
+    got = spec_from_dict(spec_to_dict(spec))
+    assert got == spec
+    assert got.routing.points[0].route_per_option[0][1] == ("Repair", "Quality Check")
+    assert got.routing.points[0].route_per_option[1][1] == ("Return to Customer",)
 
 
 # ---- enums: survive by .value, come back as the real enum member --------------------------
@@ -87,9 +106,10 @@ def test_enum_wire_value_is_the_plain_string_not_an_enum_repr() -> None:
 def test_tuple_of_pairs_is_a_list_of_two_element_lists_on_the_wire() -> None:
     wire = spec_to_dict(_full_spec())
     route = wire["routing"]["points"][0]["route_per_option"]
-    assert route == [["Yes", "Repair"], ["No", "Return to Customer"]]
+    assert route == [["Yes", ["Repair"]], ["No", ["Return to Customer"]]]
     for pair in route:
         assert isinstance(pair, list) and len(pair) == 2
+        assert isinstance(pair[1], list)  # the target is a stage SEQUENCE, a list on the wire (P1)
 
 
 def test_wire_dict_holds_no_tuples_anywhere() -> None:

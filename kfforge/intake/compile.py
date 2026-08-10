@@ -249,19 +249,28 @@ def _check_routing_field_and_options(spec: AppSpec) -> None:
 
 
 def _check_routing_stages(spec: AppSpec) -> None:
-    """A DecisionPoint's at_stage, or one of its route targets, naming an unknown stage."""
+    """A DecisionPoint's at_stage, or any stage in one of its route SEQUENCES, naming an unknown
+    stage — a branch is an ordered sequence of stages now (P1), so every stage in the sequence is
+    checked, not just a single target. An EMPTY sequence is refused outright: it names no stage at
+    all, a dead-end the old single-stage shape could never express."""
     stage_names = {s.name for s in spec.stages.stages}
     for point in spec.routing.points:
         if point.at_stage not in stage_names:
             raise ValueError(
                 f"routing at_stage {point.at_stage!r} is not a known stage, not in {sorted(stage_names)}"
             )
-        for option, target in point.route_per_option:
-            if target not in stage_names:
+        for option, targets in point.route_per_option:
+            if not targets:
                 raise ValueError(
-                    f"routing at {point.at_stage!r}: option {option!r} routes to unknown stage "
-                    f"{target!r}, not in {sorted(stage_names)}"
+                    f"routing at {point.at_stage!r}: option {option!r} routes to an empty sequence "
+                    f"— a route must name at least one stage"
                 )
+            for target in targets:
+                if target not in stage_names:
+                    raise ValueError(
+                        f"routing at {point.at_stage!r}: option {option!r} routes to unknown stage "
+                        f"{target!r}, not in {sorted(stage_names)}"
+                    )
 
 
 def _check_routing_complete(spec: AppSpec) -> None:
@@ -719,6 +728,10 @@ def _op_build_workflow(spec: AppSpec) -> tuple[Op, ...]:
                  "entry_criteria": s.entry_criteria, "exit_criteria": s.exit_criteria}
                 for s in spec.stages.stages
             ),
+            # route_per_option values are ordered stage SEQUENCES now (P1, #30), each on-wire as a
+            # list of stage names; a one-element list is the old single-stage route. This still
+            # rides along unused — build_workflow takes no routing arg (graph.build_workflow) — so
+            # the shape change is invisible to the built graph. S1 (#32) is what starts consuming it.
             "routing": tuple(
                 {"at_stage": p.at_stage, "field_name": p.field_name,
                  "route_per_option": dict(p.route_per_option)}

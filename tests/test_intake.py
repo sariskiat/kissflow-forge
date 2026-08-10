@@ -92,7 +92,7 @@ def _full_spec(*, approved: bool = True) -> AppSpec:
         )),
         routing=Routing(points=(
             DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
-                          route_per_option=(("Yes", "Repair"), ("No", "Return to Customer"))),
+                          route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
         )),
         rework_loops=ReworkLoops(loops=(
             LoopSpec(from_stage="Quality Check", to_stage="Repair", gate_field="Quality Passed",
@@ -541,7 +541,7 @@ def test_check_routing_unknown_at_stage_raises() -> None:
     bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
         DecisionPoint(at_stage="Nonexistent Stage", field_name="Repairable",
                       options=("Yes", "No"),
-                      route_per_option=(("Yes", "Repair"), ("No", "Return to Customer"))),
+                      route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
     )))
     with pytest.raises(ValueError, match="Nonexistent Stage"):
         compile_spec(bad)
@@ -550,8 +550,8 @@ def test_check_routing_unknown_at_stage_raises() -> None:
 def test_check_routing_unknown_target_stage_raises() -> None:
     bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
         DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
-                      route_per_option=(("Yes", "Nonexistent Target"),
-                                        ("No", "Return to Customer"))),
+                      route_per_option=(("Yes", ("Nonexistent Target",)),
+                                        ("No", ("Return to Customer",)))),
     )))
     with pytest.raises(ValueError, match="Nonexistent Target"):
         compile_spec(bad)
@@ -561,7 +561,7 @@ def test_check_routing_unrouted_option_raises() -> None:
     bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
         DecisionPoint(at_stage="Diagnose", field_name="Repairable",
                       options=("Yes", "No", "Maybe Later"),
-                      route_per_option=(("Yes", "Repair"), ("No", "Return to Customer"))),
+                      route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
     )))
     with pytest.raises(ValueError, match="routed options"):
         compile_spec(bad)
@@ -570,9 +570,32 @@ def test_check_routing_unrouted_option_raises() -> None:
 def test_check_routing_literal_not_in_list_raises() -> None:
     bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
         DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "Maybe"),
-                      route_per_option=(("Yes", "Repair"), ("Maybe", "Repair"))),
+                      route_per_option=(("Yes", ("Repair",)), ("Maybe", ("Repair",)))),
     )))
     with pytest.raises(ValueError, match="Maybe"):
+        compile_spec(bad)
+
+
+def test_a_branch_route_may_be_a_sequence_of_stages() -> None:
+    """P1 (#30): route_per_option maps an option to an ORDERED LIST of stages; compile accepts a
+    multi-stage branch as long as every named stage is real (a one-element list is the old
+    single-stage route). Building it as a Parallel is S1 (#32) — here it only has to compile."""
+    spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
+        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
+                      route_per_option=(("Yes", ("Repair", "Quality Check")),
+                                        ("No", ("Return to Customer",)))),
+    )))
+    compile_spec(spec)  # must not raise
+
+
+def test_check_routing_empty_target_sequence_raises() -> None:
+    """A route to an EMPTY sequence names no stage at all — a dead-end the single-stage shape could
+    never express. The list shape makes it possible, so compile must refuse it loudly."""
+    bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
+        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
+                      route_per_option=(("Yes", ()), ("No", ("Return to Customer",)))),
+    )))
+    with pytest.raises(ValueError, match="empty"):
         compile_spec(bad)
 
 

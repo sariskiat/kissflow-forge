@@ -469,9 +469,11 @@ def _process_summary_body(spec: AppSpecLike) -> str:
         items = []
         for rp in routing:
             mapping = dict(rp.route_per_option)
+            # A branch is a stage SEQUENCE now (P1); render it "A → B → C". A one-element route
+            # renders as the bare stage name, exactly as the single-stage shape used to.
             option_lines = "".join(
                 f'<li>&ldquo;{html.escape(option)}&rdquo; &rarr; '
-                f'&ldquo;{html.escape(mapping.get(option, "not yet specified"))}&rdquo;</li>'
+                f'&ldquo;{html.escape(" → ".join(mapping.get(option) or ["not yet specified"]))}&rdquo;</li>'
                 for option in rp.options
             )
             items.append(

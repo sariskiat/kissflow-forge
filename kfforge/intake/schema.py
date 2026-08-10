@@ -205,16 +205,20 @@ class Stages:
 @dataclass(frozen=True)
 class DecisionPoint:
     """A branch point: at `at_stage`, the value of `field_name` decides where the item goes next.
-    `route_per_option` pairs each legal option with the name of the next stage — every option in
+    `route_per_option` pairs each legal option with the ORDERED SEQUENCE of stages that option's
+    branch runs through — a plain linear route is just a one-element sequence. Every option in
     `options` must appear exactly once as a `route_per_option` key (compile.py cross-checks this:
     an unrouted option would otherwise silently dead-end the item, and a route naming an option
-    that was never declared is just as much a bug). Kept as a tuple of pairs, not a dict, per this
-    module's own frozen-collections convention.
+    that was never declared is just as much a bug), and no sequence may be empty (a route naming
+    zero stages is a dead-end compile refuses — see compile.py). A branch is a sequence, not a
+    single next stage (P1, #30): this is the shape every later branch ticket builds on. Kept as a
+    tuple of (option, tuple-of-stages) pairs, not a dict, per this module's own frozen-collections
+    convention.
     """
     at_stage: str
     field_name: str
     options: tuple[str, ...]
-    route_per_option: tuple[tuple[str, str], ...]
+    route_per_option: tuple[tuple[str, tuple[str, ...]], ...]
 
 
 @dataclass(frozen=True)

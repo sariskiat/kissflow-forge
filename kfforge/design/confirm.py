@@ -121,7 +121,8 @@ def _routing_questions(spec: AppSpecLike) -> list[str]:
     for rp in _seq(spec.routing):
         mapping = dict(rp.route_per_option)
         for option in rp.options:
-            target = mapping.get(option, "(ยังไม่ระบุปลายทาง / not yet specified)")
+            route_seq = mapping.get(option)  # a branch is a stage SEQUENCE now (P1); show "A → B → C"
+            target = " → ".join(route_seq) if route_seq else "(ยังไม่ระบุปลายทาง / not yet specified)"
             questions.append(
                 f'ที่ขั้นตอน "{rp.at_stage}" ถ้าฟิลด์ "{rp.field_name}" ตอบว่า "{option}" '
                 f'ระบบจะส่งงานต่อไปที่ "{target}" ใช่หรือไม่? (ยืนยัน / ขอแก้ไข)'
@@ -389,7 +390,10 @@ def _rename_stage(spec: AppSpecLike, old_name: str, new_name: str) -> AppSpecLik
 
     new_routing = []
     for rp in _seq(result.routing):
-        mapping = {k: _swap(v) for k, v in dict(rp.route_per_option).items()}
+        # A route value is a stage SEQUENCE now (P1) — swap the renamed stage inside EACH element,
+        # not the sequence as a whole (a bare _swap(seq) would compare a tuple to a name, never
+        # match, and silently leave a renamed stage stale in every branch it appears in).
+        mapping = {k: tuple(_swap(s) for s in v) for k, v in dict(rp.route_per_option).items()}
         new_routing.append(dataclasses.replace(
             rp, at_stage=_swap(rp.at_stage),
             route_per_option=_mapping_like(rp.route_per_option, mapping),
@@ -473,7 +477,8 @@ def _revise_routing_target(spec: AppSpecLike, at_stage: str, option: str, new_ta
             new_routing.append(rp)
             continue
         matched = True
-        mapping[option] = new_target
+        mapping[option] = (new_target,)  # a route value is a stage SEQUENCE now (P1); this v1
+        # revision grammar still names a single target, so it becomes a one-element sequence.
         new_routing.append(
             dataclasses.replace(rp, route_per_option=_mapping_like(rp.route_per_option, mapping))
         )
