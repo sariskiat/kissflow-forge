@@ -504,6 +504,25 @@ child Field { ..., Model:<table id> }                                          #
   the table's own id lands in `Model::Model` — or the Row exists as a node
   but isn't actually part of the form's layout, no matter how correctly its
   own columns are wired.
+- ⚠️ **CONFIRMED on the live builder oracle: a banner Section and its table host must be
+  ADJACENT in root `Model::Row` — the banner row immediately followed by the table-host row.**
+  `add_table` (graph.py ~592) does `root.setdefault("Model::Row", []).append(host_row)` — it
+  unconditionally APPENDS the host to the END. When a banner Section was created for the table,
+  appending strands the empty banner: other sections fall between it and its table, leaving a
+  standalone empty Section (`Column::Row=[]`, zero fields). The builder then renders
+  "There was an error / Reload" for the WHOLE form — it will not even open. An empty Section is
+  renderable ONLY as a caption directly above its table (the banner→table unit in the golden
+  reference); stranded, it is the render-breaker.
+  - It is NOT the empty `Column::Row: []` key — removing that alone did NOT fix it (verified on
+    the oracle first). The fix that rendered the form: reorder root `Model::Row` so the table host
+    sits immediately after the banner (matches the golden reference).
+  - The semantic comparator never caught this: its section-order check EXCLUDES the table host
+    (`Column{Type:"Model"}`, not a Section), so a misordered host is invisible — the rebuild read
+    as "1 gap" while being completely unrenderable. HTTP 200 + publish + doctor-clean +
+    compare-clean all lied; only the builder UI told the truth.
+  - **Fix owed:** `forge_add_table` needs a placement input (e.g. `after_section: <banner name>`)
+    so `add_table` INSERTS the host after that section's root row instead of appending; and the
+    comparator must diff root `Model::Row` order INCLUDING the table host, not around it.
 
 ## Field events
 
@@ -697,50 +716,22 @@ creates one from nothing, see below).
   turns the generic 500 into a working submit. Both pieces are required
   together: membership with the right `Permission` grants the ability to act
   at all, the assignee Resource is what tells the runtime WHO owns the step.
-- **⚠️ A CORRECTED MECHANISM, re-verified live 2026-08-07 (node G review).** An
-  earlier version of this note claimed an unassigned step's item had NO
-  derivable activity-instance id "so advance/submit can never even derive a
-  live aiid to try, let alone 403." That is WRONG and would send a future
-  agent looking in the wrong place. What is actually true, confirmed by
-  independently re-running the probe:
-  - The activity instance DOES exist and IS exposed — in the create
-    response's own `_activity_instance_id`, and in a `myitems`-style listing's
-    `_activity_id` + `_activity_instance_id`. Nothing about it is missing or
-    unreachable.
-  - Submitting WITH that real id returns `403 KISSFLOW_ERROR_050302`,
-    `"You don't have permission to submit this item anymore."` — a
-    **permission** failure, not a missing-id failure. The cause is the step
-    has no AppRole assignee the API user belongs to (see above: a fresh app
-    has no grantable AppRole at all).
-  - What IS genuinely absent, on an unassigned step, is only the
-    `_current_context[0]._context_activity_instance_id` MIRROR (Item data
-    plane's own documented source for `live_aiid`) — not transient, unchanged
-    across 5 reads 1s apart. `live_aiid()` (dataplane.py) correctly REFUSES to
-    fall back to the create-response/myitems id instead — that fallback is
-    exactly the "myitems consumed-instance" trap this whole module exists to
-    avoid (see Item data plane) — so it reports its own "cannot submit without
-    the live aiid" Err rather than ever reaching a submit call. The 403 above
-    is what a caller sees if it bypasses `live_aiid` and submits with the
-    create-response id directly; `walk`/`advance` never do that, so in
-    practice this pack's own code stops one step earlier, at `live_aiid`'s
-    refusal, for the SAME underlying reason (no AppRole membership).
-
-  ⚠️ **SUPERSEDED 2026-08-07 — the conclusion above, not the facts it was
-  built on.** Everything this bullet observed on 2026-08-06 was real: on THAT
-  app, at THAT time, there was no grantable AppRole anywhere, so a fresh
-  Draft item's context genuinely never carried a live aiid, and stopping at
-  `live_aiid`'s refusal was the only honest thing the code could do. But "the
-  create-response id is the myitems consumed-instance trap, so `walk`/
-  `advance` never use it" is no longer how this pack behaves, and was never
-  quite the right reason even at the time — the create-response id and the
-  myitems-listing id are two DIFFERENT reads (one fresh off `create_item`,
-  never yet consumed; one off a LATER listing, already consumed by that
-  point), not the same trap wearing two names. The two-phase aiid rule (Item
-  data plane) makes that distinction explicit: `usable_aiid` now uses the
-  create-response id as the documented, deliberate first-hop source — the
-  case this bullet's own 403 was symptomatic of (an unassigned step with a
-  membership gap) is now avoidable by granting membership AND an assignee
-  (bullets above), at which point hop 1 succeeds instead of 403ing.
+- ⚠️ **An unassigned step's item still has a derivable activity-instance id**
+  (re-verified live 2026-08-07, node G review) — the create response's own
+  `_activity_instance_id`, and a `myitems`-style listing's `_activity_id` +
+  `_activity_instance_id`. Nothing about it is missing; the only genuinely
+  absent piece is the `_current_context[0]._context_activity_instance_id`
+  MIRROR (confirmed unchanged across 5 reads 1s apart, not transient).
+  `live_aiid()` (dataplane.py) correctly REFUSES to fall back to the
+  create-response/myitems id, reporting its own "cannot submit without the
+  live aiid" Err rather than ever reaching a submit call — so `walk`/
+  `advance` never hit this. A caller that bypasses `live_aiid` and submits
+  with the create-response id directly on a membership-gapped step sees
+  `403 KISSFLOW_ERROR_050302` — a **permission** failure (no AppRole
+  assignee), not a missing-id one; that id is NOT the myitems
+  consumed-instance trap (two different reads — see the two-phase aiid
+  rule under Item data plane). Granting membership AND an assignee
+  (bullets above) avoids the 403 entirely, at which point hop 1 succeeds.
 - A step's assignee is `Resource{ValueType:"AppRole", Value:<role_id>,
   Activity:<id>}`. Writing `ValueType:"User"` instead persists and even
   publishes without error, but the builder appears to simply ignore it at
@@ -886,49 +877,25 @@ DELETE /flow/2/{acct}/application/{id}                          -> 400 KISSFLOW_
 (wrong door). Same archive-then-delete rule as a process. Duplicate `Name` on
 create 400s `KISSFLOW_ERROR_04204 FlowNameAlreadyExists`.
 
-⚠️ **A REFUTED CLAIM, deleted 2026-08-07 (node G review).** This note used to
-say a freshly-created application gets built-in `Admin`/`User` AppRoles
-auto-provisioned, inferred from a `PageAccess` list seen in one archive
-response. Independently re-tested and disproven: a throwaway app's own member
-roster (`GET .../application/{app}/member`) held exactly one entry — the
-creating USER — and zero AppRole entries. `member/batch` against that app with
-`Kind:"AppRole"` and `Name` of `"Admin"`, `"User"`, or `"Member"` each 500s
-`FlowError`. What is actually proven, app-agnostic:
-- A freshly-created (or otherwise fresh) application carries **no grantable
-  AppRole** — there is nothing to `member/batch` a step's assignee onto yet.
-- `member/batch` at the APPLICATION level with an `AppRole` name 500s
-  `FlowError` regardless of which built-in-sounding name is tried.
-- A step assignee written as `Resource{ValueType:"User", Value:<real user
-  id>}` persists and PUBLISHES cleanly (CLAUDE.md elsewhere already notes the
-  builder appears to ignore `ValueType:"User"` at render time) but does NOT
-  confer runtime submit permission either: with a User-typed assignee AND
-  that same user granted via `member/batch` (⚠️ `Permission` must be a
-  **list**, e.g. `["Editable"]` — a bare string is iterated character-by-
-  character and 400s `KISSFLOW_ERROR_04231 UnsupportedPermissionError`,
-  naming each letter as an invalid value), `_current_context[0]` STILL lacked
-  `_context_activity_instance_id` and submit STILL returned `403
-  KISSFLOW_ERROR_050302` on a real live item.
-- There is no API route that creates an AppRole, or adds a user to one — both
-  are builder-UI-only, matching the account-level AppRole list route
-  documented in Members first (that route only ever shows roles a human
-  already made — it does not create anything).
-
-⚠️ **The "structural gap" framing above, narrowed 2026-08-07.** Everything in
-this block still stands exactly as written — the APPLICATION-level
-`member/batch` 500 and the `ValueType:"User"` assignee dead end were both
-independently proven and are untouched here. But "not something a build
-script can work around" turned out to be too broad a conclusion to draw from
-those two dead ends alone. A build script CAN work around it, on a DIFFERENT
-pair of routes from the two tested above: grant membership at the PROCESS
-(flow) level, not the application level (`POST /flow/2/{acct}/process/{flow}
-/member/batch`, `Role: "DataAdmin"`, `Permission: ["InitiateItems"]` — see
-Members first), and wire the assignee as `ValueType:"AppRole"`, not `"User"`.
-Proven live end to end: a real item walked from its start step through every
-user step to completion under exactly that combination. The genuine
-structural gap is narrower than originally stated — there is still no route
-that CREATES an AppRole from nothing, but discovering and re-granting one a
-human already set up for the app (via the account-level list route) is fully
-possible and sufficient for a build script to make an item submittable.
+**No AppRole auto-provisions on a fresh application** — this used to be
+inferred from a `PageAccess` list seen in one archive response;
+independently re-tested and disproven live 2026-08-07 (node G review): a
+throwaway app's own member roster (`GET .../application/{app}/member`) held
+exactly one entry, the creating user, and zero AppRole entries. `member/batch` at the
+application level 500s `FlowError` regardless of which AppRole name is tried
+(`Admin`/`User`/`Member`), and a `ValueType:"User"` assignee persists and
+publishes cleanly but never confers runtime submit permission —
+`_current_context[0]` still lacks `_context_activity_instance_id` and submit
+still returns `403 KISSFLOW_ERROR_050302`, even with that user granted via
+`member/batch` (⚠️ `Permission` must be a **list**, e.g. `["Editable"]` — a
+bare string 400s `KISSFLOW_ERROR_04231 UnsupportedPermissionError`). There is
+still no API route that creates an AppRole or adds a user to one — both are
+builder-UI-only. The workaround: grant membership at the PROCESS level
+instead of the application level (`Role:"DataAdmin"`, `Permission:
+["InitiateItems"]` — see Members first), and wire the assignee as
+`ValueType:"AppRole"`, not `"User"`. Proven live end to end — a real item
+walked from its start step through every user step to completion under
+exactly that combination.
 
 Each page is its own draft/publish unit:
 
@@ -1124,3 +1091,20 @@ exercised a feature looks identical to a sample proving the feature doesn't
 exist. When a belief here gets corrected by a live capture, replace it
 outright and say so, rather than leaving the old belief to mislead the next
 read.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues via the `gh` CLI, inferred from this repo's `origin` remote
+(`sariskiat/kissflow-forge`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default 5 canonical roles, label string equals role name. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` + `docs/adr/` at repo root, already in place.
+See `docs/agents/domain.md`.

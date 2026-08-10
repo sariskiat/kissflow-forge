@@ -40,7 +40,7 @@ SECTION_MARKERS: dict[str, list[str]] = {
     "## Tables": ["nested model", "maxrow", "cannot live inside a section"],
     "## Field events": ["async () =>", "kfsdk", "source field"],
     "## Visibility": ["section-level lever", "precedence between", "renders empty", "required is scoped"],
-    "## Members first": ["member/batch", "zero members", "approle"],
+    "## Members first": ["member/batch", "zero members", "approle", "err rather than ever reaching"],
     "## Write path": ["_meta_version", "snapshot the draft", "archive before deleting", "tokens are not validated"],
     "## Item data plane": ["read back", "aiid trap", "clears nothing"],
     "## Pages": ["raw hex", "viewing as", "only truth surface", "stepmetrics"],
