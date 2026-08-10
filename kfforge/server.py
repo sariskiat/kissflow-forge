@@ -60,12 +60,16 @@ from .client import (
     KfConfig,
     apply_branch_conditions,
     apply_field_events,
+    apply_field_validation,
     apply_fields,
     apply_fields_and_layout,
     apply_goto_gate,
+    apply_layout,
     apply_member_batch,
+    apply_member_roles,
     apply_report_members,
     apply_section_style,
+    apply_sequence_number,
     apply_step_permissions,
     apply_table,
     apply_workflow,
@@ -84,7 +88,7 @@ from .design import (
     schema_diagram_xml,
     spec_digest,
 )
-from .graph import progressive_matrix
+from .graph import progressive_matrix, field_override_matrix
 from .intake.compile import compile_spec
 from .intake.questions import QUESTIONS, next_questions
 from .intake.schema import DIMENSION_NAMES, AppSpec, blank_spec
@@ -274,6 +278,66 @@ def forge_member_batch(
 
 
 @mcp.tool()
+def forge_add_member_roles(
+    target_flow_id: str,
+    roles: dict[str, str],
+    kind: str = "process",
+) -> dict[str, Any]:
+    """LIVE (dev only, KF_APP): grant AppRoles onto `target_flow_id`, CREATING each role scoped to
+    KF_APP first if it does not already exist there. `roles` is `{role_id: display_name}`; matching
+    is by NAME — an existing KF_APP-scoped role with that name is reused (idempotent), else one is
+    created via `POST /app_role/2/{acct}` (proven live 2026-08-08; CORRECTS the old CLAUDE.md claim
+    that only the builder UI creates roles). member/batch rejects any role NOT scoped to KF_APP
+    (KISSFLOW_ERROR_00051), so foreign roles cannot be re-granted directly — they must be recreated
+    here. Grant is Role=DataAdmin, Permission=["InitiateItems"]. Run BEFORE forge_build_workflow.
+    Returns `resolved` = `{display_name: a00_role_id}` so the caller can remap step->name onto
+    step->a00_id for build_workflow's `roles=`/step assignees.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_member_roles(c, target_flow_id, roles, kind=kind))  # type: ignore[arg-type]
+
+
+@mcp.tool()
+def forge_create_app_role(
+    name: str,
+    app_id: str | None = None,
+) -> dict[str, Any]:
+    """LIVE (dev only): create an AppRole scoped to `app_id` (defaults to KF_APP). PROVEN live
+    2026-08-08: `POST /app_role/2/{acct}` body `{"Name": name, "_application_id": app_id}` -> 200
+    `{"_id": "RoDy...", "Name": name}`. A role MUST be scoped to KF_APP before member/batch will
+    bind it onto one of the app's flows (00051 otherwise). For the idempotent create-then-grant
+    path prefer `forge_add_member_roles` (reuses an existing same-name role); this standalone is for
+    explicit one-off creation. Returns the new role `_id`.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    rid = c.create_app_role(name, app_id)
+    if isinstance(rid, Err):
+        return rid.as_tool_result()
+    return {"role_id": rid, "name": name, "app_id": app_id or c._cfg.app_id, "isError": False}
+
+
+@mcp.tool()
+def forge_delete_app_role(role_id: str) -> dict[str, Any]:
+    """LIVE (dev only): delete an AppRole by id. PROVEN live 2026-08-08: `DELETE /app_role/2/{acct}/
+    {role_id}` -> 200 `{"status":"success"}`; re-GET 403s `RoleDoesNotExistsError`, confirming real
+    deletion. Use to clean up throwaway roles from probes/failed builds. Verify deletion via the
+    list route (`forge_list_app_roles`), never the delete response alone (CLAUDE.md Page DELETE
+    warns the same soft-200 trap).
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    res = c.delete_app_role(role_id)
+    if isinstance(res, Err):
+        return res.as_tool_result()
+    return {"role_id": role_id, "deleted": True, "isError": False}
+
+
+@mcp.tool()
 def forge_apply_fields(
     flow_id: str,
     fields: list[dict[str, Any]],
@@ -297,26 +361,106 @@ def forge_apply_fields(
 
 
 @mcp.tool()
+def forge_apply_layout(
+    flow_id: str,
+    layout: dict[str, list[list[list[Any]]]],
+    descriptions: dict[str, str] | None = None,
+    kind: str = "process",
+    publish: bool = False,
+) -> dict[str, Any]:
+    """LIVE write (dev only, KF_APP): re-place every field at EXACT grid coordinates.
+
+    `layout` is `{section_name: [[(field_name, Start, End), ...], ...]}` — one inner list per Row,
+    top-to-bottom; each tuple puts one field column at those 6-unit-grid coordinates. The engine
+    rebuilds only Row nodes (Field/Column ids and their Permission/Event back-refs survive). A
+    field or section named in `layout` but absent from the draft is a hard error, so a stale layout
+    never silently drops a field. Call after forge_apply_fields whenever the auto-tile (3-per-row)
+    is not the desired layout. Always writes (a re-layout is a real change even with no new fields).
+
+    `descriptions` optionally sets each section's `Description` (plain string OR a serialized
+    rich-text doc) in the SAME write — apply it together with the layout, not as a separate call.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    typed = {sec: [[tuple(t) for t in row] for row in rows] for sec, rows in layout.items()}
+    return _result(apply_layout(c, flow_id, typed, descriptions=descriptions,  # type: ignore[arg-type]
+                                publish=publish, kind=kind))
+
+
+@mcp.tool()
 def forge_add_table(
     flow_id: str,
     name: str,
-    columns: list[list[str]],
+    columns: list[list[Any]],
     max_rows: int | None = None,
     allow_import: bool = False,
     kind: str = "process",
     publish: bool = False,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): add a child table (a nested Model hosted by a Column, per
-    CLAUDE.md "A TABLE is a nested Model, not a field type"). `columns` is `[[name, type], ...]`.
-    `max_rows` writes Kissflow's NATIVE row cap (no client-side enforcement needed). Idempotent —
-    a table already named `name` is a no-op (no second PUT).
+    CLAUDE.md "A TABLE is a nested Model, not a field type"). `columns` is `[[name, type], ...]` or
+    `[[name, type, options], ...]` where `options` is an opt-in per-column dict written verbatim onto
+    the Field node (e.g. `{"Decimalpoint": 0}` for an integer-only Number). `max_rows` writes
+    Kissflow's NATIVE row cap (no client-side enforcement needed). Idempotent — a table already named
+    `name` is a no-op (no second PUT).
     """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
-    col_pairs = [(c_name, c_type) for c_name, c_type in columns]
+    col_pairs = [(c[0], c[1], c[2] if len(c) > 2 else None) for c in columns]
     return _result(apply_table(c, kind, flow_id, name, col_pairs, max_rows=max_rows,  # type: ignore[arg-type]
                                allow_import=allow_import, publish=publish))
+
+
+@mcp.tool()
+def forge_add_sequence_number(
+    flow_id: str,
+    field_name: str,
+    section_name: str,
+    prefix: str,
+    padding: str,
+    step_activity_name: str,
+    start: int = 0,
+    end: int = 2,
+    kind: str = "process",
+    publish: bool = False,
+) -> dict[str, Any]:
+    """LIVE write (dev only, KF_APP): add an auto-numbered item-id field (`Type:"SequenceNumber"`)
+    in its own hidden row at the end of `section_name` (CLAUDE.md "SequenceNumber = auto-numbered
+    item id"). The host column is `IsHidden:true` and carries NO per-step Permissions. The
+    `prefix` (e.g. "REQ-") is the literal concatenated onto every stamped number; `padding`
+    (e.g. "0001") zero-pads it; `step_activity_name` (e.g. "Start") is the activity NAME where the
+    runtime stamps the sequence — resolved by name since rebuild activity ids differ from any
+    oracle's. `start`/`end` are the 6-unit grid coords of the hidden column. Idempotent. Call this
+    AFTER forge_apply_layout so the section's rows are already placed.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_sequence_number(c, flow_id, field_name, section_name, prefix, padding,
+                                         step_activity_name, start=start, end=end,
+                                         publish=publish, kind=kind))  # type: ignore[arg-type]
+
+
+@mcp.tool()
+def forge_add_field_validation(
+    flow_id: str,
+    rules: dict[str, list[list[str]]],
+    kind: str = "process",
+    publish: bool = False,
+) -> dict[str, Any]:
+    """LIVE write (dev only, KF_APP): attach per-field validation rules. `rules` is
+    `{field_name: [[operator, value], ...]}`, e.g. `{"meeting link": [["CONTAINS", "microsoft"]]}`.
+    Each rule is a flat Condition (Operator + literal RHSValue) under the field's one Criteria node
+    (CLAUDE.md F7 — no formula/Expression AST, just a Condition per rule). Idempotent on
+    (field, operator, value); a second rule on the same field appends to the existing Criteria.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    norm: dict[str, list[tuple[str, str]]] = {f: [(r[0], r[1]) for r in rs] for f, rs in rules.items()}
+    return _result(apply_field_validation(c, flow_id, norm, publish=publish, kind=kind))  # type: ignore[arg-type]
 
 
 @mcp.tool()
@@ -326,6 +470,7 @@ def forge_build_workflow(
     parallel: dict[str, Any] | None = None,
     parallel_after: int | None = None,
     roles: dict[str, str] | None = None,
+    step_meta: dict[str, dict[str, Any]] | None = None,
     kind: str = "process",
     publish: bool = False,
 ) -> dict[str, Any]:
@@ -334,6 +479,10 @@ def forge_build_workflow(
     a role id to its display name (used to label each step's Resource/assignee). `parallel`, when
     given, is `{"name": <parallel node name>, "branches": [[branch_name, [[step, role], ...]], ...]}`,
     inserted after `parallel_after` (0-indexed into `steps`).
+
+    `step_meta` (opt-in) maps a step NAME to `{"suspended": bool, "description": str}` (either key
+    optional). `suspended` writes `IsSuspended`+`SuspendedAt` — the step is SKIPPED at runtime, the
+    slimming-without-stranding lever (CLAUDE.md "IsSuspended"). `description` is the step's prose.
 
     DESTRUCTIVE: every existing Activity/ProcessDef/Resource/Permission on the flow is replaced
     (CLAUDE.md "build_workflow DELETES every Permission"). Callers MUST re-run
@@ -349,7 +498,7 @@ def forge_build_workflow(
         par = (parallel["name"], branches)
     return _result(apply_workflow(c, flow_id, step_tuples, parallel=par,
                                   parallel_after=parallel_after, roles=roles, publish=publish,
-                                  kind=kind))  # type: ignore[arg-type]
+                                  kind=kind, step_meta=step_meta))  # type: ignore[arg-type]
 
 
 @mcp.tool()
@@ -424,13 +573,22 @@ def forge_set_branch_conditions(
 def forge_set_visibility(
     flow_id: str,
     owners: dict[str, list[str]],
+    field_owners: dict[str, list[str]] | None = None,
     kind: str = "process",
     publish: bool = False,
 ) -> dict[str, Any]:
-    """LIVE write (dev only, KF_APP): rebuild a process's per-step section visibility. `owners`
-    maps a section NAME to the step names that own it — Editable at the steps that own it, Hidden
-    before them, ReadOnly after. DESTRUCTIVE: every existing Permission on the flow is replaced.
-    Re-run this after ANY forge_build_workflow call — build_workflow wipes the whole matrix.
+    """LIVE write (dev only, KF_APP): rebuild a process's per-step visibility. `owners` maps a
+    section NAME to the step names that own it — Editable there, Hidden before, ReadOnly after
+    (section-level). DESTRUCTIVE: every existing Permission on the flow is replaced. Re-run this
+    after ANY forge_build_workflow call — build_workflow wipes the whole matrix.
+
+    `field_owners`, when given, is the FIELD-LEVEL lever some apps use instead of (or on top of)
+    section-level owners: a section that only HIDES, with editability expressed per field. Maps a
+    FIELD NAME to the step names where that one field is Editable; that field gets its own matrix
+    row (Editable at the named steps, Hidden in sibling branches the field is not editable in,
+    ReadOnly elsewhere) overriding its section's default. Fields not named keep their section's
+    matrix. Branch-aware: a branch-private field stays Hidden across a whole sibling branch, not
+    ReadOnly-after-last-editable — the case the section rule alone gets wrong.
     """
     c = _client()
     if isinstance(c, Err):
@@ -440,9 +598,11 @@ def forge_set_visibility(
         return draft.as_tool_result()
     try:
         matrix = progressive_matrix(draft, owners)
+        field_matrix = field_override_matrix(draft, field_owners) if field_owners else None
     except ValueError as e:
         return Err("verify", str(e)).as_tool_result()
-    return _result(apply_step_permissions(c, flow_id, matrix, publish=publish, kind=kind))  # type: ignore[arg-type]
+    return _result(apply_step_permissions(c, flow_id, matrix, publish=publish, kind=kind,
+                                          field_matrix=field_matrix))  # type: ignore[arg-type]
 
 
 @mcp.tool()

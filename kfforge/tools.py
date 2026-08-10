@@ -24,6 +24,7 @@ def _to_spec(d: dict[str, Any]) -> FieldSpec:
         required=bool(d.get("required", False)),
         referred_list=d.get("referred_list"),
         field_id=d.get("field_id"),
+        options=d.get("options"),  # opt-in per-type keys (AllowFormatting/CaptureOnly/…)
     )
 
 

@@ -43,6 +43,66 @@ as evidence of anything beyond "the API accepted the bytes."
   flow's own config payload, its membership, per-node keys you assumed were
   optional, or the UI's own network requests while it loads the broken page.
 
+## Commands
+
+No `.venv` here. Deps arrive per-run via `uv --with` (`requirements.txt` =
+`fastmcp>=3`, `pytest>=8`).
+
+```bash
+# unit + integration — 620 passed, 1.7s (verified 2026-08-07)
+uv run --with pytest --with 'fastmcp>=3' --no-project pytest -q
+
+# one file / one test by name
+uv run --with pytest --with 'fastmcp>=3' --no-project pytest -q tests/test_pages.py
+uv run --with pytest --with 'fastmcp>=3' --no-project pytest -q -k step_permissions
+
+# Robot acceptance — 25 tests, 25 passed (verified 2026-08-07). Uses the GLOBAL
+# RF env, not project deps.
+~/.rf-agent/.venv/bin/robot tests/robot/
+
+# MCP server
+uv run --with 'fastmcp>=3' python -m kfforge.server
+```
+
+**Dropping `--with 'fastmcp>=3'` silently loses ~96 tests.** `test_p2_server.py`
+and `test_p3_surface.py` die at collection with `ModuleNotFoundError: No module
+named 'fastmcp'`, and pytest reports `524 tests collected, 2 errors` — not a
+failure you'd notice if you only read the tail.
+
+`tests/test_engine_doc.py` is a contract test over **this file**: it requires
+every `##` heading listed in its `HEADINGS`, 2–4 marker phrases inside each
+section's own text, and `len(CLAUDE.md) > 8000`. The manual below is mandatory
+by test, not by accident — do not "tidy" it into `docs/`.
+
+## Layout
+
+```
+kfforge/
+  types.py         # frozen structs, closed enums — the typed core
+  graph.py         # pure offline ops on the normalized node-graph
+  expr.py          # Expression/Node AST for branch conditions + GotoTask gates
+  nav.py           # pure offline ops on the app-level navigation graph
+  pages.py         # pure offline ops on the app-PAGE graph
+  verify.py        # health check: every reference that would break the form
+  client.py        # live builder client — THE WRITE PATH (dev tenant only)
+  pages_live.py    # live orchestration for page + navigation graphs
+  dataplane.py     # documented /process API — create an item, fill it, move it
+  engine.py        # offline planning; apply/publish orchestration lands here later
+  tools.py         # framework-agnostic tool logic (dict in / dict out)
+  server.py        # fastmcp MCP server
+  design/          # confirm.py (approval protocol) · diagram.py (draw.io XML) ·
+                   # mockup.py (self-contained HTML for the business owner)
+  intake/          # schema.py (11-dimension AppSpec) · questions.py (grilling
+                   # script) · compile.py (AppSpec → ordered BuildPlan) · serde.py
+shapes/            # 57 captured JSON node shapes — the proven-capture reference
+tests/             # pytest + tests/robot/ (2 suites) + fixtures/
+docs/adr/          # 4 ADRs — locked decisions, don't re-litigate
+CONTEXT.md         # domain glossary
+```
+
+Trunk is `develop`. `CONTEXT.md` and `docs/` are **untracked** — the ADRs are
+not committed yet.
+
 ## Node-graph invariants
 
 The write API enforces almost none of these. It will happily accept a graph

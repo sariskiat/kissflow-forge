@@ -23,9 +23,12 @@ from typing import Any, Literal
 from .expr import build_branch_condition, build_goto_gate, remove_condition
 from .graph import (
     Matrix,
+    add_field_validation,
     add_goto_task,
+    add_sequence_number,
     add_table,
     apply_changes,
+    apply_exact_layout,
     build_workflow,
     ensure_process_def,
     field_names,
@@ -258,15 +261,47 @@ class KfClient:
         return self._json("GET", f"{c.base}/app_role/2/{c.account}/{role_id}")
 
     def post_member_batch(self, kind: FlowKind, flow_id: str, members: list[dict[str, Any]]) -> Any | Err:
-        """CLAUDE.md Permissions: body=[{_id,Name,Kind:"AppRole",Role,Permission}]. Proven live
-        2026-08-06: `Name` is validated against AppRoles that ALREADY exist in the account —
-        `KISSFLOW_ERROR_00051 UserOrGroupDoesNotExistError` ("The AppRole {Name} does not exist in
-        your account") on any name that isn't a real, pre-existing AppRole. There is no API route
-        that CREATES an AppRole — only the builder UI does — so this can only ever re-grant a role
-        harvested from somewhere it already exists (see `apply_member_batch`)."""
+        """CLAUDE.md Permissions: body=[{_id,Name,Kind:"AppRole",Role,Permission}]. `Name` is validated
+        against AppRoles that ALREADY exist in the account — `KISSFLOW_ERROR_00051
+        UserOrGroupDoesNotExistError` ("The AppRole {Name} does not exist in your account") on any
+        name that isn't a real, pre-existing AppRole. The role MUST also be scoped to KF_APP: a role
+        that exists in the account but is scoped to a DIFFERENT app is rejected with the SAME 00051
+        (proven live 2026-08-08: the 4 oracle roles exist account-wide but are scoped to a different
+        app, and member/batch rejects them). So create the role scoped to KF_APP FIRST
+        (`create_app_role`), then grant it here."""  # CORRECTED 2026-08-08: the prior "only the
+        # builder UI creates AppRoles, no API route" note was FALSE — create_app_role below does it.
         c = self._cfg
         return self._json("POST", f"{c.base}/flow/2/{c.account}/{kind}/{flow_id}/member/batch"
                                   f"?_application_id={c.app_id}", members)
+
+    def create_app_role(self, name: str, app_id: str | None = None) -> str | Err:
+        """Create an AppRole in the account, scoped to `app_id` (defaults to KF_APP). PROVEN live
+        2026-08-08: `POST /app_role/2/{acct}` body `{"Name": <name>, "_application_id": <app_id>}`
+        -> 200 `{"_id": "RoDy...", "Name": <name>}`. CORRECTS the long-held CLAUDE.md belief that
+        "no API route creates an AppRole — only the builder UI does" (that was never re-probed after
+        an early 404 sweep; the route is `POST /app_role/2/{acct}`, not any of the `/.../app_role`
+        suffixes that 404). Without `_application_id` the role is created UNSCOPED and member/batch
+        still rejects it (00051) — a role must be scoped to KF_APP to bind onto one of its flows.
+        Idempotent ONLY in the sense that the same Name can exist on multiple role ids; callers that
+        need a stable id should `list_app_roles(app_id)` + match by Name first and reuse an existing
+        one rather than creating a duplicate."""
+        c = self._cfg
+        scope = app_id if app_id is not None else c.app_id
+        got = self._json("POST", f"{c.base}/app_role/2/{c.account}",
+                         {"Name": name, "_application_id": scope})
+        if isinstance(got, Err):
+            return got
+        if isinstance(got, dict) and got.get("_id"):
+            return str(got["_id"])
+        return Err("verify", f"create_app_role({name!r}) returned no _id: {got!r}")
+
+    def delete_app_role(self, role_id: str) -> Any | Err:
+        """Delete an AppRole. PROVEN live 2026-08-08: `DELETE /app_role/2/{acct}/{role_id}` -> 200
+        `{"status":"success"}`; a follow-up GET 403s `KISSFLOW_ERROR_03069 RoleDoesNotExistsError`,
+        confirming real deletion (not a soft 200 like the page-DELETE trap). Use to clean up
+        throwaway roles created during probes."""
+        c = self._cfg
+        return self._json("DELETE", f"{c.base}/app_role/2/{c.account}/{role_id}")
 
     def post_report_member_batch(
         self, flow_id: str, report_id: str, members: list[dict[str, Any]],
@@ -464,6 +499,7 @@ def apply_step_permissions(
     matrix: Matrix,
     publish: bool = False,
     kind: FlowKind = "process",
+    field_matrix: Matrix | None = None,
 ) -> ApplyReport | Err:
     """Rebuild a process's per-step visibility matrix live. GET -> apply offline -> guarded PUT
     -> read-back audit -> optional publish.
@@ -480,7 +516,7 @@ def apply_step_permissions(
     version = draft.get(_META_VERSION)
 
     try:
-        new = set_step_permissions(draft, matrix)
+        new = set_step_permissions(draft, matrix, field_matrix)
     except ValueError as e:
         return Err("verify", f"offline apply rejected the matrix: {e}")
 
@@ -646,6 +682,55 @@ def apply_fields_and_layout(
     )
 
 
+def apply_layout(
+    client: KfClient,
+    flow_id: str,
+    layout: dict[str, list[list[tuple[str, int, int]]]],
+    descriptions: dict[str, str] | None = None,
+    publish: bool = False,
+    kind: FlowKind = "process",
+) -> ApplyReport | Err:
+    """GET draft -> graph.apply_exact_layout (place every field column at its stated grid
+    coordinates, rebuilding Rows; Field/Column ids and their Permission/Event back-refs survive) ->
+    guarded PUT -> read-back verify the section row count matches the spec -> optional publish.
+
+    `descriptions` optionally sets each section's `Description` in the same write. A field or
+    section named in `layout` but absent from the draft is a hard error (the offline
+    `apply_exact_layout` raises before any write), so a stale layout spec never silently drops a
+    field off the form. Always writes: a re-layout is a real change even with no new fields.
+    """
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    version = draft.get(_META_VERSION)
+
+    try:
+        new = apply_exact_layout(draft, layout, descriptions=descriptions)
+    except ValueError as e:
+        return Err("verify", f"offline apply_exact_layout rejected the spec: {e}")
+
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_draft(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+
+    wanted_sections = tuple(layout)
+    published = False
+    if publish:
+        pub = client.publish(kind, flow_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+
+    return ApplyReport(
+        flow_id=flow_id, added=(), skipped=wanted_sections, verified=wanted_sections,
+        missing=(), meta_version=read_back.get(_META_VERSION), published=published,
+    )
+
+
 @dataclass(frozen=True)
 class TableReport:
     """Output-invariant audit for forge_add_table: every requested child column NAME lands in
@@ -673,7 +758,7 @@ def apply_table(
     kind: FlowKind,
     flow_id: str,
     name: str,
-    columns: list[tuple[str, str]],
+    columns: list[tuple[str, str]] | list[tuple[str, str, dict[str, Any] | None]],
     max_rows: int | None = None,
     allow_import: bool = False,
     publish: bool = False,
@@ -686,7 +771,7 @@ def apply_table(
     if isinstance(draft, Err):
         return draft
     version = draft.get(_META_VERSION)
-    wanted_cols = tuple(c for c, _t in columns)
+    wanted_cols = tuple(c[0] for c in columns)
 
     already = any(isinstance(v, dict) and v.get("Type") == "Model" and v.get("Name") == name
                  for v in draft.values())
@@ -768,6 +853,7 @@ def apply_workflow(
     roles: dict[str, str] | None = None,
     publish: bool = False,
     kind: FlowKind = "process",
+    step_meta: dict[str, dict[str, Any]] | None = None,
 ) -> WorkflowReport | Err:
     """GET draft -> graph.build_workflow offline (DESTRUCTIVE: replaces the WHOLE workflow — every
     existing Activity/ProcessDef/Resource/Permission is gone, per CLAUDE.md "build_workflow DELETES
@@ -785,7 +871,7 @@ def apply_workflow(
 
     try:
         new = build_workflow(draft, steps, parallel=parallel, parallel_after=parallel_after,
-                             roles=roles)
+                             roles=roles, step_meta=step_meta)
     except ValueError as e:
         return Err("verify", f"offline build_workflow rejected the spec: {e}")
 
@@ -1250,6 +1336,159 @@ def apply_field_events(
 
 
 @dataclass(frozen=True)
+class SequenceNumberReport:
+    flow_id: str
+    field_name: str
+    section: str
+    verified: bool
+    missing: bool
+    meta_version: str | None
+    published: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "flow_id": self.flow_id, "field_name": self.field_name, "section": self.section,
+            "verified": self.verified, "missing": self.missing,
+            "meta_version": self.meta_version, "published": self.published,
+            "isError": self.missing,
+        }
+
+
+def apply_sequence_number(
+    client: KfClient,
+    flow_id: str,
+    field_name: str,
+    section_name: str,
+    prefix: str,
+    padding: str,
+    step_activity_name: str,
+    start: int = 0,
+    end: int = 2,
+    publish: bool = False,
+    kind: FlowKind = "process",
+) -> SequenceNumberReport | Err:
+    """GET draft -> graph.add_sequence_number offline (resolves the Step-stamp activity by NAME) ->
+    guarded PUT -> read-back verify the SequenceNumber Field + its 3 Property nodes landed ->
+    optional publish.
+    """
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    version = draft.get(_META_VERSION)
+
+    try:
+        new = add_sequence_number(draft, field_name, section_name, prefix, padding,
+                                  step_activity_name, start=start, end=end)
+    except ValueError as e:
+        return Err("verify", f"offline add_sequence_number rejected the spec: {e}")
+
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_draft(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+    fld = next((v for v in read_back.values()
+                if isinstance(v, dict) and v.get("Kind") == "Field"
+                and v.get("Type") == "SequenceNumber" and v.get("Name") == field_name), None)
+    props_ok = bool(fld and len(fld.get("Field::Property") or []) == 3)
+    verified = fld is not None and props_ok
+
+    published = False
+    if publish and verified:
+        pub = client.publish(kind, flow_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+
+    return SequenceNumberReport(flow_id=flow_id, field_name=field_name, section=section_name,
+                                verified=verified, missing=not verified,
+                                meta_version=read_back.get(_META_VERSION), published=published)
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    flow_id: str
+    field_name: str
+    rules: tuple[tuple[str, str], ...]
+    verified: tuple[tuple[str, str], ...]
+    missing: tuple[tuple[str, str], ...]
+    meta_version: str | None
+    published: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "flow_id": self.flow_id, "field_name": self.field_name,
+            "rules": [list(r) for r in self.rules],
+            "verified": [list(r) for r in self.verified],
+            "missing": [list(r) for r in self.missing],
+            "meta_version": self.meta_version, "published": self.published,
+            "isError": bool(self.missing),
+        }
+
+
+def apply_field_validation(
+    client: KfClient,
+    flow_id: str,
+    rules: dict[str, list[tuple[str, str]]],
+    publish: bool = False,
+    kind: FlowKind = "process",
+) -> ValidationReport | Err:
+    """GET draft -> graph.add_field_validation offline (one Condition per (operator, value) rule,
+    reusing the field's existing Criteria) -> guarded PUT -> read-back verify each rule landed ->
+    optional publish. `rules` is `{field_name: [(operator, value), ...]}`.
+    """
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    version = draft.get(_META_VERSION)
+
+    new = draft
+    try:
+        for fname, fl_rules in rules.items():
+            for operator, value in fl_rules:
+                new = add_field_validation(new, fname, operator, value)
+    except ValueError as e:
+        return Err("verify", f"offline add_field_validation rejected the spec: {e}")
+
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_draft(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+    by_name = {v.get("Name"): v for v in read_back.values()
+               if isinstance(v, dict) and v.get("Kind") == "Field"}
+    flat: tuple[tuple[str, str], ...] = tuple((op, val) for _, rs in rules.items() for op, val in rs)
+    verified: list[tuple[str, str]] = []
+    for fname, fl_rules in rules.items():
+        fld = by_name.get(fname, {})
+        live: set[tuple[str, str]] = set()
+        for cid in fld.get("FieldValidation::Criteria") or []:
+            for condid in (read_back.get(cid, {}).get("Criteria::Condition") or []):
+                c = read_back.get(condid, {})
+                if isinstance(c.get("Operator"), str):
+                    live.add((c["Operator"], str(c.get("RHSValue"))))
+        for op, val in fl_rules:
+            if (op, val) in live:
+                verified.append((op, val))
+    missing = tuple(r for r in flat if r not in verified)
+
+    published = False
+    if publish and not missing:
+        pub = client.publish(kind, flow_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+
+    return ValidationReport(flow_id=flow_id, field_name=",".join(rules), rules=flat,
+                            verified=tuple(verified), missing=missing,
+                            meta_version=read_back.get(_META_VERSION), published=published)
+
+
+@dataclass(frozen=True)
 class StyleReport:
     flow_id: str
     sections: tuple[str, ...]
@@ -1415,6 +1654,11 @@ class MemberReport:
                                           # sibling-harvest path's `harvested`/`verified`/`missing`
                                           # already carry the harvested member's `Role` TYPE string
                                           # (e.g. "DataAdmin"), a different thing, unchanged here.
+    resolved: tuple[tuple[str, str], ...] = ()  # (display_name, a00_scoped_role_id) -- the
+                                          # name->id mapping apply_member_roles resolved, so a
+                                          # caller can remap a step->name table onto step->a00_id for
+                                          # build_workflow's `roles=`/step assignees. Empty on the
+                                          # sibling-harvest path (which carries ids in role_ids).
 
     def as_tool_result(self) -> dict[str, Any]:
         return {
@@ -1422,6 +1666,7 @@ class MemberReport:
             "harvested": list(self.harvested), "applied": list(self.applied),
             "verified": list(self.verified), "missing": list(self.missing), "note": self.note,
             "role_ids": list(self.role_ids),
+            "resolved": {name: rid for name, rid in self.resolved},
             "isError": bool(self.missing),
         }
 
@@ -1571,6 +1816,78 @@ def apply_member_batch(
     return MemberReport(
         target_flow_id=target_flow_id, source_flow_id=source_flow_id, harvested=harvested,
         applied=harvested, verified=verified, missing=missing, role_ids=role_ids, note=None,
+    )
+
+
+def apply_member_roles(
+    client: KfClient,
+    target_flow_id: str,
+    roles: dict[str, str],
+    kind: FlowKind = "process",
+) -> MemberReport | Err:
+    """Grant AppRoles onto `target_flow_id`, CREATING each role scoped to KF_APP first if it does
+    not already exist there. `roles` is `{role_id: display_name}` keyed by role id — BUT the real
+    contract is name-driven: a role is matched/created by its display NAME and scoped to KF_APP.
+
+    PROVEN live 2026-08-08: member/batch rejects any role NOT scoped to KF_APP with
+    KISSFLOW_ERROR_00051 (even an account-wide role scoped to a different app), so simply re-granting
+    a foreign role id is impossible. The route that unblocked this: `POST /app_role/2/{acct}`
+    creates an AppRole scoped to KF_APP (CLAUDE.md's old "only the builder UI creates roles" was
+    FALSE — corrected here). So this fn: for each name, reuse an existing KF_APP-scoped role with
+    that name if one exists (idempotent), else create one, then grant all via member/batch.
+
+    Grant is Role=DataAdmin, Permission=["InitiateItems"] (proven live 2026-08-07 as the grant that
+    lets an initiator submit their own draft). `role_ids` in the report carries the KF_APP-scoped
+    ids actually granted, so build_workflow can wire them as step assignees.
+    """
+    # Index existing KF_APP-scoped roles by Name for idempotent reuse.
+    existing = client.list_app_roles(client._cfg.app_id)
+    if isinstance(existing, Err):
+        return existing
+    by_name: dict[str, str] = {r.get("Name"): r.get("_id") for r in existing
+                               if isinstance(r, dict) and r.get("Name") and r.get("_id")}
+
+    resolved: dict[str, str] = {}  # role_id -> display name (all scoped to KF_APP)
+    created: list[str] = []
+    for _rid, name in roles.items():
+        if name in by_name:
+            resolved[by_name[name]] = name
+            continue
+        new_id = client.create_app_role(name)  # scoped to KF_APP by default
+        if isinstance(new_id, Err):
+            return new_id
+        resolved[new_id] = name
+        created.append(f"{name}={new_id}")
+
+    members = [
+        {"_id": rid, "Name": name, "Kind": "AppRole",
+         "Role": _ACCOUNT_GRANT_ROLE, "Permission": list(_ACCOUNT_GRANT_PERMISSION)}
+        for rid, name in resolved.items()
+    ]
+    role_ids = tuple(m["_id"] for m in members)
+    names = tuple(m["Name"] for m in members)
+
+    posted = client.post_member_batch(kind, target_flow_id, members)
+    if isinstance(posted, Err):
+        return posted
+
+    # Read-back via list_app_roles (the flow /member roster lists USERS, not roles — CLAUDE.md
+    # Members — so verify against the account role list instead: the role must exist scoped to
+    # KF_APP, which is the load-bearing condition for a step assignee to bind).
+    read_back = client.list_app_roles(client._cfg.app_id)
+    if isinstance(read_back, Err):
+        return read_back
+    live_ids = {str(r.get("_id")) for r in read_back if isinstance(r, dict)}
+    verified = tuple(r for r in role_ids if r in live_ids)
+    missing = tuple(r for r in role_ids if r not in live_ids)
+
+    note = f"granted {len(members)} KF_APP-scoped AppRole(s): {', '.join(names)}"
+    if created:
+        note += f"; created {len(created)} ({', '.join(created)})"
+    return MemberReport(
+        target_flow_id=target_flow_id, source_flow_id=None, harvested=names, applied=role_ids,
+        verified=verified, missing=missing, role_ids=role_ids,
+        resolved=tuple((name, rid) for rid, name in resolved.items()), note=note,
     )
 
 

@@ -221,11 +221,36 @@ def test_per_type_defaults_match_what_the_builder_writes() -> None:
     by_name = {n["Name"]: n for n in got.values()
                if isinstance(n, dict) and n.get("Kind") == "Field"}
 
-    assert by_name["notes"]["AllowFormatting"] is False
+    # Number carries the builder's own defaults; the oracle has them too.
     assert by_name["amount"]["DefaultValue"] == "0" and by_name["amount"]["Decimalpoint"] == "2"
-    assert by_name["file"]["CaptureOnly"] is False
+    # Textarea AllowFormatting and Attachment CaptureOnly are OPT-IN now: the UI-built oracle
+    # carries neither key on a fresh field, so a default of False was an extra key it did not have.
+    assert "AllowFormatting" not in by_name["notes"]
+    assert "CaptureOnly" not in by_name["file"]
     # a plain Text field gets no type-specific extras
     assert not {"AllowFormatting", "Decimalpoint", "CaptureOnly"} & set(by_name["plain"])
+
+
+def test_field_options_pass_through_verbatim_to_the_node() -> None:
+    """Opt-in per-type keys (AllowFormatting/CaptureOnly) land on the Field node as given.
+
+    The oracle has TWO Textarea populations: plain ones OMIT AllowFormatting, canvas ones carry
+    `AllowFormatting=False`. Default-omit handles the first; opt-in options handle the second.
+    """
+    from kfforge.graph import apply_changes
+    from kfforge.types import FieldSpec, FieldType
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    got = apply_changes(bare, [
+        FieldSpec(name="canvas", type=FieldType.TEXTAREA, options={"AllowFormatting": False}),
+        FieldSpec(name="plain", type=FieldType.TEXTAREA),
+        FieldSpec(name="upload", type=FieldType.ATTACHMENT, options={"CaptureOnly": False}),
+    ])
+    by_name = {n["Name"]: n for n in got.values()
+               if isinstance(n, dict) and n.get("Kind") == "Field"}
+    assert by_name["canvas"]["AllowFormatting"] is False
+    assert "AllowFormatting" not in by_name["plain"]        # default stays omit
+    assert by_name["upload"]["CaptureOnly"] is False
 
 
 def _draft_with_fields(*names: str) -> dict:
@@ -251,6 +276,21 @@ def test_regroup_puts_each_field_in_its_named_section() -> None:
         placed[sec["Name"]] = names
 
     assert placed == {"Step 1": ["a", "b"], "Step 2": ["c", "d"]}
+
+
+def test_regroup_creates_an_empty_banner_section_in_place() -> None:
+    """An empty `names` group is a banner section (header + description, no fields). It must be
+    created (not skipped) and keep its position in `plan`, so a banner placed between two field
+    sections lands between them in Model::Row — learned from the golden FDE-Log banner."""
+    from kfforge.graph import regroup_into_sections
+
+    got = regroup_into_sections(_draft_with_fields("a", "b"),
+                                [("Before", ["a"]), ("Banner", []), ("After", ["b"])])
+    sections = [got[got[t]["Row::Column"][0]]["Name"] for t in got["M1"]["Model::Row"]]
+    assert sections == ["Before", "Banner", "After"], sections
+    banner = got[got[got["M1"]["Model::Row"][1]]["Row::Column"][0]]
+    assert banner["Type"] == "Section" and banner["Name"] == "Banner"
+    assert banner["Column::Row"] == [], "a banner section has no field rows"
 
 
 def test_regroup_never_drops_an_unlisted_field() -> None:
@@ -286,6 +326,79 @@ def test_regroup_still_respects_the_row_grid() -> None:
             assert len(cols) <= ROW_UNITS // FIELD_SPAN
             assert [(c["Start"], c["End"]) for c in cols] == \
                    [(i * FIELD_SPAN, (i + 1) * FIELD_SPAN) for i in range(len(cols))]
+
+
+def test_apply_exact_layout_places_fields_at_stated_coordinates() -> None:
+    """The 'I know where every field goes' API: caller states (Start, End) per field, engine obeys
+    exactly — full-width, half, and a lone right-aligned field (the case auto-tile gets wrong)."""
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a", "b", "c", "d"), [("S", ["a", "b", "c", "d"])])
+    layout = {"S": [
+        [("a", 0, 3), ("b", 3, 6)],   # 2-per-row
+        [("c", 0, 6)],                # full-width
+        [("d", 3, 6)],                 # lone, right-aligned
+    ]}
+    got = apply_exact_layout(base, layout)
+    sec = next(v for v in got.values() if isinstance(v, dict) and v.get("Type") == "Section")
+    col_name = {f["Column"]: f["Name"] for f in got.values()
+                if isinstance(f, dict) and f.get("Kind") == "Field"}
+    rows = [got[r] for r in sec["Column::Row"]]
+    assert len(rows) == 3
+    coords = {col_name[c]: (got[c]["Start"], got[c]["End"])
+              for r in rows for c in r["Row::Column"]}
+    assert coords == {"a": (0, 3), "b": (3, 6), "c": (0, 6), "d": (3, 6)}
+
+
+def test_apply_exact_layout_preserves_field_and_column_ids() -> None:
+    """Like regroup, an exact re-layout must not re-mint ids — Permissions/Events reference them."""
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    before = regroup_into_sections(_draft_with_fields("a", "b"), [("S", ["a", "b"])])
+    ids = {n["Name"]: (n["Id"], n["Column"]) for n in before.values()
+           if isinstance(n, dict) and n.get("Kind") == "Field"}
+    after = apply_exact_layout(before, {"S": [[("a", 0, 3), ("b", 3, 6)]]})
+    ids2 = {n["Name"]: (n["Id"], n["Column"]) for n in after.values()
+            if isinstance(n, dict) and n.get("Kind") == "Field"}
+    assert ids == ids2
+
+
+def test_apply_exact_layout_keeps_unlisted_fields_in_a_trailing_row() -> None:
+    """A partial layout spec never drops a field off the form — leftovers go in a trailing row."""
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a", "b", "c"), [("S", ["a", "b", "c"])])
+    got = apply_exact_layout(base, {"S": [[("a", 0, 6)]]})  # b and c not named
+    sec = next(v for v in got.values() if isinstance(v, dict) and v.get("Type") == "Section")
+    col_name = {f["Column"]: f["Name"] for f in got.values()
+                if isinstance(f, dict) and f.get("Kind") == "Field"}
+    rows = [got[r] for r in sec["Column::Row"]]
+    assert len(rows) == 2                       # the named row + the trailing leftover row
+    leftover_names = [col_name[c] for c in rows[1]["Row::Column"]]
+    assert sorted(leftover_names) == ["b", "c"]
+
+
+def test_apply_exact_layout_raises_on_a_field_not_in_the_draft() -> None:
+    """Fail loud: a stale layout naming a deleted field must not silently drop it."""
+    import pytest
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a"), [("S", ["a"])])
+    with pytest.raises(ValueError, match="ghost"):
+        apply_exact_layout(base, {"S": [[("ghost", 0, 6)]]})
+
+
+def test_apply_exact_layout_sets_section_descriptions() -> None:
+    """`descriptions` lands a plain string OR a serialized rich-text doc on the section, same write
+    as the row rebuild (the builder writes the latter for formatted text; both coexist live)."""
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a"), [("S", ["a"])])
+    rich = '[{"type":"paragraph","nodes":[{"type":"bold"}]}]'
+    got = apply_exact_layout(base, {"S": [[("a", 0, 6)]]},
+                             descriptions={"S": rich})
+    sec = next(v for v in got.values() if isinstance(v, dict) and v.get("Type") == "Section")
+    assert sec["Description"] == rich
 
 
 def test_build_workflow_sweeps_dangling_permission_backrefs() -> None:
@@ -614,3 +727,203 @@ def test_add_goto_task_can_pair_with_build_goto_gate_and_reads_clean() -> None:
 
     gated = build_goto_gate(with_goto, goto_activity_id=goto_id, field_id=field_id)
     assert doctor(gated).ok(), doctor(gated).problems
+
+
+def test_field_override_matrix_branch_aware_per_step_rule() -> None:
+    """The per-FIELD matrix's branch-aware rule, in one fixture (2 root steps + 2-branch Parallel +
+    End). A header field (root-owned, no tail edit) is ReadOnly through the branches; a verdict
+    field (root-owned, editable at the tail End) is Hidden through the branch detour; a branch-
+    private field is Hidden on the sibling branch and ReadOnly at the tail. This is the load-
+    bearing rule a plain editable-list + the section lever gets wrong — the only check left
+    behind for this non-trivial logic."""
+    from kfforge.graph import apply_changes, field_override_matrix
+    from kfforge.types import FieldSpec, FieldType, Visibility
+
+    draft, _root_pd_id, _branch_a_pd_id, _branch_b_pd_id = _process_with_parallel_branches()
+    draft = apply_changes(draft, [
+        FieldSpec(name="Header", type=FieldType.TEXT),
+        FieldSpec(name="Verdict", type=FieldType.TEXT),
+        FieldSpec(name="A-only", type=FieldType.TEXT),
+    ])
+
+    m = field_override_matrix(draft, {
+        "Header": ["Start"],       # root-owned, no tail edit
+        "Verdict": ["End"],         # root-owned, editable at tail -> has_tail
+        "A-only": ["A1", "A2"],     # branch A only
+    })
+
+    def row(fnm: str) -> dict:
+        return {draft[a].get("Name"): m[fnm][a] for a in m[fnm]}
+
+    E, R, H = Visibility.EDITABLE, Visibility.READONLY, Visibility.HIDDEN
+    # header: Editable at Start, ReadOnly everywhere else, including both branches
+    assert row("Header") == {"Start": E, "Root Step 1": R, "Root Step 2": R,
+                             "A1": R, "A2": R, "B1": R, "B2": R, "End": R}
+    # verdict: Hidden everywhere except Editable at End (a tail edit hides the branch detour)
+    assert row("Verdict") == {"Start": H, "Root Step 1": H, "Root Step 2": H,
+                              "A1": H, "A2": H, "B1": H, "B2": H, "End": E}
+    # A-only: Editable in branch A, Hidden on sibling B and pre-branch root, ReadOnly at the tail
+    assert row("A-only") == {"Start": H, "Root Step 1": H, "Root Step 2": H,
+                              "A1": E, "A2": E, "B1": H, "B2": H, "End": R}
+
+
+def test_field_override_matrix_empty_list_is_readonly_everywhere() -> None:
+    from kfforge.graph import apply_changes, field_override_matrix
+    from kfforge.types import FieldSpec, FieldType, Visibility
+
+    draft, _root, _a, _b = _process_with_parallel_branches()
+    draft = apply_changes(draft, [FieldSpec(name="Stamp", type=FieldType.TEXT)])
+    m = field_override_matrix(draft, {"Stamp": []})
+    assert set(m["Stamp"].values()) == {Visibility.READONLY}
+
+
+def test_add_table_per_column_options_override_type_defaults() -> None:
+    """A table column may carry opt-in options written verbatim (e.g. an integer-only Number
+    with Decimalpoint=0, overriding the Number default of "2"). A bare 2-tuple column keeps
+    the type default."""
+    from kfforge.graph import add_table
+    from kfforge.types import FieldType
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    got = add_table(bare, "Log", [
+        ("Round", FieldType.NUMBER, {"Decimalpoint": 0}),
+        ("Hours", FieldType.NUMBER),  # bare 2-tuple -> default Decimalpoint "2"
+    ])
+    cols = {n["Name"]: n for n in got.values()
+            if isinstance(n, dict) and n.get("Kind") == "Field"}
+    assert cols["Round"]["Decimalpoint"] == 0       # opt-in overrides the "2" default
+    assert cols["Hours"]["Decimalpoint"] == "2"     # default survives untouched
+
+
+def test_build_workflow_step_meta_writes_suspended_and_description() -> None:
+    """step_meta writes IsSuspended+SuspendedAt and Description on the named step; a step not in
+    meta gets neither; Start/EndEvent are untouched."""
+    from kfforge.graph import build_workflow
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Process"}}
+    got = build_workflow(
+        bare, [("Log it", None), ("Queue", None), ("Decide", None)],
+        step_meta={
+            "Log it": {"description": "Log the request and who is asking.", "suspended": True},
+            "Decide": {"description": "Pick the service level for this case."},
+        },
+    )
+    acts = {n["Name"]: n for n in got.values()
+            if isinstance(n, dict) and n.get("Kind") == "Activity" and "Name" in n}
+    assert acts["Log it"]["IsSuspended"] is True
+    assert "SuspendedAt" in acts["Log it"]
+    assert acts["Log it"]["Description"] == "Log the request and who is asking."
+    assert acts["Decide"]["Description"] == "Pick the service level for this case."
+    assert "IsSuspended" not in acts["Queue"]            # meta absent -> no flag
+    assert "Description" not in acts["Queue"]
+    assert "IsSuspended" not in acts["Start"]            # Start/End never flagged
+    assert "Description" not in acts["End"]
+
+
+def test_add_sequence_number_builds_field_props_expression_and_hidden_column() -> None:
+    """add_sequence_number creates the SequenceNumber Field + hidden Column + own Row + 3
+    Property nodes (Padding/Step/PrefixExpression) + Expression + 2 Nodes, stamps the Step at the
+    activity resolved by name, and appends the row to the named section. Idempotent."""
+    from kfforge.graph import add_sequence_number, apply_changes, build_workflow, regroup_into_sections
+    from kfforge.types import FieldSpec, FieldType
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Process"}}
+    d = apply_changes(bare, [FieldSpec(name="a", type=FieldType.TEXT)])
+    d = regroup_into_sections(d, [("S", ["a"])])
+    d = build_workflow(d, [("Log it", None)])
+    got = add_sequence_number(d, "running number", "S", "PRE-", "0001", "Start", 0, 2)
+
+    start_id = next(n["Id"] for n in got.values()
+                   if isinstance(n, dict) and n.get("Kind") == "Activity" and n.get("Name") == "Start")
+    fld = next(n for n in got.values()
+               if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Type") == "SequenceNumber")
+    assert fld["Name"] == "running number"
+    assert fld["Model"] == "M1"
+    assert fld["Id"] in got["M1"].get("Model::Field", [])
+    assert len(fld["Field::Property"]) == 3
+
+    col = got[fld["Column"]]
+    assert col["IsHidden"] is True
+    assert (col["Start"], col["End"]) == (0, 2)
+
+    # the section's last row is the sequence-number row, alone
+    sec = next(v for v in got.values()
+               if isinstance(v, dict) and v.get("Kind") == "Column" and v.get("Type") == "Section"
+               and v.get("Name") == "S")
+    last_row = got[sec["Column::Row"][-1]]
+    assert last_row["Row::Column"] == [col["Id"]]
+
+    props = {got[pid]["Name"]: got[pid] for pid in fld["Field::Property"]}
+    assert props["Padding"]["Value"] == "0001"
+    assert props["Step"]["Value"] == start_id                       # resolved by NAME
+    expr_id = props["PrefixExpression"]["Property::Expression"][0]
+    expr = got[expr_id]
+    assert expr["ExpressionStr"] == 'concatenate("PRE-")'
+    root_node = expr["Expression::Node"][0]
+    assert got[root_node]["Value"] == "concatenate"
+    lit_node = got[root_node]["Node::Node"][0]
+    assert got[lit_node]["Value"] == "PRE-"
+
+    # idempotent: a second add does not duplicate the field
+    again = add_sequence_number(got, "running number", "S", "PRE-", "0001", "Start", 0, 2)
+    seqs = [n for n in again.values()
+            if isinstance(n, dict) and n.get("Type") == "SequenceNumber"]
+    assert len(seqs) == 1
+
+
+def test_add_sequence_number_raises_on_missing_section_and_activity() -> None:
+    from kfforge.graph import add_sequence_number, apply_changes, build_workflow, regroup_into_sections
+    from kfforge.types import FieldSpec, FieldType
+    import pytest
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Process"}}
+    d = apply_changes(bare, [FieldSpec(name="a", type=FieldType.TEXT)])
+    d = regroup_into_sections(d, [("S", ["a"])])
+    d = build_workflow(d, [("Log it", None)])
+    with pytest.raises(ValueError, match="section"):
+        add_sequence_number(d, "rn", "Nope", "P-", "0001", "Start")
+    with pytest.raises(ValueError, match="activity"):
+        add_sequence_number(d, "rn", "S", "P-", "0001", "Nope")
+
+
+def test_add_field_validation_builds_criteria_and_condition() -> None:
+    """add_field_validation writes Field --FieldValidation::Criteria--> Criteria
+    --Criteria::Condition--> Condition{Operator, RHSValue}; idempotent; a second rule appends."""
+    from kfforge.graph import add_field_validation, apply_changes
+    from kfforge.types import FieldSpec, FieldType
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    d = apply_changes(bare, [FieldSpec(name="meeting link", type=FieldType.TEXT)])
+    got = add_field_validation(d, "meeting link", "CONTAINS", "microsoft")
+    fld = next(n for n in got.values()
+               if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Name") == "meeting link")
+    assert len(fld["FieldValidation::Criteria"]) == 1
+    crit = got[fld["FieldValidation::Criteria"][0]]
+    assert crit["FieldValidation"] == fld["Id"]
+    assert len(crit["Criteria::Condition"]) == 1
+    cond = got[crit["Criteria::Condition"][0]]
+    assert cond["Operator"] == "CONTAINS"
+    assert cond["RHSValue"] == "microsoft"
+    assert cond["HasArguments"] is True
+
+    # idempotent: same rule twice does not duplicate
+    again = add_field_validation(got, "meeting link", "CONTAINS", "microsoft")
+    acrit = again[fld["FieldValidation::Criteria"][0]]
+    assert len(acrit["Criteria::Condition"]) == 1
+
+    # a second distinct rule appends a Condition to the SAME Criteria
+    more = add_field_validation(got, "meeting link", "MAX_LENGTH", "200")
+    mcrit = more[fld["FieldValidation::Criteria"][0]]
+    assert len(mcrit["Criteria::Condition"]) == 2
+    ops = {more[cid]["Operator"] for cid in mcrit["Criteria::Condition"]}
+    assert ops == {"CONTAINS", "MAX_LENGTH"}
+
+
+def test_add_field_validation_raises_on_missing_field() -> None:
+    from kfforge.graph import add_field_validation, apply_changes
+    from kfforge.types import FieldSpec, FieldType
+    import pytest
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    d = apply_changes(bare, [FieldSpec(name="a", type=FieldType.TEXT)])
+    with pytest.raises(ValueError, match="field not found"):
+        add_field_validation(d, "nope", "CONTAINS", "x")

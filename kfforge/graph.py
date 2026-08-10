@@ -169,12 +169,18 @@ def _now() -> str:
 
 
 # Per-type keys the builder writes on every field it creates. Captured by diffing an API-built
-# process against a UI-built COPY of the same process (2026-08-03). Omitting them left fields that
-# the API accepted and published but the builder would not render.
+# process against a UI-built COPY of the same process (2026-08-03).
+#
+# CORRECTED BELIEF (2026-08-08, vs the parity oracle): Textarea `AllowFormatting` and Attachment
+# `CaptureOnly` were originally listed here as `False`, on the claim that omitting them left fields
+# the builder would not render. A UI-built oracle process carries NEITHER key on its Textareas or
+# its Attachment and renders fine — so neither is required for rendering, and a fresh builder-made
+# field simply omits them. Setting them to `False` is an EXTRA key the oracle does not have, so it
+# is now opt-in (FieldSpec.options, e.g. `AllowFormatting=true`), not a default. Same one-sample-
+# not-universal trap as the styling/section-lever beliefs. Number's `DefaultValue`/`Decimalpoint`
+# the oracle DOES carry, so they stay.
 _TYPE_DEFAULTS: dict[str, dict[str, Any]] = {
-    "Textarea": {"AllowFormatting": False},
     "Number": {"DefaultValue": "0", "Decimalpoint": "2"},
-    "Attachment": {"CaptureOnly": False},
 }
 
 
@@ -216,8 +222,10 @@ def regroup_into_sections(draft: Draft, groups: list[tuple[str, list[str]]]) -> 
     top_rows: list[str] = []
     per_row = ROW_UNITS // FIELD_SPAN
     for s_i, (title, names) in enumerate(plan):
-        if not names:
-            continue
+        # an empty `names` is a BANNER section (header + description, no fields). Create it
+        # with Column::Row: [] rather than skipping — the caller asked for the section to exist,
+        # and its position in `plan` preserves the requested display order. Learned from the
+        # golden FDE-Log banner: an empty Section sibling to a table host, not wrapping it.
         top = _new_id("Row", model_id, 2000 + s_i, title)
         sec = _new_id("Column", model_id, 2000 + s_i, title)
         new[top] = {"Id": top, "Kind": "Row", "Model": model_id, "Row::Column": [sec]}
@@ -238,6 +246,94 @@ def regroup_into_sections(draft: Draft, groups: list[tuple[str, list[str]]]) -> 
             new[row]["Row::Column"].append(col_id)
 
     model["Model::Row"] = top_rows
+    return new
+
+
+def apply_exact_layout(
+    draft: Draft,
+    layout: dict[str, list[list[tuple[str, int, int]]]],
+    descriptions: dict[str, str] | None = None,
+) -> Draft:
+    """Rebuild each named section's rows to an EXACT per-field grid layout.
+
+    `layout` is `{section_name: [[(field_name, Start, End), ...], ...]}` — one inner list per Row,
+    in top-to-bottom order, each tuple placing one field column at explicit grid coordinates on
+    the 6-unit row. This is the "I know where every field goes" API: the caller states the layout
+    and the engine places columns at those coordinates instead of auto-tiling by type.
+
+    `descriptions` optionally sets each section's `Description` (plain string OR a serialized
+    rich-text doc — the builder writes the latter for formatted text; both coexist live). It is
+    applied only to sections named in `layout`, alongside the row rebuild, in the same write.
+
+    Only Row nodes (and the column Start/End/Row back-refs) are rebuilt; Field and Column ids are
+    preserved, so `Column::Permission`, `Field::Event` and `Field::Node` survive untouched. A field
+    named in the layout but absent from the draft, or a section that does not exist, raises — fail
+    loud rather than silently drop a field off the form. Fields NOT named in their section's layout
+    are left in place after the rebuilt rows (trailing row), so nothing is ever dropped.
+
+    Pure: returns a new draft.
+    """
+    new: Draft = copy.deepcopy(draft)
+    model_id = _model_id(new)
+
+    # field name -> its column id (root-model fields only; table children tile their own grid)
+    col_of: dict[str, str] = {}
+    for node in new.values():
+        if isinstance(node, dict) and node.get("Kind") == "Field" and node.get("Model") == model_id:
+            col = node.get("Column")
+            if isinstance(col, str):
+                col_of[node.get("Name", "")] = col
+
+    sections = {v.get("Name", ""): sid for sid, v in new.items()
+                if isinstance(v, dict) and v.get("Kind") == "Column" and v.get("Type") == "Section"}
+
+    for title, rows_spec in layout.items():
+        if title not in sections:
+            raise ValueError(f"layout names a section that does not exist: {title!r}")
+        sid = sections[title]
+        sec = new[sid]
+
+        # which columns already live in this section? keep their ids so we can spot leftovers
+        before_cols: set[str] = set()
+        for rid in sec.get("Column::Row") or []:
+            before_cols.update((new.get(rid) or {}).get("Row::Column") or [])
+            new.pop(rid, None)  # drop old rows; columns are preserved
+
+        placed: set[str] = set()
+        new_rows: list[str] = []
+        for ri, row in enumerate(rows_spec):
+            if not row:
+                continue
+            rid = _new_id("Row", sid, 5000 + ri, title)
+            new[rid] = {"Id": rid, "Kind": "Row", "Column": sid, "Row::Column": []}
+            for fname, start, end in row:
+                if fname not in col_of:
+                    raise ValueError(f"layout places a field not in the draft: {fname!r} @ {title!r}")
+                cid = col_of[fname]
+                new[cid].update({"Row": rid, "Start": start, "End": end})
+                new[rid]["Row::Column"].append(cid)
+                placed.add(cid)
+            new_rows.append(rid)
+
+        # any column that was in this section but not named in the layout goes in a trailing row,
+        # so a partial layout spec never silently drops a field off the form.
+        leftover = [c for c in before_cols if c not in placed]
+        if leftover:
+            rid = _new_id("Row", sid, 5900, title)
+            new[rid] = {"Id": rid, "Kind": "Row", "Column": sid, "Row::Column": []}
+            start = 0
+            for j, cid in enumerate(leftover):
+                end = ROW_UNITS if j == len(leftover) - 1 else start + FIELD_SPAN
+                new[cid].update({"Row": rid, "Start": start, "End": end})
+                new[rid]["Row::Column"].append(cid)
+                start = end
+            new_rows.append(rid)
+
+        sec["Column::Row"] = new_rows
+
+        if descriptions and title in descriptions:
+            sec["Description"] = descriptions[title]
+
     return new
 
 
@@ -428,7 +524,7 @@ def delete_nodes(draft: Draft, fields: tuple[str, ...] = (), tables: tuple[str, 
 def add_table(
     draft: Draft,
     name: str,
-    columns: list[tuple[str, FieldType | str]],
+    columns: list[tuple[str, FieldType | str]] | list[tuple[str, FieldType | str, dict[str, Any] | None]],
     max_rows: int | None = None,
     allow_import: bool = False,
 ) -> Draft:
@@ -469,7 +565,10 @@ def add_table(
 
     child_cols: list[str] = []
     child_fields: list[str] = []
-    for i, (col_name, col_type) in enumerate(columns):
+    for i, col in enumerate(columns):
+        col_name = col[0]
+        col_type = col[1]
+        col_opts = col[2] if len(col) > 2 else None
         ft = FieldType(col_type) if not isinstance(col_type, FieldType) else col_type
         cid = _new_id("Column", table_id, i, col_name)
         fid = _new_id("Field", table_id, i, col_name)
@@ -478,6 +577,8 @@ def add_table(
         field: dict[str, Any] = {"Id": fid, "Kind": "Field", "Type": ft.value, "CreatedAt": _now(),
                                  "Model": table_id, "Name": col_name, "Column": cid}
         field.update(_TYPE_DEFAULTS.get(ft.value, {}))
+        if col_opts:
+            field.update(col_opts)  # opt-in per-column keys (Decimalpoint, CaptureOnly, ...), verbatim
         new[fid] = field
         child_cols.append(cid)
         child_fields.append(fid)
@@ -489,6 +590,141 @@ def add_table(
 
     root.setdefault("Model::Model", []).append(table_id)
     root.setdefault("Model::Row", []).append(host_row)
+    return new
+
+
+def add_sequence_number(
+    draft: Draft,
+    field_name: str,
+    section_name: str,
+    prefix: str,
+    padding: str,
+    step_activity_name: str,
+    start: int = 0,
+    end: int = FIELD_SPAN,
+) -> Draft:
+    """Add an auto-numbered item-id field (`Type:"SequenceNumber"`) in its own hidden row at the
+    end of a named section. Pure. No-op if a SequenceNumber field of that name already exists.
+
+    Captured from a UI-built oracle (CLAUDE.md "SequenceNumber = auto-numbered item id"). The node
+    tree is NOT just a Field — it carries three Property nodes the runtime stamps:
+
+        Field{Type:"SequenceNumber", Model:<root>, Column:<hidden col>, Field::Property:[3]}
+          Property{Name:"Padding",          ValueType:"Value",      Value:<padding>}        # e.g. "0001"
+          Property{Name:"Step",             ValueType:"Value",      Value:<activity id>}    # stamped here
+          Property{Name:"PrefixExpression",  ValueType:"Expression", Property::Expression:[expr]}
+            Expression{ExpressionStr:'concatenate("<prefix>")', Property:<prop>, Expression::Node:[root]}
+              Node{Type:"Function", Value:"concatenate", Node::Node:[literal], DataType/Category:"String"}
+              Node{Type:"Static",  Value:<prefix>, Node:<root>, DataType:"String"}
+
+    The host `Column` is `IsHidden:true` and the builder writes NO Permissions for it (hidden
+    columns have no per-step visibility). The Step stamp's target activity is resolved by NAME
+    (`step_activity_name`) since the rebuild's activity ids differ from any oracle's. Call this
+    AFTER `apply_exact_layout` so the section's rows are already placed; the new row is appended.
+    """
+    new: Draft = copy.deepcopy(draft)
+    model_id = _model_id(new)
+    model = new[model_id]
+
+    if any(isinstance(v, dict) and v.get("Type") == "SequenceNumber" and v.get("Name") == field_name
+           for v in new.values()):
+        return new                                   # idempotent
+
+    sections = {v.get("Name", ""): sid for sid, v in new.items()
+                if isinstance(v, dict) and v.get("Kind") == "Column" and v.get("Type") == "Section"}
+    if section_name not in sections:
+        raise ValueError(f"add_sequence_number: section not found: {section_name!r}")
+    sid = sections[section_name]
+
+    act_id = next((v.get("Id") for v in new.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Activity"
+                   and v.get("Name") == step_activity_name), None)
+    if not act_id:
+        raise ValueError(f"add_sequence_number: activity not found: {step_activity_name!r}")
+
+    fid = _new_id("Field", model_id, 0, field_name)
+    cid = _new_id("Column", model_id, 0, field_name)
+    rid = _new_id("Row", sid, 6000, field_name)
+    pad_id = _new_id("Property", model_id, 1, field_name)
+    pre_id = _new_id("Property", model_id, 2, field_name)
+    step_id = _new_id("Property", model_id, 3, field_name)
+    expr_id = _new_id("Expression", model_id, 0, field_name)
+    root_node = _new_id("Node", model_id, 0, field_name)
+    lit_node = _new_id("Node", model_id, 1, field_name)
+
+    new[rid] = {"Id": rid, "Kind": "Row", "Column": sid, "Row::Column": [cid]}
+    new[sid]["Column::Row"] = (new[sid].get("Column::Row") or []) + [rid]
+
+    new[cid] = {"Id": cid, "Kind": "Column", "Type": "Field", "Start": start, "End": end,
+                "Row": rid, "IsHidden": True, "Column::Field": [fid]}
+
+    new[fid] = {"Id": fid, "Kind": "Field", "Type": "SequenceNumber", "CreatedAt": _now(),
+                "Model": model_id, "Name": field_name, "Column": cid,
+                "Field::Property": [pad_id, pre_id, step_id]}
+    model.setdefault("Model::Field", []).append(fid)
+
+    new[pad_id] = {"Id": pad_id, "Kind": "Property", "Name": "Padding", "Field": fid,
+                   "Value": padding, "ValueType": "Value"}
+    new[pre_id] = {"Id": pre_id, "Kind": "Property", "Name": "PrefixExpression", "Field": fid,
+                   "ValueType": "Expression", "Property::Expression": [expr_id]}
+    new[step_id] = {"Id": step_id, "Kind": "Property", "Name": "Step", "Field": fid,
+                    "Value": act_id, "ValueType": "Value"}
+
+    new[expr_id] = {"Id": expr_id, "Kind": "Expression",
+                    "ExpressionStr": f'concatenate("{prefix}")', "Property": pre_id,
+                    "Expression::Node": [root_node]}
+    new[root_node] = {"Id": root_node, "Kind": "Node", "Type": "Function", "Value": "concatenate",
+                      "Expression": expr_id, "Node::Node": [lit_node],
+                      "DataType": "String", "Category": "String"}
+    new[lit_node] = {"Id": lit_node, "Kind": "Node", "Type": "Static", "Value": prefix,
+                     "DataType": "String", "Node": root_node}
+    return new
+
+
+def add_field_validation(
+    draft: Draft,
+    field_name: str,
+    operator: str,
+    value: str,
+    rhs_type: str = "Value",
+) -> Draft:
+    """Attach a per-field validation rule. Pure. Idempotent on (field_name, operator, value).
+
+    Kissflow has no formula type; a per-field validation is a flat Condition tree (captured from a
+    UI-built oracle, CLAUDE.md F7), NOT an Expression/Node AST:
+
+        Field --FieldValidation::Criteria--> Criteria{FieldValidation:<fid>, Criteria::Condition:[...]}
+          Condition{Operator, HasArguments:true, Criteria:<cid>, RHSType:"Value", RHSValue:<literal>}
+
+    One Criteria per field (the builder writes one); each rule is one Condition under it. A second
+    rule on the same field appends a Condition to the existing Criteria. `operator` is e.g.
+    "CONTAINS" / "MAX_LENGTH"; `value` is the literal (a string); `rhs_type` defaults to "Value".
+    """
+    new: Draft = copy.deepcopy(draft)
+    model_id = _model_id(new)
+    fld = next((v for v in new.values()
+                if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == field_name), None)
+    if not fld:
+        raise ValueError(f"add_field_validation: field not found: {field_name!r}")
+    fid = fld["Id"]
+
+    for cid in fld.get("FieldValidation::Criteria") or []:
+        for condid in (new.get(cid, {}).get("Criteria::Condition") or []):
+            c = new.get(condid, {})
+            if c.get("Operator") == operator and str(c.get("RHSValue")) == str(value):
+                return new                                   # idempotent
+
+    existing = fld.get("FieldValidation::Criteria") or []
+    if existing:
+        cid = existing[0]
+    else:
+        cid = _new_id("Criteria", model_id, 0, field_name)
+        new[cid] = {"Id": cid, "Kind": "Criteria", "FieldValidation": fid, "Criteria::Condition": []}
+        fld["FieldValidation::Criteria"] = [cid]
+    cond_id = _new_id("Condition", model_id, len(new[cid].get("Criteria::Condition", [])), field_name)
+    new[cond_id] = {"Id": cond_id, "Kind": "Condition", "Operator": operator, "HasArguments": True,
+                    "Criteria": cid, "RHSType": rhs_type, "RHSValue": value}
+    new[cid]["Criteria::Condition"] = (new[cid].get("Criteria::Condition") or []) + [cond_id]
     return new
 
 
@@ -625,6 +861,7 @@ def build_workflow(
     parallel: tuple[str, list[Branch]] | None = None,
     parallel_after: int | None = None,
     roles: dict[str, str] | None = None,
+    step_meta: dict[str, dict[str, Any]] | None = None,
 ) -> Draft:
     """Replace the whole workflow: Start -> steps -> [Parallel branches] -> ... -> End.
 
@@ -641,6 +878,7 @@ def build_workflow(
     model_id = _model_id(new)
     model = new[model_id]
     roles = roles or {}
+    step_meta = step_meta or {}
 
     for nid in [k for k, v in new.items() if isinstance(v, dict)
                 and v.get("Kind") in ("Activity", "ProcessDef", "Resource", "Permission")]:
@@ -660,6 +898,16 @@ def build_workflow(
             new[rid] = {"Id": rid, "Kind": "Resource", "ValueType": "AppRole", "Value": role,
                         "DisplayValue": roles.get(role, role), "Activity": aid}
             node["Activity::Resource"] = [rid]
+        # opt-in per-step metadata: `suspended` writes IsSuspended+SuspendedAt (the step is
+        # SKIPPED at runtime, CLAUDE.md "IsSuspended = the step is SKIPPED"); `description` is the
+        # step's prose. Start/EndEvent carry neither, so meta absent for them = no-op.
+        meta = step_meta.get(name)
+        if meta:
+            if meta.get("suspended"):
+                node["IsSuspended"] = True
+                node["SuspendedAt"] = _now()
+            if meta.get("description"):
+                node["Description"] = meta["description"]
         new[aid] = node
         return aid
 
@@ -803,8 +1051,9 @@ def add_goto_task(
 Matrix = dict[str, dict[str, Visibility]]        # section name -> activity id -> visibility
 
 # The builder writes no Permission for these; the oracle has none on either. A Parallel is a
-# container, and SendBackToInitiator is not part of any ProcessDef::Activity chain at all.
-NO_PERMISSION_NODETYPES = ("Parallel", "SendBackToInitiator")
+# container, SendBackToInitiator is not part of any ProcessDef::Activity chain at all, and a
+# GotoTask is a no-form backward jump (it renders nothing, so it carries no per-step visibility).
+NO_PERMISSION_NODETYPES = ("Parallel", "SendBackToInitiator", "GotoTask")
 
 
 def _kind(draft: Draft, kind: str) -> dict[str, dict[str, Any]]:
@@ -897,7 +1146,70 @@ def progressive_matrix(draft: Draft, owners: dict[str, list[str]]) -> Matrix:
     return matrix
 
 
-def set_step_permissions(draft: Draft, matrix: Matrix) -> Draft:
+def field_override_matrix(
+    draft: Draft, field_owners: dict[str, list[str]]
+) -> Matrix:
+    """Per-FIELD editable-step matrix, the field-level lever `progressive_matrix` cannot express
+    (an app whose sections only HIDE, with editability expressed per field). `field_owners` maps a
+    FIELD NAME to the workflow step names where it is Editable; every other field keeps its
+    section's matrix.
+
+    Rule (per-step, validated 0-mismatch against a reference app's 1408 field×step cells):
+
+      - a step in the editable set  -> Editable
+      - a ROOT step (branch is None): before the first editable step -> Hidden, else ReadOnly
+      - a BRANCH step (branch set):
+          * in a branch the field IS editable in (own branch) but not itself editable -> Hidden
+          * a sibling branch of a branch-OWNED field (editable in some real branch)  -> Hidden
+          * a branch step of a root-OWNED field (editable only on the root spine):
+              Hidden if the field is also editable on a tail root step (past the branch block),
+              else ReadOnly. A header field (Start/Use-case only) stays ReadOnly through the
+              branch; a field that re-emerges after the branch is Hidden during the detour.
+
+    Pure; raises ValueError on a field/step name that does not resolve, same contract as
+    `progressive_matrix`. A field named but with an empty editable list is ReadOnly everywhere
+    (no sibling-branch hiding — there is no "own branch" to be private to); omit it instead if
+    you want the section default.
+    """
+    pos, branch = _walk_workflow(draft)
+    acts = _kind(draft, "Activity")
+    bearing = [a for a, n in acts.items() if n.get("NodeType") not in NO_PERMISSION_NODETYPES]
+    orphans = [a for a in bearing if a not in pos]
+    if orphans:
+        raise ValueError(f"activities outside the workflow chain, cannot place them: {orphans}")
+
+    max_branch_pos = max((pos[a] for a in bearing if branch[a] is not None), default=0)
+    known_steps = {acts[a].get("Name"): a for a in bearing}
+    matrix: Matrix = {}
+    for fname, step_names in field_owners.items():
+        owned = {known_steps[s] for s in step_names if s in known_steps}
+        unknown = [s for s in step_names if s not in known_steps]
+        if unknown:
+            raise ValueError(f"field {fname!r} owns unknown step(s): {unknown}")
+        if not owned:
+            matrix[fname] = dict.fromkeys(bearing, Visibility.READONLY)
+            continue
+        first = min(pos[a] for a in owned)
+        own_branches = {branch[a] for a in owned}
+        branch_owned = any(b is not None for b in own_branches)
+        has_tail = any(pos[a] > max_branch_pos for a in owned)
+        row: dict[str, Visibility] = {}
+        for a in bearing:
+            if a in owned:
+                row[a] = Visibility.EDITABLE
+            elif branch[a] is None:                       # root step
+                row[a] = Visibility.HIDDEN if pos[a] < first else Visibility.READONLY
+            elif branch[a] in own_branches:                # own branch, not editable
+                row[a] = Visibility.HIDDEN
+            elif branch_owned:                             # sibling branch of a branch-owned field
+                row[a] = Visibility.HIDDEN
+            else:                                          # branch step of a root-owned field
+                row[a] = Visibility.HIDDEN if has_tail else Visibility.READONLY
+        matrix[fname] = row
+    return matrix
+
+
+def set_step_permissions(draft: Draft, matrix: Matrix, field_matrix: Matrix | None = None) -> Draft:
     """Rebuild the per-step Permission matrix from scratch. Pure: returns a NEW draft.
 
     Shape and both back-references copied from the oracle (see types.Visibility). Existing
@@ -916,6 +1228,22 @@ def set_step_permissions(draft: Draft, matrix: Matrix) -> Draft:
     sec_id_of_name = {v["Name"]: k for k, v in _kind(new, "Column").items()
                       if v.get("Type") in ("Section", "Model") and v.get("Name")}
 
+    # field-level overrides: field NAME -> the single field column id they govern (a Field node's
+    # Column; field columns themselves carry Name=None, so resolve through the Field node).
+    field_col_of_name: dict[str, str] = {}
+    if field_matrix:
+        for f in _kind(new, "Field").values():
+            fname = f.get("Name")
+            cid = f.get("Column")
+            if isinstance(fname, str) and isinstance(cid, str) and fname in field_matrix:
+                if fname in field_col_of_name and field_col_of_name[fname] != cid:
+                    raise ValueError(f"field name {fname!r} is ambiguous: two columns")
+                field_col_of_name[fname] = cid
+        missing = [n for n in field_matrix if n not in field_col_of_name]
+        if missing:
+            raise ValueError(f"field_matrix names a field that does not exist: {missing}")
+    overridden_cols = set(field_col_of_name.values())
+
     covered = {c for name in matrix for c in members.get(sec_id_of_name.get(name, ""), [])}
     all_field_cols = ({k for k, v in _kind(new, "Column").items() if v.get("Type") == "Field"}
                       - _table_child_columns(new))
@@ -923,19 +1251,26 @@ def set_step_permissions(draft: Draft, matrix: Matrix) -> Draft:
         # a sparse matrix means those fields silently keep their default visibility -> fail loud
         raise ValueError(f"field columns outside every matrix section: {sorted(all_field_cols - covered)}")
 
+    def _write_row(col_id: str, row: dict[str, Visibility]) -> None:
+        for act_id, vis in row.items():
+            pid = _new_id("Permission", model_id, 0, f"{col_id}:{act_id}")
+            if pid in new:
+                raise ValueError(f"permission id collision on {pid}")
+            new[pid] = {"Id": pid, "Kind": "Permission", "Column": col_id,
+                        "Permission": Visibility(vis).value, "Activity": act_id}
+            new[col_id].setdefault("Column::Permission", []).append(pid)
+            new[act_id].setdefault("Activity::Permission", []).append(pid)
+
     for name, row in matrix.items():
         sid = sec_id_of_name.get(name)
         if sid is None:
             raise ValueError(f"matrix names a section that does not exist: {name!r}")
         for col_id in members[sid]:
-            for act_id, vis in row.items():
-                pid = _new_id("Permission", model_id, 0, f"{col_id}:{act_id}")
-                if pid in new:
-                    raise ValueError(f"permission id collision on {pid}")
-                new[pid] = {"Id": pid, "Kind": "Permission", "Column": col_id,
-                            "Permission": Visibility(vis).value, "Activity": act_id}
-                new[col_id].setdefault("Column::Permission", []).append(pid)
-                new[act_id].setdefault("Activity::Permission", []).append(pid)
+            if col_id in overridden_cols:
+                continue            # this field has its own row in field_matrix; skip the section default
+            _write_row(col_id, row)
+    for fname, row in (field_matrix or {}).items():
+        _write_row(field_col_of_name[fname], row)
     return new
 
 
@@ -1010,6 +1345,8 @@ def apply_changes(draft: Draft, changes: list[FieldSpec]) -> Draft:
         field_node.update(_TYPE_DEFAULTS.get(ft.value, {}))
         if spec.referred_list is not None:
             field_node["ReferredList"] = spec.referred_list
+        if spec.options:
+            field_node.update(spec.options)  # opt-in per-type keys, written verbatim
         new[fid] = field_node
 
         model.setdefault("Model::Field", []).append(fid)

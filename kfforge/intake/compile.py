@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 from ..pages import WIDGET_REQUIRED_CONFIG, WIDGET_SLUGS
 from ..types import FieldType, Visibility
@@ -35,6 +35,7 @@ from .schema import (
     EventTrigger,
     FieldReq,
     PageIntent,
+    TableReq,
     WidgetIntent,
 )
 
@@ -508,11 +509,22 @@ def _check_widgets(spec: AppSpec) -> None:
 def _check_test_cases(spec: AppSpec) -> None:
     """A test case's expected_path/fills naming an unknown stage, a fill naming an unknown field
     or an out-of-list Select value, a fill for a stage the path never visits, or an
-    expected_result outside ProblemGoal.result_values."""
+    expected_result outside ProblemGoal.result_values.
+
+    A fill may target a top-level field OR a column of a table hosted at `fill.stage`
+    (CLAUDE.md Item data plane: child-table rows are filled via `Table::<id>`, keyed by child
+    field ids — so a table column IS a real addressable fill target at runtime). A flat fill of
+    a table column is ambiguous only if two tables at the SAME stage share a column name; this
+    check resolves per-stage so a column unique within its stage is accepted, and only Select
+    VALUES are list-validated for top-level Selects (`TableColumnReq` carries no `list_name`).
+    """
     stage_names = {s.name for s in spec.stages.stages}
     fields_by_name = {f.name: f for f in spec.data_model.fields}
     lists_by_name = {l.name: l for l in spec.master_data.lists}
     result_values = set(spec.problem_goal.result_values)
+    tables_by_stage: dict[str, list[TableReq]] = {}
+    for t in spec.data_model.tables:
+        tables_by_stage.setdefault(t.stage, []).append(t)
     for case in spec.test_cases.cases:
         for stage_name in case.expected_path:
             if stage_name not in stage_names:
@@ -537,8 +549,12 @@ def _check_test_cases(spec: AppSpec) -> None:
                     f"test case {case.name!r} fills stage {fill.stage!r}, which expected_path "
                     f"{case.expected_path} never visits"
                 )
+            stage_tables = tables_by_stage.get(fill.stage, ())
             for field_name, value in fill.values:
                 field = fields_by_name.get(field_name)
+                if field is None:
+                    # a column of a table hosted at this stage is also a valid fill target
+                    field = _stage_column(stage_tables, field_name)
                 if field is None:
                     raise ValueError(
                         f"test case {case.name!r} fills unknown field {field_name!r}"
@@ -551,6 +567,21 @@ def _check_test_cases(spec: AppSpec) -> None:
                             f"test case {case.name!r} fills {field_name!r}={value!r}, not in "
                             f"list {field.list_name!r} values {values}"
                         )
+
+
+def _stage_column(stage_tables: Iterable[TableReq], name: str) -> FieldReq | None:
+    """Resolve `name` to a column of a table hosted at the fill's stage, or None. Returns the
+    first match — a column name unique within its stage (the only case that lets a flat fill be
+    unambiguous) is accepted; a name shared across two tables at the same stage would need the
+    executor's table-id disambiguation, not a check-side guess. A `FieldReq`-shaped object is
+    synthesized with `.type` (for the SELECT-list check) and `list_name=None` (`TableColumnReq`
+    binds no list)."""
+    for t in stage_tables:
+        for col in t.columns:
+            if col.name == name:
+                return FieldReq(name=col.name, type=col.type, required=col.required,
+                                stage=t.stage, list_name=None)
+    return None
 
 
 _CROSS_CHECKS: tuple[Callable[[AppSpec], None], ...] = (

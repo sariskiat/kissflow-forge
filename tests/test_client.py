@@ -23,6 +23,7 @@ from kfforge.client import (
     apply_fields_and_layout,
     apply_goto_gate,
     apply_member_batch,
+    apply_member_roles,
     apply_report_members,
     apply_section_style,
     apply_table,
@@ -85,6 +86,7 @@ class FakeClient(KfClient):
         self.archived_apps: set[str] = set()
         self.pages: dict[str, dict[str, dict[str, Any]]] = {}
         self._app_counter = 0
+        self._role_counter = 0
 
     def get_draft(self, kind, flow_id):  # type: ignore[override]
         return self.draft
@@ -122,6 +124,20 @@ class FakeClient(KfClient):
 
     def get_app_role(self, role_id):  # type: ignore[override]
         return next((r for r in self.app_roles if r.get("_id") == role_id), {"_id": role_id})
+
+    def create_app_role(self, name, app_id=None):  # type: ignore[override]
+        # mirror the live POST /app_role/2/{acct} contract: returns a fresh _id, scopes to app_id.
+        self._role_counter += 1
+        rid = f"RoNew{self._role_counter}"
+        scope = app_id if app_id is not None else self._cfg.app_id
+        self.app_roles.append({"_id": rid, "Name": name,
+                               "Applications": [{"_id": scope, "Type": "Application"}],
+                               "_application_id": scope})
+        return rid
+
+    def delete_app_role(self, role_id):  # type: ignore[override]
+        self.app_roles = [r for r in self.app_roles if r.get("_id") != role_id]
+        return {"status": "success"}
 
     def post_member_batch(self, kind, flow_id, members):  # type: ignore[override]
         self.member_batches.append((kind, flow_id, list(members)))
@@ -760,6 +776,53 @@ def test_apply_member_batch_falls_back_to_account_level_app_roles() -> None:
         {"_id": "RoB", "Name": "User", "Kind": "AppRole", "Role": "DataAdmin",
          "Permission": ["InitiateItems"]},
     ]
+
+
+# ---- apply_member_roles: create-then-grant (2026-08-08) -------------------------------------
+# The standing blocker on multi-role assignees was the belief that AppRoles are UI-only — no API
+# route CREATES one. PROVEN FALSE live 2026-08-08: `POST /app_role/2/{acct}` creates a role scoped
+# to KF_APP, and member/batch then binds it (a foreign-app-scoped role is rejected with 00051).
+# apply_member_roles now reuses an existing same-name KF_APP role (idempotent) or creates one, then
+# grants. `resolved` carries {display_name: a00_role_id} so a build script can remap step->name onto
+# step->a00_id for build_workflow.
+
+def test_apply_member_roles_reuses_existing_same_name_role_and_grants() -> None:
+    c = FakeClient(_bare_process_draft())
+    c.app_roles = [{"_id": "RoExist", "Name": "FDE",
+                    "Applications": [{"_id": c._cfg.app_id, "Type": "Application"}]}]
+    rep = apply_member_roles(c, "F_target", {"RoForeign": "FDE"})
+    assert isinstance(rep, MemberReport)
+    assert rep.missing == () and rep.as_tool_result()["isError"] is False
+    resolved = rep.as_tool_result()["resolved"]
+    assert resolved == {"FDE": "RoExist"}, "reuse the existing KF_APP-scoped FDE, ignore foreign id"
+    assert rep.role_ids == ("RoExist",)
+    assert len(c.member_batches) == 1
+    posted = c.member_batches[0][2]
+    assert posted == [{"_id": "RoExist", "Name": "FDE", "Kind": "AppRole",
+                       "Role": "DataAdmin", "Permission": ["InitiateItems"]}]
+    assert rep.note is not None and "created 0" not in rep.note  # nothing created, reused instead
+
+
+def test_apply_member_roles_creates_missing_role_scoped_to_app_then_grants() -> None:
+    c = FakeClient(_bare_process_draft())
+    c.app_roles = []  # nothing exists yet -> both must be created scoped to KF_APP
+    rep = apply_member_roles(c, "F_target", {"RoX": "Requester", "RoY": "CoE Lead"})
+    assert isinstance(rep, MemberReport)
+    assert rep.missing == () and rep.as_tool_result()["isError"] is False
+    resolved = rep.as_tool_result()["resolved"]
+    assert set(resolved.keys()) == {"Requester", "CoE Lead"}
+    new_ids = list(resolved.values())
+    assert all(r.startswith("RoNew") for r in new_ids), "fresh ids from the fake create_app_role"
+    # the created roles are scoped to KF_APP (so a later member/batch will accept them)
+    for rid in new_ids:
+        ro = next(r for r in c.app_roles if r["_id"] == rid)
+        assert ro["_application_id"] == c._cfg.app_id
+    assert rep.note is not None and "created 2" in rep.note
+    # exactly one member/batch post with both granted roles
+    assert len(c.member_batches) == 1
+    posted = {m["Name"]: m["_id"] for m in c.member_batches[0][2]}
+    assert posted == resolved
+
 
 
 def test_apply_member_batch_account_level_fallback_reports_missing_on_partial_readback() -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 
 class FieldType(StrEnum):
@@ -45,6 +46,11 @@ class FieldSpec:
     required: bool = False
     referred_list: str | None = None  # only for SELECT
     field_id: str | None = None
+    # Per-type keys the builder writes ONLY on some fields of that type (Textarea
+    # `AllowFormatting`, Attachment `CaptureOnly`). NOT universal defaults — a plain Textarea
+    # omits `AllowFormatting` and renders fine — so opt-in per field. Written verbatim onto the
+    # Field node; values pass through as-is (`False`, "true", …).
+    options: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
