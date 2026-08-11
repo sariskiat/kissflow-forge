@@ -477,6 +477,30 @@ def test_set_styles_unknown_container_raises() -> None:
         set_styles(page, rules={"Nonexistent": {"Container.Background": {"value": "#000000"}}})
 
 
+def test_set_styles_by_id_survives_duplicate_names() -> None:
+    """The #25 fix: a page whose Containers share a Name (real pages carry dozens of 'Label') is
+    styleable by addressing each Container by its unique id -- the id add_widget already returns --
+    with no rename and no collision. The name path still raises on that same ambiguity (test below)."""
+    page = new_page_graph("Sample Page")
+    page, host_a = add_widget(page, container_id="Container001", widget="general/label", config={"title": "a"})
+    page, host_b = add_widget(page, container_id="Container001", widget="general/label", config={"title": "b"})
+    assert page[host_a]["Name"] == page[host_b]["Name"]  # both left at the shape's shared default Name
+
+    page = set_styles(page, rules={
+        host_a: {"Container.Background": {"value": "#112233"}},
+        host_b: {"Container.Background": {"ref": "Color.Primary.100"}},
+    })
+    assert page[page[host_a]["Container::Style"][0]]["Value"]["Container.Background"] == {"value": "#112233"}
+    assert page[page[host_b]["Container::Style"][0]]["Value"]["Container.Background"] == {"ref": "Color.Primary.100"}
+    _assert_backrefs_resolve(page)
+
+
+def test_set_styles_unknown_id_or_name_raises() -> None:
+    page = new_page_graph("Sample Page")
+    with pytest.raises(ValueError):
+        set_styles(page, rules={"Container_nope": {"Container.Background": {"value": "#000000"}}})
+
+
 def test_set_styles_ambiguous_name_raises_listing_matches() -> None:
     """Two widgets left at the shape's shared default Name ("Label") collide: set_styles must
     raise rather than silently style only the first match (name= on add_widget is the escape

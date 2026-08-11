@@ -104,17 +104,23 @@ class PageBuildReport:
         }
 
 
-def _style_props_landed(read_back: Draft, container_name: str, props: dict[str, Any]) -> bool:
-    """Did every prop in `props` (the SAME dict passed to pages.set_styles's `rules[name]`) land
-    on the read-back Style node for the Container named `container_name`? Mirrors
-    pages._apply_style_props's own wrapping exactly (a dict value like `{"ref": token}` is stored
-    verbatim; a plain scalar is auto-wrapped as `{"value": scalar}`; `None` means the property must
-    be ABSENT — removed back to the theme default), so this checks the SAME shape the writer wrote,
-    not a guessed one.
+def _style_props_landed(read_back: Draft, key: str, props: dict[str, Any]) -> bool:
+    """Did every prop in `props` (the SAME dict passed to pages.set_styles's `rules[key]`) land
+    on the read-back Style node for the Container addressed by `key`? `key` is resolved the SAME way
+    set_styles resolves it (pages.resolve_container_id): a Container id wins, else a unique Name;
+    an unknown or ambiguous key returns False here (this is a read-back check, not the writer's
+    hard raise). Mirrors pages._apply_style_props's own wrapping exactly (a dict value like
+    `{"ref": token}` is stored verbatim; a plain scalar is auto-wrapped as `{"value": scalar}`;
+    `None` means the property must be ABSENT — removed back to the theme default), so this checks
+    the SAME shape the writer wrote, not a guessed one.
     """
-    container = next((v for v in read_back.values()
-                      if isinstance(v, dict) and v.get("Kind") == "Container"
-                      and v.get("Name") == container_name), None)
+    node = read_back.get(key)
+    if isinstance(node, dict) and node.get("Kind") == "Container":
+        container: dict[str, Any] | None = node
+    else:
+        matches = [v for v in read_back.values() if isinstance(v, dict)
+                   and v.get("Kind") == "Container" and v.get("Name") == key]
+        container = matches[0] if len(matches) == 1 else None
     if container is None:
         return False
     style_ids = container.get("Container::Style") or []

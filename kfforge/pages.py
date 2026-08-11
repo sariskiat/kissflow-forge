@@ -650,38 +650,48 @@ def add_event_mapping(
     return new, em_id
 
 
-def set_styles(page: Draft, *, rules: dict[str, dict[str, Any]]) -> Draft:
-    """Style Containers by NAME. `rules` maps a Container's Name to {property: value} (see
-    _apply_style_props for the accepted value forms). Pure. Unknown name -> ValueError, never a
-    silent no-op.
+def resolve_container_id(page: Draft, key: str) -> str:
+    """Resolve a set_styles `rules` key to exactly one Container id. Two addressing modes, id wins:
 
-    Matches by Kind=="Container" only: every widget shape captured has its host Container and its
-    Component share the same Name string (e.g. widget_general_button.json's Container_Sample01 and
-    Component_Sample01 are both "Button"), so matching on the Container already covers the common
-    "style the X widget" case without a separate Component lookup. On a NAME collision (two sibling
-    containers sharing a Name, e.g. two widgets of the same kind both left at their shape's shared
-    default Name -- the platform does not forbid this) this raises ValueError listing every matching
-    id rather than silently styling only the first: pass `name=` to add_widget/add_container to give
-    each one a distinct Name and disambiguate.
+      - `key` equal to an existing Container node id -> that id, directly. Ids are unique, so this
+        is collision-proof: it is how a page whose Containers share a Name (real pages carry dozens
+        all named 'Label'/'Icon') gets styled -- pass the id add_widget/add_container returns, no
+        rename needed (#25).
+      - otherwise `key` is a Name: exactly one Container with that Name -> its id; zero -> ValueError;
+        more than one -> ValueError listing every match (pass the id, or a distinct name=).
+
+    id wins on the (practically impossible) tie where a Name string equals some Container's id --
+    Kissflow ids are system-minted `Container_<random>`, which no human-set Name collides with.
+    Never a silent no-op. Matches Kind=="Container" only (a widget's host Container and its Component
+    share a Name, so the Container covers the common "style the X widget" case)."""
+    node = page.get(key)
+    if isinstance(node, dict) and node.get("Kind") == "Container":
+        return key
+    matches = [nid for nid, n in page.items()
+               if isinstance(n, dict) and n.get("Kind") == "Container" and n.get("Name") == key]
+    if not matches:
+        raise ValueError(f"no Container with id or name {key!r} on this page")
+    if len(matches) > 1:
+        raise ValueError(
+            f"ambiguous Container name {key!r}: {len(matches)} matches {sorted(matches)} -- "
+            "pass the container id (add_widget/add_container returns it), or a distinct name="
+        )
+    return matches[0]
+
+
+def set_styles(page: Draft, *, rules: dict[str, dict[str, Any]]) -> Draft:
+    """Style Containers by id or Name. `rules` maps a Container's id (collision-proof) or Name to
+    {property: value} (see _apply_style_props for the accepted value forms). Pure. See
+    resolve_container_id for the addressing rule: an id wins over a name, an ambiguous name raises
+    rather than silently styling only the first match. Unknown key -> ValueError, never a silent
+    no-op.
     """
     new: Draft = copy.deepcopy(page)
-    by_name: dict[str, list[str]] = {}
-    for nid, node in new.items():
-        if isinstance(node, dict) and node.get("Kind") == "Container" and node.get("Name"):
-            by_name.setdefault(node["Name"], []).append(nid)
-
-    for name, props in rules.items():
-        matches = by_name.get(name) or []
-        if not matches:
-            raise ValueError(f"no Container named {name!r} on this page")
-        if len(matches) > 1:
-            raise ValueError(
-                f"ambiguous Container name {name!r}: {len(matches)} matches {sorted(matches)} -- "
-                "pass name= to add_widget/add_container so each has a distinct Name"
-            )
-        style_ids = new[matches[0]].get("Container::Style") or []
+    for key, props in rules.items():
+        cid = resolve_container_id(new, key)
+        style_ids = new[cid].get("Container::Style") or []
         if not style_ids:
-            raise ValueError(f"container {name!r} has no Style node to set")
+            raise ValueError(f"container {key!r} has no Style node to set")
         _apply_style_props(new[style_ids[0]], props)
     return new
 
