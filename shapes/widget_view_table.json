@@ -51,6 +51,54 @@
       "FieldMapping": "FieldMapping_Sample03",
       "Value": "myitems"
     },
+    "FieldMapping_Sample04": {
+      "Id": "FieldMapping_Sample04",
+      "Kind": "FieldMapping",
+      "Name": "showform",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample04"
+      ]
+    },
+    "Property_Sample04": {
+      "Id": "Property_Sample04",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample04",
+      "Value": true
+    },
+    "FieldMapping_Sample05": {
+      "Id": "FieldMapping_Sample05",
+      "Kind": "FieldMapping",
+      "Name": "steps",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample05"
+      ]
+    },
+    "Property_Sample05": {
+      "Id": "Property_Sample05",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample05",
+      "Value": "all"
+    },
+    "FieldMapping_Sample06": {
+      "Id": "FieldMapping_Sample06",
+      "Kind": "FieldMapping",
+      "Name": "caption",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample06"
+      ]
+    },
+    "Property_Sample06": {
+      "Id": "Property_Sample06",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample06",
+      "Value": ""
+    },
     "Container_Sample01": {
       "Id": "Container_Sample01",
       "Kind": "Container",
@@ -69,7 +117,10 @@
       "Container::FieldMapping": [
         "FieldMapping_Sample01",
         "FieldMapping_Sample02",
-        "FieldMapping_Sample03"
+        "FieldMapping_Sample03",
+        "FieldMapping_Sample04",
+        "FieldMapping_Sample05",
+        "FieldMapping_Sample06"
       ],
       "Container::Style": [
         "Style_Sample01"
@@ -86,7 +137,10 @@
       "Data": {
         "manifest_id": "Table",
         "category": "view",
-        "visualization_type": "table"
+        "visualization_type": "table",
+        "flow_type": "Form",
+        "flow_id": "Flow_Sample01",
+        "view_id": "myitems"
       },
       "Container": "Container_Sample01"
     },
@@ -98,6 +152,7 @@
     }
   },
   "notes": [
+    "Beyond the flow/view trio, a live view/table also carries display-config FieldMappings: showform (boolean), steps (e.g. \"all\"), caption (a heading string). These are display config, NOT binding, so they are NOT mirrored into Component.Data — only the flow_type/flow_id/view_id binding trio is double-encoded there (same convention widget_metrics/widget_general_masterdetail prove). caption defaults to \"\" (the caller supplies the real per-page heading); showform/steps default to the one captured configured widget's values (true/\"all\").",
     "ALL view/* widgets bind via this same flow_type/flow_id/view_id trio, regardless of which visual the widget renders — only Script.web (and Data.manifest_id/visualization_type) differ between them.",
     "A data-bound widget renders per the BOUND VIEW's own type, not the widget's name: e.g. a view bound to \"myitems\" (a table-type view) shows a table inside a kanban/timeline/matrix widget until a matching view TYPE actually exists on the flow — this is expected, not a bug in the widget.",
     "Data-bound widgets obey the sticky \"Viewing as\" role lens in the builder — an access-denied render usually means the LENS role lacks permission on the bound flow/view, not that the widget itself is broken.",
