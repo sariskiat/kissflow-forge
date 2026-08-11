@@ -155,6 +155,119 @@ def test_apply_page_build_container_then_widget() -> None:
     assert c.page_puts == 1, "every step must land in ONE guarded PUT, not one per step"
 
 
+def test_apply_page_build_popup_widget_then_event_wires_open_popup() -> None:
+    """#22: a popup + a button built in one PageBuildStep list is inert on its own -- a follow-up
+    "event" step is what actually lets the button open the popup, dispatched the same way
+    container/widget/popup already are."""
+    c = FakePageClient()
+    page_id = c.create_page("App1", "Sample Page")
+    steps = [
+        PageBuildStep("popup", {"name": "Detail Popup"}),
+        PageBuildStep("widget", {"container_id": "Container001", "widget": "general/button",
+                                 "config": {}}),
+    ]
+    rep = apply_page_build(c, "App1", page_id, steps)
+    assert isinstance(rep, PageBuildReport)
+    assert rep.missing == ()
+
+    draft = c.get_page_draft("App1", page_id)
+    popup_id = next(nid for nid, node in draft.items()
+                    if isinstance(node, dict) and node.get("Kind") == "Popup")
+    button_comp = next(nid for nid, node in draft.items()
+                       if isinstance(node, dict) and node.get("Kind") == "Component"
+                       and node.get("Script", {}).get("web") == "general/button")
+    button_container = draft[button_comp]["Container"]
+
+    steps2 = [PageBuildStep("event", {"container_id": button_container, "type": "OpenPopup",
+                                      "popup_id": popup_id})]
+    rep2 = apply_page_build(c, "App1", page_id, steps2)
+    assert isinstance(rep2, PageBuildReport)
+    assert len(rep2.applied) == 1
+    assert rep2.verified == rep2.applied, "the event step must be confirmed present on read-back"
+    assert rep2.missing == ()
+    assert rep2.as_tool_result()["isError"] is False
+    assert rep2.node_counts.get("EventMapping", 0) == 1
+
+
+def test_apply_page_build_detects_an_event_mapping_silently_dropped_by_the_write() -> None:
+    """Same silent-discard class as the widget/style cases: the PUT succeeds but the EventMapping
+    node itself never actually lands on the read-back."""
+    class DroppingEvent(FakePageClient):
+        def put_page_draft(self, app_id, page_id, new, expect_version):  # type: ignore[override]
+            self.page_puts += 1
+            trimmed = {k: v for k, v in new.items() if not (isinstance(v, dict)
+                      and v.get("Kind") == "EventMapping")}  # the EventMapping silently vanishes
+            trimmed["_meta_version"] = "v2"
+            self.page_drafts[page_id] = trimmed
+            return trimmed
+
+    c = DroppingEvent()
+    page_id = c.create_page("App1", "Sample Page")
+    steps = [PageBuildStep("popup", {"name": "Detail Popup"})]
+    rep = apply_page_build(c, "App1", page_id, steps)
+    assert isinstance(rep, PageBuildReport) and rep.missing == ()
+    draft = c.get_page_draft("App1", page_id)
+    popup_id = next(nid for nid, node in draft.items()
+                    if isinstance(node, dict) and node.get("Kind") == "Popup")
+
+    steps2 = [PageBuildStep("event", {"container_id": "Container001", "type": "OpenPopup",
+                                      "popup_id": popup_id})]
+    rep2 = apply_page_build(c, "App1", page_id, steps2, publish=True)
+    assert isinstance(rep2, PageBuildReport)
+    assert rep2.verified == ()
+    assert len(rep2.missing) == 1
+    assert rep2.as_tool_result()["isError"] is True
+    assert rep2.published is False, "must never publish when a step failed to verify"
+    assert c.page_publishes == []
+
+
+def test_apply_page_build_detects_an_event_mapping_property_silently_dropped_by_the_write() -> None:
+    """code-review finding: the EventMapping node is only the SHELL — the real payload (the
+    target popup id, or the JS text) lives on a separate Property node
+    (EventMapping::Property). A write that keeps the empty shell but drops that Property must
+    NOT read as verified — same "shell vs substance" trap the widget branch's own check
+    already guards against (see pages_live.py's own comment on the "event" step check)."""
+    class DroppingEventProperty(FakePageClient):
+        def put_page_draft(self, app_id, page_id, new, expect_version):  # type: ignore[override]
+            self.page_puts += 1
+            trimmed = {k: v for k, v in new.items() if not (isinstance(v, dict)
+                      and v.get("Kind") == "Property"
+                      and v.get("EventMapping") is not None)}  # only the payload vanishes
+            trimmed["_meta_version"] = "v2"
+            self.page_drafts[page_id] = trimmed
+            return trimmed
+
+    c = DroppingEventProperty()
+    page_id = c.create_page("App1", "Sample Page")
+    steps = [PageBuildStep("popup", {"name": "Detail Popup"})]
+    rep = apply_page_build(c, "App1", page_id, steps)
+    assert isinstance(rep, PageBuildReport) and rep.missing == ()
+    draft = c.get_page_draft("App1", page_id)
+    popup_id = next(nid for nid, node in draft.items()
+                    if isinstance(node, dict) and node.get("Kind") == "Popup")
+
+    steps2 = [PageBuildStep("event", {"container_id": "Container001", "type": "OpenPopup",
+                                      "popup_id": popup_id})]
+    rep2 = apply_page_build(c, "App1", page_id, steps2, publish=True)
+    assert isinstance(rep2, PageBuildReport)
+    assert rep2.verified == (), "the EventMapping shell surviving alone must not read as verified"
+    assert len(rep2.missing) == 1
+    assert rep2.as_tool_result()["isError"] is True
+    assert rep2.published is False
+    assert c.page_publishes == []
+
+
+def test_apply_page_build_event_missing_popup_id_raises_offline() -> None:
+    """Same offline-reject discipline as the widget binding check: a required arm argument
+    missing must be rejected BEFORE any write, never shipped as a dead click."""
+    c = FakePageClient()
+    page_id = c.create_page("App1", "Sample Page")
+    steps = [PageBuildStep("event", {"container_id": "Container001", "type": "OpenPopup"})]
+    got = apply_page_build(c, "App1", page_id, steps)
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.page_puts == 0
+
+
 def test_apply_page_build_detects_a_widget_silently_dropped_by_the_write() -> None:
     """Node G review F1: a PUT that 200s while a widget never actually lands on the read-back
     must NOT read as success. Simulates exactly that — put_page_draft "succeeds" (200) but the
