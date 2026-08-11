@@ -6,7 +6,10 @@ Every write is read-verify-write with a post-write read-back audit. See PLAN.md 
 
 Three tool families:
   kf_*    the original P0/P1 surface (list types, plan/apply fields, create process, step
-          visibility, publish). Unchanged by Node G — kept verbatim.
+          visibility, publish). Kept verbatim by Node G; kf_get_flow_schema later gained an
+          optional `app_id` parameter (issue #19) to route a "page" read through the correct
+          application-scoped draft URL instead of the generic one — every other kf_* tool, and
+          every other flow_kind on this one, is still untouched.
   forge_* the P2 surface (Node G): thin wrappers around kfforge.client / kfforge.pages_live /
           kfforge.dataplane's live orchestration functions. Every forge_* tool body is ONE call
           into a module function that already does GET -> offline builder -> guarded PUT ->
@@ -138,11 +141,20 @@ def kf_plan_field_change(draft: dict[str, Any], changes: list[dict[str, Any]]) -
 
 
 @mcp.tool()
-def kf_get_flow_schema(flow_kind: str, flow_id: str) -> dict[str, Any]:
-    """Read a flow's DRAFT graph from the dev tenant. Read-only."""
+def kf_get_flow_schema(flow_kind: str, flow_id: str, app_id: str | None = None) -> dict[str, Any]:
+    """Read a flow's DRAFT graph from the dev tenant. Read-only. `flow_kind` is
+    "process"/"form"/"case" (a flow — `flow_id` is the flow id) or "page" (needs `app_id`,
+    `flow_id` is the page id — a page draft lives under its owning application, never a
+    hard-coded KF_APP default; see CLAUDE.md Pages). `app_id` is ignored for every other kind.
+    """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
+    if flow_kind == "page":
+        if not app_id:
+            return Err("verify", "app_id is required to read a page draft").as_tool_result()
+        got = c.get_page_draft(app_id, flow_id)
+        return got.as_tool_result() if isinstance(got, Err) else got
     got = c.get_draft(flow_kind, flow_id)  # type: ignore[arg-type]
     return got.as_tool_result() if isinstance(got, Err) else got
 

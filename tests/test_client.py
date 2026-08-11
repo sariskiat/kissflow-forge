@@ -904,6 +904,46 @@ def test_apply_report_members_posts_and_reports_unverified_honestly() -> None:
     assert c.report_member_batches == [("F1", "Rep1", members)]
 
 
+# ---- KfClient._page_draft_url (issue #19) ------------------------------------------------------
+# kf_get_flow_schema(flow_kind="page", ...) used to route through the GENERIC _draft_url, which
+# emits /metadata/2/{acct}/page/{page_id}/draft -- missing the application/{app_id} segment a page
+# draft actually lives under (CLAUDE.md Pages: "GET/PUT /metadata/2/{acct}/application/{app}/
+# page/{page_id}/draft"). The correct builder, _page_draft_url, already existed but had no caller
+# on the kf_get_flow_schema tool surface. This pins the URL shape directly, offline, no network --
+# the seam this ticket names.
+
+def test_page_draft_url_carries_the_application_segment() -> None:
+    c = KfClient(DEV)
+    url = c._page_draft_url("App_Other", "Page_1")
+    assert url == f"{DEV.base}/metadata/2/{DEV.account}/application/App_Other/page/Page_1/draft"
+
+
+def test_page_draft_url_uses_the_explicit_app_id_never_a_hard_coded_kf_app() -> None:
+    """DEV.app_id ('App') stands in for KF_APP here -- a page in ANY OTHER app must produce a URL
+    carrying THAT app's id, never silently substituting the configured default (the generalisation
+    constraint, spec #38: any app, not one)."""
+    c = KfClient(DEV)
+    url = c._page_draft_url("SomeOtherApp", "Page_1")
+    assert "SomeOtherApp" in url
+    assert f"/application/{DEV.app_id}/" not in url, "must not fall back to the configured KF_APP"
+
+
+def test_get_page_draft_calls_the_page_draft_url_not_the_generic_one() -> None:
+    class _RouteRecordingClient(KfClient):
+        def __init__(self) -> None:
+            super().__init__(DEV)
+            self.urls: list[str] = []
+
+        def _json(self, method: str, url: str, data: Any = None) -> Any:  # type: ignore[override]
+            self.urls.append(url)
+            return {"Root": "Pg1"}
+
+    c = _RouteRecordingClient()
+    got = c.get_page_draft("App_Other", "Page_1")
+    assert got == {"Root": "Pg1"}
+    assert c.urls == [f"{DEV.base}/metadata/2/{DEV.account}/application/App_Other/page/Page_1/draft"]
+
+
 # ---- create_application_verified / delete_anything --------------------------------------------
 
 def test_create_application_verified_happy_path() -> None:

@@ -272,6 +272,64 @@ def test_forge_publish_application_kind_propagates_publish_failure(monkeypatch: 
     assert got["isError"] is True
 
 
+# ---- 5b. issue #19 — kf_get_flow_schema(flow_kind="page", ...) had two independent faults: the
+# emitted URL omitted the application/{app} segment (routed through the generic get_draft/
+# _draft_url instead of the existing get_page_draft/_page_draft_url), and there was no app_id
+# parameter at all -- flow_kind="page" only ever "worked" by accident for KF_APP. Mirrors the
+# forge_publish page-kind coverage above, same fake-client shape.
+
+class _FakePageDraftClient:
+    """Just enough of KfClient's surface for kf_get_flow_schema's page branch."""
+
+    def __init__(self, *, page_draft: dict[str, Any] | None = None, page_err: Err | None = None) -> None:
+        self.page_draft = page_draft
+        self.page_err = page_err
+        self.page_draft_calls: list[tuple[str, str]] = []
+
+    def get_page_draft(self, app_id: str, page_id: str):  # type: ignore[no-untyped-def]
+        self.page_draft_calls.append((app_id, page_id))
+        return self.page_err if self.page_err is not None else self.page_draft
+
+
+def test_kf_get_flow_schema_page_kind_requires_app_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    # _client() runs BEFORE the app_id check, so it must succeed here (a fake with no methods
+    # touched is enough -- the app_id validation fires before get_page_draft is ever called).
+    fake = _FakePageDraftClient()
+    monkeypatch.setattr(srv, "_client", lambda: fake)
+    got = srv.kf_get_flow_schema(flow_kind="page", flow_id="Page1", app_id=None)
+    assert got["isError"] is True and "app_id" in got["error"]
+    assert fake.page_draft_calls == []
+
+
+def test_kf_get_flow_schema_page_kind_routes_through_page_draft_with_the_explicit_app_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakePageDraftClient(page_draft={"Root": "Pg1"})
+    monkeypatch.setattr(srv, "_client", lambda: fake)
+    got = srv.kf_get_flow_schema(flow_kind="page", flow_id="Page1", app_id="App_Other")
+    assert got == {"Root": "Pg1"}
+    assert fake.page_draft_calls == [("App_Other", "Page1")], (
+        "the EXPLICIT app_id passed by the caller must reach get_page_draft, never a "
+        "hard-substituted KF_APP default"
+    )
+
+
+def test_kf_get_flow_schema_page_kind_propagates_a_read_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakePageDraftClient(page_err=Err("http", "not found", 404))
+    monkeypatch.setattr(srv, "_client", lambda: fake)
+    got = srv.kf_get_flow_schema(flow_kind="page", flow_id="Page1", app_id="App_Other")
+    assert got["isError"] is True
+
+
+def test_kf_get_flow_schema_non_page_kind_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """flow_kind != "page" keeps its original behavior -- app_id is accepted but ignored, and
+    the generic get_draft path is still what runs."""
+    fake = FakeClient(_bare_process_draft())
+    monkeypatch.setattr(srv, "_client", lambda: fake)
+    got = srv.kf_get_flow_schema(flow_kind="process", flow_id="F1", app_id="ignored")
+    assert got == fake.draft
+
+
 # ---- 6. review F5 — forge_create_app / forge_share_report had NO tool-level coverage beyond
 # the generic no-credentials path ----------------------------------------------------------------
 
