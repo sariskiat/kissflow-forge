@@ -207,10 +207,10 @@ def _forward_next_stages(spec: AppSpecLike) -> dict[str, str | None]:
 
     Every stage has exactly one onward edge except a routing-point stem (a fork's outgoing is its
     decision diamond, not a spine edge) and the last stage. A branch -- the spine span a routing
-    target opens -- runs to a TERMINAL, and that terminal points at the MERGE (the first stage
-    after the deepest terminal) instead of spilling forward into a sibling branch's stages (the
-    round-1 major defect in decision_01 item 1: three service tiers each drew a spine edge into the
-    next tier instead of converging on the shared join).
+    target opens -- runs to a TERMINAL, and that terminal points at its OWN MERGE (see below)
+    instead of spilling forward into a sibling branch's stages (the round-1 major defect in
+    decision_01 item 1: three service tiers each drew a spine edge into the next tier instead of
+    converging on the shared join).
 
     Terminal derivation (the loop-terminal rule): a branch's terminal defaults to its on-spine
     entry target, unless a BACKWARD rework loop's `from_stage` is owned by that entry (owner = the
@@ -224,6 +224,16 @@ def _forward_next_stages(spec: AppSpecLike) -> dict[str, str | None]:
     length-1 sequence (just the entry) is untouched by this and keeps running the original model:
     the rest of that branch extends along the spine, with a backward rework loop's `from_stage`
     (if any) marking where it really ends.
+
+    The merge is computed PER BRANCH TERMINAL (S2, #33), not once globally. A terminal's merge is
+    the first SPINE stage after it -- the first stage, in spec order, that is not itself lifted off
+    the spine as some branch's own stage. With ONE split this is identical to the old single global
+    merge (there is nothing else to skip past). With N sequential splits, a global merge picked the
+    first stage after the DEEPEST terminal across every routing point, so an earlier split's branch
+    terminal spilled past its own rejoin stage and across a LATER split's branch stages entirely --
+    the cross-split analogue of the sibling-spill bug S1 fixed within one split. Per-terminal merge
+    keeps each split's branch converging on its own rejoin, which is naturally the next split's own
+    stem when two splits sit back to back.
     """
     stages = _seq(spec.stages)
     stage_names = [st.name for st in stages]
@@ -281,13 +291,26 @@ def _forward_next_stages(spec: AppSpecLike) -> dict[str, str | None]:
         if own is not None:
             terminal[own] = lp.from_stage
 
-    # Merge = the first stage after the deepest terminal (where all branches reconverge).
     terminal_set = set(terminal.values())
-    merge: str | None = None
-    if terminal_set:
-        deepest = max(idx[t] for t in terminal_set)
-        if deepest + 1 < len(stage_names):
-            merge = stage_names[deepest + 1]
+
+    # branch_stage_set = every stage a merge must skip past to land back on the true spine (S2,
+    # #33): for each entry, the CLOSED range [entry .. its own terminal], inclusive. This covers
+    # both branch shapes uniformly -- an explicit multi-stage sequence (terminal = its last stage,
+    # e.g. [A1, A2]) AND the implicit spine-extension model a length-1 sequence still uses (terminal
+    # = wherever a loop override lands, e.g. [Light Work, Light Confirm] with nothing named in
+    # between by any route sequence -- those interior stages are plain spine positions, not sequence
+    # members, so a route-sequence-only set would miss them and stop the merge search too early).
+    branch_stage_set: set[str] = set()
+    for entry, t in terminal.items():
+        branch_stage_set.update(stage_names[idx[entry]:idx[t] + 1])
+
+    def merge_after(t_name: str) -> str | None:
+        """The first SPINE stage after `t_name` -- that terminal's own rejoin point, skipping any
+        stage that belongs to a branch (this split's own remaining stages, or a later split's)."""
+        for j in range(idx[t_name] + 1, len(stage_names)):
+            if stage_names[j] not in branch_stage_set:
+                return stage_names[j]
+        return None
 
     # An unreachable (orphan) stage must not be wired with a fabricated edge either -- only
     # reachable stages get a forward "next" (same gate _reachable_stage_names applies in
@@ -303,7 +326,7 @@ def _forward_next_stages(spec: AppSpecLike) -> dict[str, str | None]:
         elif name in intra_next:
             next_of[name] = intra_next[name]  # explicit multi-stage branch edge (s_i -> s_i+1)
         elif name in terminal_set:
-            next_of[name] = merge  # branch terminal jumps to the merge (or ends)
+            next_of[name] = merge_after(name)  # branch terminal jumps to ITS OWN merge (or ends)
         else:
             next_of[name] = stage_names[i + 1] if i + 1 < len(stage_names) else None
     return next_of

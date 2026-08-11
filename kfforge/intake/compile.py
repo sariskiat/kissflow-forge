@@ -51,9 +51,9 @@ from .schema import (
 # CLAUDE.md and `kfforge.graph.build_workflow`'s own separate `Resource`-node write).
 OP_ORDER: tuple[str, ...] = (
     "create_process", "member_batch", "create_list", "apply_fields", "add_table",
-    "build_workflow", "set_assignees", "add_goto_gate", "set_visibility", "set_events",
-    "set_styles", "publish", "doctor", "create_page", "build_page", "set_navigation",
-    "simulate_case",
+    "build_workflow", "set_assignees", "add_goto_gate", "set_branch_conditions",
+    "set_visibility", "set_events", "set_styles", "publish", "doctor", "create_page",
+    "build_page", "set_navigation", "simulate_case",
 )
 
 
@@ -249,19 +249,55 @@ def _check_routing_field_and_options(spec: AppSpec) -> None:
             )
 
 
-def _check_at_most_one_split(spec: AppSpec) -> None:
-    """S1 (#32) builds exactly ONE decision split into a Parallel gateway. Now that routing is
-    actually consumed (`_op_build_workflow`), a spec with more than one split must refuse LOUDLY
-    rather than silently build only the first (spec #29 decision D6, "no silent downgrade";
-    CLAUDE.md THE RULE). Several sequential splits is the ``sequential-splits`` coverage row:
-    BUILDABLE, but pending #33 (S2), so it is not built yet."""
-    if len(spec.routing.points) > 1:
-        row = coverage.get("sequential-splits")
-        raise ValueError(
-            f"{len(spec.routing.points)} decision splits — the engine builds ONE split into a "
-            f"Parallel today (coverage row {row.key!r}); several sequential splits is not built "
-            f"yet, pending {row.ticket} (S2). Refused rather than building only the first split."
-        )
+def _check_no_split_nested_in_branch(spec: AppSpec) -> None:
+    """D3 (#29 spec decisions): S2 (#33) generalises to N SEQUENTIAL splits (split -> rejoin ->
+    later split -> rejoin) — but a split NESTED inside another split's own branch is a different
+    shape entirely, with no live capture, so it is refused outright rather than silently built
+    (THE RULE). `branch_stage_owner` maps every stage that appears in ANY point's branch sequences
+    to the `at_stage` of the point that FIRST claims it (first owner wins — a stage claimed by two
+    different splits' branches is not what this check is for; see `_check_no_duplicate_branch_names`
+    for the branch-NAME collision that shape would actually cause downstream). A point whose own
+    `at_stage` is already owned by a DIFFERENT point's `at_stage` is a split sitting inside that
+    other split's branch — nested, and refused.
+    """
+    branch_stage_owner: dict[str, str] = {}
+    for point in spec.routing.points:
+        for _option, seq in point.route_per_option:
+            for stage in seq:
+                branch_stage_owner.setdefault(stage, point.at_stage)
+    for point in spec.routing.points:
+        owner = branch_stage_owner.get(point.at_stage)
+        if owner is not None and owner != point.at_stage:
+            row = coverage.get("nested-split")
+            raise ValueError(
+                f"split at {point.at_stage!r} sits inside the branch of the split at {owner!r} "
+                f"— a split nested inside a branch (coverage row {row.key!r}: {row.reason}). "
+                f"Refused rather than built."
+            )
+
+
+def _check_no_duplicate_branch_names(spec: AppSpec) -> None:
+    """D3 (#29 spec decisions): a branch id is `hash(model, kind, index, name)` — two branches of
+    the SAME name across two DIFFERENT splits collide on that id and silently overwrite one
+    another, and make the branch-local `GotoTask` derivation (which branch a rework loop's Goto
+    belongs to) ambiguous. Mirrors `kfforge.graph.build_workflow`'s own runtime guard, but refuses
+    at COMPILE so a `BuildPlan` never claims a shape that would overwrite itself the moment it was
+    built. Within a single point, `options` are already distinct (schema-level) — this check is
+    specifically CROSS-point: the SAME option value declared by two different splits.
+    """
+    owner_by_value: dict[str, str] = {}
+    for point in spec.routing.points:
+        for option in point.options:
+            prior = owner_by_value.get(option)
+            if prior is not None and prior != point.at_stage:
+                raise ValueError(
+                    f"branch name {option!r} is declared by both the split at {prior!r} and the "
+                    f"split at {point.at_stage!r} — a branch id is a hash of (model, kind, index, "
+                    f"name), so two branches sharing a name produce the SAME id and silently "
+                    f"overwrite each other, and the branch-local GotoTask derivation becomes "
+                    f"ambiguous. Give each split's branches distinct names."
+                )
+            owner_by_value.setdefault(option, point.at_stage)
 
 
 def _check_routing_stages(spec: AppSpec) -> None:
@@ -323,6 +359,44 @@ def _check_routing_literals(spec: AppSpec) -> None:
                     f"routing at stage {point.at_stage!r} on field {point.field_name!r} tests "
                     f"option {option!r}, which is not a value of list {list_name!r}: {values}"
                 )
+
+
+def _check_all_deciding_values_claimed(spec: AppSpec) -> None:
+    """AC3: a real value of the deciding field claimed by no branch (CLAUDE.md Conditional
+    routing: "Fail OPEN, not closed — a value matching no branch condition SKIPS THE WHOLE
+    PARALLEL and the item completes with no work done, silently"). `_check_routing_literals`
+    already refuses a declared `option` that ISN'T a real list value; this check refuses the
+    opposite gap — a real list value that no declared `option` claims — measured against the
+    field's FULL declared option set, not just what the spec happened to enumerate.
+
+    Only a Select field with a resolvable `list_name` HAS a full declared option set to measure
+    against; a Text-typed deciding field is skipped outright (`continue`), never refused here —
+    CLAUDE.md notes `build_branch_condition` accepts a Text deciding field, and there is no list
+    to be incomplete against. S2 (#33) generalises to N sequential splits, so this loop runs once
+    per `DecisionPoint` in `spec.routing.points`, same as every sibling routing check.
+    """
+    fields_by_name = {f.name: f for f in spec.data_model.fields}
+    lists_by_name = {l.name: l for l in spec.master_data.lists}
+    for point in spec.routing.points:
+        field = fields_by_name.get(point.field_name)
+        if field is None or field.type != FieldType.SELECT:
+            continue
+        list_spec = lists_by_name.get(field.list_name) if field.list_name is not None else None
+        if list_spec is None:
+            continue
+        declared = tuple(list_spec.values)
+        claimed = set(point.options)
+        unclaimed = [v for v in declared if v not in claimed]
+        if unclaimed:
+            row = coverage.get("unclaimed-value")
+            raise ValueError(
+                f"routing at {point.at_stage!r} on field {point.field_name!r}: value(s) "
+                f"{sorted(unclaimed)} of list {field.list_name!r} are claimed by no branch "
+                f"(coverage row {row.key!r}) — at runtime an item with such a value would "
+                f"silently skip the whole split and complete with no work done (Fail-Open, "
+                f"ADR-0002 D8). Refused at compile; model an intentional fall-through as an "
+                f"explicit branch claiming that value."
+            )
 
 
 def _check_loop_stages(spec: AppSpec) -> None:
@@ -616,11 +690,13 @@ _CROSS_CHECKS: tuple[Callable[[AppSpec], None], ...] = (
     _check_select_fields_have_list,     # F3 — right after field/section integrity
     _check_tables,
     _check_computed_fields,
-    _check_at_most_one_split,           # S1 (#32) — one split only; several is pending #33
+    _check_no_split_nested_in_branch,   # D3 (#29) — nested split has no captured shape, ever
+    _check_no_duplicate_branch_names,   # D3 (#29) — cross-split branch-id collision
     _check_routing_field_and_options,   # F4 — before the other routing checks, not inside them
     _check_routing_stages,
     _check_routing_complete,
     _check_routing_literals,
+    _check_all_deciding_values_claimed,  # AC3 — the inverse of _check_routing_literals
     _check_loop_stages,
     _check_loop_gate_is_boolean,
     _check_visibility_entries,
@@ -728,46 +804,53 @@ def _op_add_table(spec: AppSpec) -> tuple[Op, ...]:
     )
 
 
-def _workflow_decomposition(spec: AppSpec) -> tuple[tuple[str, ...], dict[str, Any] | None]:
-    """Decompose the flat stage list + a single decision split into the DECLARATIVE plan a later
-    apply-executor maps onto `kfforge.graph.build_workflow`: a linear `steps` spine plus one
-    optional Parallel gateway. This is a plan shape, not a verbatim call: `steps` are bare stage
-    NAMES (the per-stage owner role is rejoined from the separate `set_assignees` op — CLAUDE.md
-    Members first — never carried here), and `parallel` is `{name, after, branches:[{name,
-    stages}]}`; the executor is what turns that into build_workflow's `steps=[(name, role)]`,
-    `parallel=(name, [(branch, [(name, role)])])`, and sibling `parallel_after=after` arguments.
-    (No executor consumes it yet — `kfforge.engine` is still a planning stub; the plan is the
-    deliverable a build agent reads.)
+def _workflow_decomposition(spec: AppSpec) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...]]:
+    """Decompose the flat stage list + zero or more sequential decision splits into the
+    DECLARATIVE plan a later apply-executor maps onto `kfforge.graph.build_workflow`: a linear
+    `steps` spine plus a tuple of Parallel gateways, zero or more. This is a plan shape, not a
+    verbatim call: `steps` are bare stage NAMES (the per-stage owner role is rejoined from the
+    separate `set_assignees` op — CLAUDE.md Members first — never carried here), and each entry of
+    `parallels` is `{name, after, branches:[{name, stages}]}`; the executor is what turns that
+    tuple into build_workflow's own `parallels=[(ParallelSpec, after_index), ...]` argument (see
+    `kfforge.graph.build_workflow`, which already supports N sequential gateways). (No executor
+    consumes it yet — `kfforge.engine` is still a planning stub; the plan is the deliverable a
+    build agent reads.)
 
-    S1 (#32): exactly one `DecisionPoint` becomes one Parallel whose branches ARE the option route
-    SEQUENCES (P1 #30 — a branch is an ordered list of stages). Those branch stages are lifted OUT
-    of the linear spine and hung under the Parallel; what remains linear is the prefix up to and
-    including the fork stem (`at_stage`) plus the merge/suffix the branches rejoin into. The
-    gateway is inserted right after the stem's own index in the reduced `steps` list. Zero splits
-    → a plain linear spine, no Parallel (unchanged behaviour).
+    S2 (#33, generalising S1 #32's one-split shape, spec #29 decision D3): every `DecisionPoint` in
+    `spec.routing.points` becomes its own Parallel whose branches ARE that point's option route
+    SEQUENCES (P1 #30 — a branch is an ordered list of stages). The branch stages of ALL points —
+    not just one — are lifted OUT of the shared linear spine and hung under their own Parallel;
+    what remains linear is every stage no split ever routes through. Each gateway is inserted right
+    after ITS OWN stem's (`at_stage`) index in that same reduced `steps` list — `_check_no_split_
+    nested_in_branch` has already refused a split whose stem sits inside a DIFFERENT split's own
+    branch, so every stem is guaranteed to still be in `linear` by the time this runs. Zero splits
+    → a plain linear spine, no Parallels (unchanged behaviour).
 
-    `_check_at_most_one_split` has already refused >1 split (that generalisation is S2 #33), so
-    `points[0]` is the only split. Branch ORDER follows the deciding field's declared `options`
-    (not `route_per_option`'s pair order), so it lines up with the diagram and with S4's per-branch
-    conditions. A Parallel built here is an UNCONDITIONAL and-fork (every branch runs) — the branch
-    CONDITIONS that make it a real decision are a separate build step, S4 #35 (CLAUDE.md
-    Conditional routing).
+    Parallels are returned in DECLARED POINT order (`spec.routing.points`'s own order), each
+    Parallel's branch ORDER following ITS OWN deciding field's declared `options` (not
+    `route_per_option`'s pair order) — so both line up with the diagram and with S4's per-branch
+    conditions. Every Parallel built here is an UNCONDITIONAL and-fork (every branch runs) — the
+    branch CONDITIONS that make one a real decision are a separate build step, S4 #35 (CLAUDE.md
+    Conditional routing); `_check_no_duplicate_branch_names` has already refused two splits sharing
+    a branch name, so no two entries in the returned tuple can collide on a branch id downstream.
     """
     stage_names = tuple(s.name for s in spec.stages.stages)
     points = spec.routing.points
     if not points:
-        return stage_names, None
-    point = points[0]
-    mapping = dict(point.route_per_option)
-    branches = tuple((opt, tuple(mapping[opt])) for opt in point.options)  # declared-option order
-    branch_stages = {st for _, seq in branches for st in seq}
-    linear = tuple(n for n in stage_names if n not in branch_stages)
-    parallel = {
-        "name": point.field_name,
-        "after": linear.index(point.at_stage),  # stem is never a branch stage, so it stays linear
-        "branches": tuple({"name": opt, "stages": seq} for opt, seq in branches),
-    }
-    return linear, parallel
+        return stage_names, ()
+    branch_stages_all = {st for point in points for _opt, seq in point.route_per_option
+                          for st in seq}
+    linear = tuple(n for n in stage_names if n not in branch_stages_all)
+    parallels = []
+    for point in points:
+        mapping = dict(point.route_per_option)
+        branches = tuple((opt, tuple(mapping[opt])) for opt in point.options)  # declared order
+        parallels.append({
+            "name": point.field_name,
+            "after": linear.index(point.at_stage),  # stem is never a branch stage, stays linear
+            "branches": tuple({"name": opt, "stages": seq} for opt, seq in branches),
+        })
+    return linear, tuple(parallels)
 
 
 def _op_build_workflow(spec: AppSpec) -> tuple[Op, ...]:
@@ -779,13 +862,13 @@ def _op_build_workflow(spec: AppSpec) -> tuple[Op, ...]:
     matching `kfforge.graph.build_workflow`'s own `Resource`-node write being a materially
     different operation from the `Activity`/`ProcessDef` graph this op represents.
 
-    S1 (#32): the routing dimension is now CONSUMED (`_workflow_decomposition`) into the executable
-    `steps` + `parallel` pair `kfforge.graph.build_workflow` actually takes — a single decision
-    split becomes a Parallel gateway with its branches. The descriptive `stages`/`routing` still
-    ride along in full (nothing collected is discarded, and S4 needs `routing` to attach branch
-    conditions to the same gateway).
+    S2 (#33, generalising S1 #32): the routing dimension is now CONSUMED (`_workflow_decomposition`)
+    into the executable `steps` + `parallels` pair `kfforge.graph.build_workflow` actually takes —
+    N sequential decision splits become N Parallel gateways, in declared point order, each with its
+    own branches. The descriptive `stages`/`routing` still ride along in full (nothing collected is
+    discarded, and S4 needs `routing` to attach branch conditions to the right gateway).
     """
-    steps, parallel = _workflow_decomposition(spec)
+    steps, parallels = _workflow_decomposition(spec)
     return (Op(
         kind="build_workflow",
         args={
@@ -799,14 +882,15 @@ def _op_build_workflow(spec: AppSpec) -> tuple[Op, ...]:
                  "route_per_option": dict(p.route_per_option)}
                 for p in spec.routing.points
             ),
-            # the executable shape build_workflow consumes: the linear spine, and the one Parallel
-            # (branches = option route sequences, inserted after the fork stem) or None when linear.
+            # the executable shape build_workflow consumes: the linear spine, and zero or more
+            # Parallels (branches = option route sequences, each inserted after its own fork stem).
             "steps": steps,
-            "parallel": parallel,
+            "parallels": parallels,
         },
         why="ProcessDef + Activities in stage order — WorkflowType=Sequence order IS the flow "
-            "(Build order step 5); one decision split becomes a Parallel gateway (unconditional "
-            "and-fork until S4 attaches branch conditions); assignees are a separate op",
+            "(Build order step 5); N sequential decision splits become N Parallel gateways in "
+            "order (unconditional and-forks until S4 attaches branch conditions); assignees are a "
+            "separate op",
     ),)
 
 
@@ -838,6 +922,45 @@ def _op_add_goto_gate(spec: AppSpec) -> tuple[Op, ...]:
                f"(Gate polarity)")
         for l in spec.rework_loops.loops
     )
+
+
+def _op_set_branch_conditions(spec: AppSpec) -> tuple[Op, ...]:
+    """Attaches the branch CONDITIONS that make `_op_build_workflow`'s Parallel a real conditional
+    split, not an unconditional and-fork (CLAUDE.md Conditional routing). Mirrors `_op_add_table`
+    returning `()` when there are no tables: an empty `spec.routing.points` means a linear flow
+    with no split to condition at all, so this returns `()` rather than a no-op Op.
+
+    ⚠️ STILL ONLY WIRED FOR `points[0]`, even now that S2 (#33) lets `spec.routing.points` hold
+    more than one split — attaching conditions to every gateway a multi-split spec now BUILDS is
+    S4's own job (#35, CLAUDE.md Conditional routing), not S2's; S2 is scoped to workflow
+    decomposition and the compile-time refusals in `_check_no_split_nested_in_branch`/
+    `_check_no_duplicate_branch_names`. A spec with more than one split therefore compiles a
+    `build_workflow` op with N Parallels but only ONE `set_branch_conditions` op, for the FIRST —
+    every later gateway stays an unconditional and-fork until S4 lands. Not a silent-downgrade
+    violation of CLAUDE.md THE RULE (the op that IS emitted is fully correct for what it covers),
+    but a known, deliberately deferred gap — do not read "one op" as "every split is conditioned."
+
+    `_check_routing_field_and_options`/`_check_routing_literals`/`_check_all_deciding_values_
+    claimed` have already guaranteed every option on every point is both a real literal AND that
+    no real list value is left unclaimed — so this builder only shapes the args, it never
+    re-validates. In this compile model a branch's NAME is the same string as the literal that
+    selects it (`point.options`), so `branch_literals` is `{opt: opt}` — matching
+    `forge_set_branch_conditions(field_name, branch_literals, ...)`'s own `branch NAME -> literal`
+    mapping.
+    """
+    if not spec.routing.points:
+        return ()
+    point = spec.routing.points[0]
+    return (Op(
+        kind="set_branch_conditions",
+        args={"at_stage": point.at_stage, "field_name": point.field_name,
+              "branch_literals": {opt: opt for opt in point.options}},
+        why=f"attach the branch conditions that make this Parallel a real conditional split, not "
+            f"an unconditional and-fork (CLAUDE.md Conditional routing); branch NAME -> the "
+            f"literal of field {point.field_name!r} that selects it, matching "
+            f"forge_set_branch_conditions. Only the FIRST split's gateway — every later split "
+            f"(S2 #33) stays unconditional pending S4 (#35)",
+    ),)
 
 
 def _op_set_visibility(spec: AppSpec) -> tuple[Op, ...]:
@@ -1011,6 +1134,7 @@ _OP_BUILDERS: dict[str, Callable[[AppSpec], tuple[Op, ...]]] = {
     "build_workflow": _op_build_workflow,
     "set_assignees": _op_set_assignees,
     "add_goto_gate": _op_add_goto_gate,
+    "set_branch_conditions": _op_set_branch_conditions,
     "set_visibility": _op_set_visibility,
     "set_events": _op_set_events,
     "set_styles": _op_set_styles,

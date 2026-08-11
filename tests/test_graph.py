@@ -696,6 +696,103 @@ def test_add_goto_task_root_chain_behavior_unchanged_when_a_parallel_also_exists
     assert got[chain[-1]]["NodeType"] == "EndEvent"
 
 
+# ---- build_workflow — N sequential Parallel gateways (S2, ticket #33) ------------------------
+# build_workflow used to support at most one Parallel gateway via `parallel`/`parallel_after`.
+# `parallels` generalizes that to a list of `(parallel_spec, after_index)` pairs, and adds an
+# explicit branch-name-uniqueness check (a branch id is a hash of (model, kind, index, name), so
+# two branches sharing a name would otherwise collide silently).
+
+def test_build_workflow_two_sequential_parallels() -> None:
+    from kfforge.graph import build_workflow
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"}}
+    got = build_workflow(
+        bare,
+        [("S1", None), ("S2", None)],
+        parallels=[
+            (("Fork1", [("A", [("A1", None)]), ("B", [("B1", None)])]), 0),
+            (("Fork2", [("C", [("C1", None)]), ("D", [("D1", None)])]), 1),
+        ],
+    )
+
+    root_pd_id = got["M1"]["RootProcessDef"]
+    root_chain = got[root_pd_id]["ProcessDef::Activity"]
+    root_names = [got[a]["Name"] for a in root_chain]
+    assert root_names == ["Start", "S1", "Fork1", "S2", "Fork2", "End"], \
+        "Fork1 sits right after S1, Fork2 right after S2 — root chain order preserved"
+
+    parallel_nodes = [n for n in got.values()
+                      if isinstance(n, dict) and n.get("Kind") == "Activity"
+                      and n.get("NodeType") == "Parallel"]
+    assert len(parallel_nodes) == 2, "exactly two Parallel gateway Activities"
+    assert [n["Name"] for n in parallel_nodes] == ["Fork1", "Fork2"], \
+        "Fork1 before Fork2, matching root ProcessDef::Activity order"
+
+    branch_pds = {n["Name"]: n for n in got.values()
+                 if isinstance(n, dict) and n.get("Kind") == "ProcessDef" and n.get("Name") in
+                 ("A", "B", "C", "D")}
+    assert set(branch_pds) == {"A", "B", "C", "D"}
+    assert [got[a]["Name"] for a in branch_pds["A"]["ProcessDef::Activity"]] == ["A1"]
+    assert [got[a]["Name"] for a in branch_pds["B"]["ProcessDef::Activity"]] == ["B1"]
+    assert [got[a]["Name"] for a in branch_pds["C"]["ProcessDef::Activity"]] == ["C1"]
+    assert [got[a]["Name"] for a in branch_pds["D"]["ProcessDef::Activity"]] == ["D1"]
+
+    branch_ids = {n["Id"] for n in branch_pds.values()}
+    assert len(branch_ids) == 4, "all four branch ProcessDef ids are distinct"
+
+
+def test_build_workflow_duplicate_branch_name_across_splits_raises() -> None:
+    from kfforge.graph import build_workflow
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"}}
+    with pytest.raises(ValueError, match="Yes"):
+        build_workflow(
+            bare,
+            [("S1", None), ("S2", None)],
+            parallels=[
+                (("Fork1", [("Yes", [("A1", None)]), ("No", [("A2", None)])]), 0),
+                (("Fork2", [("Yes", [("C1", None)]), ("Maybe", [("D1", None)])]), 1),
+            ],
+        )
+
+
+def test_build_workflow_single_parallel_unchanged() -> None:
+    """The pre-existing `parallel=`/`parallel_after=` path must produce byte-identical output to
+    before — same Parallel count, same branch names/steps, same branch id values (100 + b_i)."""
+    draft, root_pd_id, branch_a_pd_id, branch_b_pd_id = _process_with_parallel_branches()
+
+    parallel_nodes = [n for n in draft.values()
+                      if isinstance(n, dict) and n.get("Kind") == "Activity"
+                      and n.get("NodeType") == "Parallel"]
+    assert len(parallel_nodes) == 1
+    assert parallel_nodes[0]["Name"] == "Fork"
+
+    root_names = [draft[a]["Name"] for a in draft[root_pd_id]["ProcessDef::Activity"]]
+    assert root_names == ["Start", "Root Step 1", "Root Step 2", "Fork", "End"]
+
+    assert [draft[a]["Name"] for a in draft[branch_a_pd_id]["ProcessDef::Activity"]] == \
+        ["A1", "A2"]
+    assert [draft[a]["Name"] for a in draft[branch_b_pd_id]["ProcessDef::Activity"]] == \
+        ["B1", "B2"]
+    assert draft[branch_a_pd_id]["Id"] != draft[branch_b_pd_id]["Id"]
+
+
+def test_build_workflow_parallel_and_parallels_both_given_raises() -> None:
+    from kfforge.graph import build_workflow
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"}}
+    with pytest.raises(ValueError):
+        build_workflow(
+            bare,
+            [("S1", None)],
+            parallel=("Fork", [("A", [("A1", None)]), ("B", [("B1", None)])]),
+            parallel_after=0,
+            parallels=[
+                (("Fork2", [("C", [("C1", None)]), ("D", [("D1", None)])]), 0),
+            ],
+        )
+
+
 def test_add_goto_task_can_pair_with_build_goto_gate_and_reads_clean() -> None:
     """Integration: add_goto_task + expr.build_goto_gate together produce a loop verify.doctor
     accepts, using a REAL Boolean field and a REAL permission matrix (not raw dict surgery) —

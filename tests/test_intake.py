@@ -497,6 +497,19 @@ def test_set_assignees_sits_between_build_workflow_and_add_goto_gate() -> None:
     assert i_workflow < i_assignees < i_goto
 
 
+# ---- S4 (#35): branch conditions attach right after the Goto gates, before visibility ----------
+
+def test_set_branch_conditions_sits_between_add_goto_gate_and_set_visibility() -> None:
+    """S4 (#35): the branch-condition op that turns S1's unconditional Parallel into a real
+    conditional split belongs right after the Goto gates (Build order step 7 covers both the
+    per-branch loop half and the deciding-field half together) and before the visibility matrix
+    (Build order step 8)."""
+    i_goto = OP_ORDER.index("add_goto_gate")
+    i_branch_conditions = OP_ORDER.index("set_branch_conditions")
+    i_visibility = OP_ORDER.index("set_visibility")
+    assert i_goto < i_branch_conditions < i_visibility
+
+
 # ---- B2: master-data list values must reach the plan ------------------------------------------
 
 def test_create_list_carries_values_and_is_human_gated() -> None:
@@ -927,8 +940,9 @@ def test_one_split_compiles_to_a_parallel_with_its_branches() -> None:
     op = _workflow_op(_full_spec())
     # branch stages lifted out of the linear spine; the fork stem and merge stay linear
     assert op.args["steps"] == ("Intake", "Diagnose", "Quality Check")
-    parallel = op.args["parallel"]
-    assert parallel is not None
+    parallels = op.args["parallels"]
+    assert len(parallels) == 1
+    parallel = parallels[0]
     assert parallel["name"] == "Repairable"            # the deciding field
     assert parallel["after"] == 1                       # inserted right after "Diagnose"
     assert parallel["branches"] == (
@@ -945,7 +959,7 @@ def test_split_branch_may_be_a_multi_stage_sequence() -> None:
                       route_per_option=(("Yes", ("Repair", "Quality Check")),
                                         ("No", ("Return to Customer",)))),
     )))
-    parallel = _workflow_op(spec).args["parallel"]
+    parallel = _workflow_op(spec).args["parallels"][0]
     assert parallel["branches"][0] == {"name": "Yes", "stages": ("Repair", "Quality Check")}
     # both branch's stages are gone from the linear spine; only stem + prefix remain
     assert _workflow_op(spec).args["steps"] == ("Intake", "Diagnose")
@@ -960,30 +974,149 @@ def test_branch_order_follows_declared_options_not_route_map_order() -> None:
                       # route pairs written No-first on purpose
                       route_per_option=(("No", ("Return to Customer",)), ("Yes", ("Repair",)))),
     )))
-    names = [b["name"] for b in _workflow_op(spec).args["parallel"]["branches"]]
+    names = [b["name"] for b in _workflow_op(spec).args["parallels"][0]["branches"]]
     assert names == ["Yes", "No"]
 
 
 def test_linear_spec_has_no_parallel() -> None:
-    """S1 (#32) AC3: a spec with no decision split is unaffected — no Parallel, steps are simply
+    """S1 (#32) AC3: a spec with no decision split is unaffected — no Parallels, steps are simply
     every stage in order."""
     op = _workflow_op(_linear_spec())
-    assert op.args["parallel"] is None
+    assert op.args["parallels"] == ()
     assert op.args["steps"] == tuple(s.name for s in _linear_spec().stages.stages)
 
 
-def test_several_splits_refused_pending_s2() -> None:
-    """No silent downgrade (CLAUDE.md D6): with routing now consumed, a spec with more than one
-    decision split must refuse loudly rather than build only the first. Several sequential splits
-    is the 'sequential-splits' coverage row, pending #33 (S2)."""
+# ---- S2 (#33): N sequential splits — split, rejoin, later split, rejoin -----------------------
+
+def test_two_sequential_splits_compile_to_two_parallels_in_order() -> None:
+    """D3 (#29 spec decisions): S2 generalises S1's one-split shape to N SEQUENTIAL splits. Two
+    independent DecisionPoints — Diagnose (existing) and a new one at Quality Check, each on its
+    own field with its own distinct branch stages and distinct option names — compile to two
+    Parallel gateways, in declared point order, and BOTH splits' branch stages are lifted out of
+    the ONE shared linear spine."""
+    full = _full_spec()
+    spec = dataclasses.replace(
+        full,
+        stages=Stages(stages=full.stages.stages + (
+            StageSpec("Escalate to Manager", "Service Manager",
+                      "escalate the finished job for a second look",
+                      "quality check flagged it for escalation", "manager has reviewed it"),
+            StageSpec("Notify Front Desk", "Front Desk", "tell front desk the job is ready",
+                      "quality check passed with nothing to escalate", "front desk notified"),
+        )),
+        data_model=dataclasses.replace(full.data_model, fields=full.data_model.fields + (
+            FieldReq("Escalate", FieldType.SELECT, True, "Quality Check",
+                     list_name="Escalate Options"),
+        )),
+        master_data=MasterData(lists=full.master_data.lists + (
+            ListSpec("Escalate Options", ("Escalate", "Close"), "Service Manager"),
+        )),
+        routing=Routing(points=(
+            full.routing.points[0],
+            DecisionPoint(at_stage="Quality Check", field_name="Escalate",
+                          options=("Escalate", "Close"),
+                          route_per_option=(("Escalate", ("Escalate to Manager",)),
+                                            ("Close", ("Notify Front Desk",)))),
+        )),
+    )
+    op = _workflow_op(spec)
+    assert op.args["steps"] == ("Intake", "Diagnose", "Quality Check")
+    parallels = op.args["parallels"]
+    assert len(parallels) == 2
+    first, second = parallels
+    assert first["name"] == "Repairable"
+    assert first["after"] == 1                          # right after "Diagnose"
+    assert first["branches"] == (
+        {"name": "Yes", "stages": ("Repair",)},
+        {"name": "No", "stages": ("Return to Customer",)},
+    )
+    assert second["name"] == "Escalate"
+    assert second["after"] == 2                          # right after "Quality Check"
+    assert second["branches"] == (
+        {"name": "Escalate", "stages": ("Escalate to Manager",)},
+        {"name": "Close", "stages": ("Notify Front Desk",)},
+    )
+
+
+def test_split_nested_in_a_branch_is_refused() -> None:
+    """D3 (#29): a split whose OWN at_stage sits inside a DIFFERENT split's branch has no captured
+    shape — refused at compile (THE RULE), naming the nested-split coverage row. Split B's
+    at_stage ("Repair") is exactly the stage split A's own "Yes" branch routes through."""
     spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
         DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
                       route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
-        DecisionPoint(at_stage="Quality Check", field_name="Repairable", options=("Yes", "No"),
-                      route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
+        DecisionPoint(at_stage="Repair", field_name="Repairable", options=("Yes", "No"),
+                      route_per_option=(("Yes", ("Quality Check",)), ("No", ("Quality Check",)))),
     )))
-    with pytest.raises(ValueError, match="#33"):
+    with pytest.raises(ValueError, match="nested-split") as exc_info:
         compile_spec(spec)
+    message = str(exc_info.value)
+    assert "Repair" in message
+    assert "Diagnose" in message
+
+
+def test_two_splits_sharing_a_branch_name_are_refused() -> None:
+    """D3 (#29): a branch id is a hash of (model, kind, index, name) — two splits declaring the
+    SAME option/branch name collide on that id and silently overwrite one another. Refused at
+    compile, mirroring graph.build_workflow's own runtime guard. The two splits here are siblings
+    (neither nested in the other's branch), so this isolates the duplicate-name refusal alone."""
+    spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
+        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
+                      route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
+        DecisionPoint(at_stage="Quality Check", field_name="Repairable",
+                      options=("Yes", "Something Else"),
+                      route_per_option=(("Yes", ("Repair",)),
+                                        ("Something Else", ("Return to Customer",)))),
+    )))
+    with pytest.raises(ValueError, match="Yes") as exc_info:
+        compile_spec(spec)
+    message = str(exc_info.value)
+    assert "Diagnose" in message
+    assert "Quality Check" in message
+
+
+# ---- S4 (#35): one decision split's branch attaches real conditions, not just an unconditional
+#      Parallel ------------------------------------------------------------------------------
+
+def test_one_split_emits_one_set_branch_conditions_op_with_the_deciding_field_and_literals() -> None:
+    """S4 (#35) AC1/AC2: `_full_spec`'s one DecisionPoint (Diagnose -> Repairable, Yes/No) compiles
+    to exactly one `set_branch_conditions` op naming the fork stage, the deciding field, and a
+    branch-name -> literal mapping — matching `forge_set_branch_conditions`'s own shape."""
+    plan = compile_spec(_full_spec())
+    branch_cond_ops = [op for op in plan.ops if op.kind == "set_branch_conditions"]
+    assert len(branch_cond_ops) == 1
+    op = branch_cond_ops[0]
+    assert op.args["at_stage"] == "Diagnose"
+    assert op.args["field_name"] == "Repairable"
+    assert op.args["branch_literals"] == {"Yes": "Yes", "No": "No"}
+
+
+def test_linear_spec_emits_no_set_branch_conditions_ops() -> None:
+    """S4 (#35) AC3: a spec with no decision split (`_linear_spec`, `routing.points == ()`) has no
+    Parallel to condition — `_op_set_branch_conditions` must emit ZERO ops, mirroring
+    `_op_add_table` returning `()` when there are no tables."""
+    plan = compile_spec(_linear_spec())
+    assert [op for op in plan.ops if op.kind == "set_branch_conditions"] == []
+
+
+def test_check_unclaimed_deciding_value_raises() -> None:
+    """S4 (#35) AC3 / CLAUDE.md Conditional routing "Fail OPEN, not closed": a real value of the
+    deciding field's list ("Maybe") that no branch option claims must refuse at compile — an item
+    with that value would otherwise silently skip the whole Parallel and complete with no work
+    done. The DecisionPoint's own `options` ("Yes", "No") are left UNCHANGED and are still valid
+    list values, so `_check_routing_literals` (options must be ⊆ list values) does not fire here —
+    this is the NEW, opposite check (list values must be ⊆ options)."""
+    full = _full_spec()
+    bad_lists = tuple(
+        dataclasses.replace(l, values=("Yes", "No", "Maybe")) if l.name == "Yes No" else l
+        for l in full.master_data.lists
+    )
+    bad = dataclasses.replace(full, master_data=MasterData(lists=bad_lists))
+    with pytest.raises(ValueError) as exc_info:
+        compile_spec(bad)
+    message = str(exc_info.value)
+    assert "Maybe" in message
+    assert "unclaimed-value" in message
 
 
 def test_build_page_carries_aggregated_kpis_and_actions() -> None:
@@ -1303,6 +1436,7 @@ def test_op_counts_match_the_fixture_exactly() -> None:
         "build_workflow": 1,     # one ProcessDef for the whole stage sequence
         "set_assignees": 5,      # one per stage
         "add_goto_gate": 1,      # Quality Check -> Repair
+        "set_branch_conditions": 1,  # Diagnose's one split, Yes/No
         "set_visibility": 1,     # the whole matrix in one op
         "set_events": 1,         # Total Parts Cost
         "set_styles": 5,         # one per stage
@@ -1314,7 +1448,7 @@ def test_op_counts_match_the_fixture_exactly() -> None:
                                  # (Front Desk, Manager Dashboard)
         "simulate_case": 3,
     }
-    assert len(plan.ops) == 37
+    assert len(plan.ops) == 38
 
 
 def test_summary_reconciles_with_ops() -> None:

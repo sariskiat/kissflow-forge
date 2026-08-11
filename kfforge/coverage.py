@@ -77,16 +77,22 @@ ROWS: tuple[CoverageRow, ...] = (
     CoverageRow("computed-field-event", "computed field via event", Bucket.CAPTURED_LIVE),  # refine: #12
     CoverageRow("per-step-visibility", "per-step visibility", Bucket.CAPTURED_LIVE),
     # ── buildable: engine will build it, not yet captured; pending its ticket ────
+    # offline-built by S2 (#33); pending live capture #16 (the live built-app-vs-input
+    # comparator, see spec #29 Out-of-Scope) — no live capture of several sequential
+    # splits exists yet (case 1 has only one Parallel), so this stays BUILDABLE, not
+    # captured-live.
     CoverageRow(
         "sequential-splits", "several splits, one after another",
-        Bucket.BUILDABLE, ticket="#33",
+        Bucket.BUILDABLE, ticket="#16",
     ),
     # ── refuses-loudly, pending a wiring/capability ticket ──────────────────────
+    # Moved from "pending #33" to a permanent Known Exclusion: S2 wires this refusal
+    # in compile.py, so the shape is refused forever (THE RULE), not waiting on wiring.
     CoverageRow(
         "nested-split", "a split nested inside a branch",
-        Bucket.REFUSES_LOUDLY, ticket="#33",
+        Bucket.REFUSES_LOUDLY,
         reason="no captured example of a split inside a branch; the engine never "
-               "writes an uncaptured shape (THE RULE, D3).",
+               "writes an uncaptured shape (THE RULE).",
     ),
     CoverageRow(
         "word-list-dropdown", "dropdown backed by a word list",
@@ -142,6 +148,16 @@ ROWS: tuple[CoverageRow, ...] = (
         reason="no captured shape for a non-person task; refused rather than silently "
                "downgraded to a person's task (D6). No capture ticket scoped yet, so a "
                "written Known Exclusion until one exists.",
+    ),
+    CoverageRow(
+        "unclaimed-value", "a deciding value claimed by no branch",
+        Bucket.REFUSES_LOUDLY,
+        reason="a real value of the deciding field claimed by no branch would, at runtime, "
+               "silently skip the whole split and complete the item with no work done, "
+               "indistinguishable from a real success (Fail-Open, ADR-0002 D8); refused at "
+               "compile (S4, #35). Runtime still Fails-Open and the doctor still warns — only "
+               "the compile gate is a hard refusal. An intentional fall-through must be modeled "
+               "as an explicit branch claiming that value.",
     ),
 )
 

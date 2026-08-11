@@ -742,7 +742,7 @@ def test_full_stateless_round_driven_only_through_the_tool_functions(tmp_path: A
     positions = [OP_ORDER.index(k) for k in kinds]
     assert positions == sorted(positions), "ops must appear in OP_ORDER, never out of sequence"
     assert plan["summary"]["create_process"] == 1
-    assert plan["op_count"] == len(plan["ops"]) == 37  # pinned, matches test_intake.py's own count
+    assert plan["op_count"] == len(plan["ops"]) == 38  # pinned, matches test_intake.py's own count
 
 
 def test_full_round_reconstructs_an_appspec_equal_to_the_original_fixture(tmp_path: Any) -> None:

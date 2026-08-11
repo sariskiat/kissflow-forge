@@ -515,6 +515,41 @@ def spec_with_multistage_branches() -> AppSpec:
     )
 
 
+def spec_with_sequential_splits() -> AppSpec:
+    """S2 (#33): TWO sequential splits -- StemA -> [A1, A2] -> StemB (split A's own rejoin, and
+    also split B's own stem) -> [B1] -> End (split B's own rejoin). Pins the fix for the live-
+    verified cross-split defect: `_forward_next_stages` used to compute a SINGLE GLOBAL merge (the
+    first stage after the DEEPEST terminal across every routing point), so split A's branch
+    terminal (A2) pointed at split B's merge (End) instead of split A's own rejoin (StemB) --
+    spilling split A's branch across split B's diamond and branch entirely, exactly the kind of
+    untruthful edge ADR-0001 rules out. Each split here carries a single option so the fixture
+    isolates the cross-split bug from S1's already-covered within-split sibling spill."""
+    stages = Stages(stages=(
+        Stage("Intake", "Requester", "Open the request."),
+        Stage("StemA", "Lead", "First fork."),
+        Stage("A1", "Analyst", "First step of branch A."),
+        Stage("A2", "Analyst", "Second step of branch A."),
+        Stage("StemB", "Lead", "Second fork -- also split A's own rejoin."),
+        Stage("B1", "Analyst", "Only step of branch B."),
+        Stage("End", "Lead", "Close out -- split B's own rejoin."),
+    ))
+    routing = Routing(points=(
+        RoutingPoint(at_stage="StemA", field_name="Choice A", options=("Go",),
+                     route_per_option=(("Go", ("A1", "A2")),)),
+        RoutingPoint(at_stage="StemB", field_name="Choice B", options=("Go",),
+                     route_per_option=(("Go", ("B1",)),)),
+    ))
+    empty_dm = DataModel(fields=(), tables=())
+    empty_md = MasterData(lists=())
+    empty_personas = Personas(views=())
+    return AppSpec(
+        app_name="Sequential Splits Test", problem_goal=_empty_problem_goal(), stages=stages,
+        routing=routing, rework_loops=ReworkLoops(loops=()), data_model=empty_dm,
+        master_data=empty_md, visibility=VisibilityMatrix(entries=()), personas=empty_personas,
+        test_cases=TestCases(cases=()),
+    )
+
+
 def spec_with_forward_loop() -> AppSpec:
     """A "loop" whose to_stage comes AFTER its from_stage in the spine -- not a genuine rework
     loop by kfforge.intake.schema.LoopSpec's own contract. Proves this package says so rather
@@ -926,6 +961,47 @@ class TestFlowDiagramMultiStageBranchSequences:
         a2 = next(c for c in root.findall(".//mxCell")
                   if c.get("vertex") == "1" and self._first_line(c.get("value") or "") == "A2")
         assert "unreachable" not in (a2.get("value") or "").lower()
+
+
+class TestFlowDiagramSequentialSplits:
+    """S2 (#33): a branch terminal must rejoin at ITS OWN split's merge, never spill across a
+    LATER, sequentially-following split. Same edge-extraction style as
+    TestFlowDiagramMultiStageBranchSequences (S1) -- reuses the identical helpers."""
+
+    @staticmethod
+    def _first_line(value: str) -> str:
+        return value.split("<br>", 1)[0].strip()
+
+    def _vertex_id(self, root, name: str) -> str:
+        for c in root.findall(".//mxCell"):
+            if c.get("vertex") == "1" and self._first_line(c.get("value") or "") == name:
+                return c.get("id")
+        raise AssertionError(f"no vertex named {name!r}")
+
+    def _edge_pairs(self, root) -> set[tuple[str, str]]:
+        return {(c.get("source"), c.get("target")) for c in root.findall(".//mxCell")
+                if c.get("edge") == "1"}
+
+    def test_split_a_terminal_rejoins_at_its_own_merge_stemb(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_sequential_splits()))
+        pairs = self._edge_pairs(root)
+        a2, stem_b = self._vertex_id(root, "A2"), self._vertex_id(root, "StemB")
+        assert (a2, stem_b) in pairs, "split A's branch terminal (A2) must rejoin at StemB"
+
+    def test_split_a_terminal_does_not_spill_across_split_b(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_sequential_splits()))
+        pairs = self._edge_pairs(root)
+        a2, b1 = self._vertex_id(root, "A2"), self._vertex_id(root, "B1")
+        a2, end = self._vertex_id(root, "A2"), self._vertex_id(root, "End")
+        assert (a2, b1) not in pairs, "split A's terminal must not spill into split B's own branch"
+        assert (a2, end) not in pairs, \
+            "split A's terminal must not jump straight to split B's merge, skipping split B's diamond"
+
+    def test_split_b_terminal_rejoins_at_the_final_stage(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_sequential_splits()))
+        pairs = self._edge_pairs(root)
+        b1, end = self._vertex_id(root, "B1"), self._vertex_id(root, "End")
+        assert (b1, end) in pairs, "split B's branch terminal (B1) must rejoin at End"
 
 
 class TestSchemaDiagram:

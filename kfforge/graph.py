@@ -855,25 +855,65 @@ Step = tuple[str, str | None]                       # (step name, app-role id or
 Branch = tuple[str, list[Step]]                     # (branch name, its steps)
 
 
+ParallelSpec = tuple[str, list[Branch]]                      # (parallel name, its branches)
+
+
 def build_workflow(
     draft: Draft,
     steps: list[Step],
-    parallel: tuple[str, list[Branch]] | None = None,
+    parallel: ParallelSpec | None = None,
     parallel_after: int | None = None,
     roles: dict[str, str] | None = None,
     step_meta: dict[str, dict[str, Any]] | None = None,
+    parallels: list[tuple[ParallelSpec, int]] | None = None,
 ) -> Draft:
-    """Replace the whole workflow: Start -> steps -> [Parallel branches] -> ... -> End.
+    """Replace the whole workflow: Start -> steps -> [Parallel branches]* -> ... -> End.
 
     Shape copied from a live captured parallel node:
       Parallel Activity {NodeType:"Parallel", Activity::ProcessDef:[branch pd ids]}
       branch ProcessDef {Name, Activity:<parallel activity id>, ProcessDef::Activity:[...]}
     There are still no edges — order within each ProcessDef::Activity IS the flow.
 
+    Supports N sequential Parallel gateways via `parallels`: a list of `(parallel_spec,
+    after_index)` pairs, each meaning exactly what the single `parallel`/`parallel_after` pair
+    meant before — `after_index` is the same 0-indexed position into `steps`. Passing both
+    `parallels` and `parallel` is ambiguous and raises ValueError. Two or more parallels sharing
+    the same `after_index` are inserted in list order, back to back, right after that step.
+
     DESTRUCTIVE: every existing Activity/ProcessDef/Resource is replaced, so per-step Permission
     nodes that referenced them are dropped too. Snapshot before calling. `roles` maps a role id to
     its display name, used to label the Resource (assignee) written on each step. Pure.
     """
+    if parallels is not None and parallel is not None:
+        raise ValueError(
+            "build_workflow: pass either 'parallel'/'parallel_after' or 'parallels', not both"
+        )
+    if parallels is not None:
+        specs: list[tuple[ParallelSpec, int]] = list(parallels)
+    elif parallel is not None and parallel_after is not None:
+        specs = [(parallel, parallel_after)]
+    else:
+        specs = []
+
+    # Every branch NAME across every parallel must be globally unique. A branch id is
+    # `_new_id("ProcessDef", model_id, branch_index, name)` — a hash of (model, kind, index,
+    # name) — so two branches sharing a name (even across different splits) would either collide
+    # outright or make the branch-local rework-loop derivation (which keys on branch/stage names,
+    # see CLAUDE.md Conditional routing) genuinely ambiguous. Hard refuse rather than silently
+    # overwrite one branch with another.
+    seen_branch_names: dict[str, None] = {}
+    for (_pname, branches), _after in specs:
+        for bname, _bsteps in branches:
+            if bname in seen_branch_names:
+                raise ValueError(
+                    f"build_workflow: duplicate branch name {bname!r} across parallels — "
+                    "a branch id is a hash of (model, kind, index, name), so two branches "
+                    "sharing a name would collide (silently overwriting one branch's "
+                    "ProcessDef with the other's) and make the branch-local rework-loop "
+                    "derivation ambiguous; refusing rather than silently overwriting"
+                )
+            seen_branch_names[bname] = None
+
     new: Draft = copy.deepcopy(draft)
     model_id = _model_id(new)
     model = new[model_id]
@@ -887,6 +927,9 @@ def build_workflow(
 
     root_pd = _new_id("ProcessDef", model_id, 0, "root")
     counter = [0]
+    branch_index = [100]   # monotonic across ALL branches of ALL parallels — keeps branch pd ids
+                            # globally unique even when two parallels each start their own branches
+                            # at b_i == 0.
 
     def _activity(name: str, node_type: str, pd: str, role: str | None) -> str:
         counter[0] += 1
@@ -911,22 +954,27 @@ def build_workflow(
         new[aid] = node
         return aid
 
+    def _insert_parallel(pname: str, branches: list[Branch]) -> str:
+        counter[0] += 1
+        par = _new_id("Activity", model_id, counter[0], pname)
+        branch_ids: list[str] = []
+        for bname, bsteps in branches:
+            bpd = _new_id("ProcessDef", model_id, branch_index[0], bname)
+            branch_index[0] += 1
+            new[bpd] = {"Id": bpd, "Kind": "ProcessDef", "Name": bname, "Activity": par,
+                        "ProcessDef::Activity": [_activity(n, "UserTask", bpd, r)
+                                                 for n, r in bsteps]}
+            branch_ids.append(bpd)
+        new[par] = {"Id": par, "Kind": "Activity", "NodeType": "Parallel", "Name": pname,
+                    "ProcessDef": root_pd, "Activity::ProcessDef": branch_ids}
+        return par
+
     chain: list[str] = [_activity("Start", "StartEvent", root_pd, None)]
     for i, (name, role) in enumerate(steps):
         chain.append(_activity(name, "UserTask", root_pd, role))
-        if parallel and parallel_after == i:
-            counter[0] += 1
-            par = _new_id("Activity", model_id, counter[0], parallel[0])
-            branch_ids: list[str] = []
-            for b_i, (bname, bsteps) in enumerate(parallel[1]):
-                bpd = _new_id("ProcessDef", model_id, 100 + b_i, bname)
-                new[bpd] = {"Id": bpd, "Kind": "ProcessDef", "Name": bname, "Activity": par,
-                            "ProcessDef::Activity": [_activity(n, "UserTask", bpd, r)
-                                                     for n, r in bsteps]}
-                branch_ids.append(bpd)
-            new[par] = {"Id": par, "Kind": "Activity", "NodeType": "Parallel", "Name": parallel[0],
-                        "ProcessDef": root_pd, "Activity::ProcessDef": branch_ids}
-            chain.append(par)
+        for (pname, branches), after_index in specs:
+            if after_index == i:
+                chain.append(_insert_parallel(pname, branches))
     chain.append(_activity("End", "EndEvent", root_pd, None))
 
     new[root_pd] = {"Id": root_pd, "Kind": "ProcessDef", "WorkflowType": "Sequence",

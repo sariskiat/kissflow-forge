@@ -10,12 +10,40 @@ closing gate B2 (#36) as rows flip from pending to wired.
 """
 from __future__ import annotations
 
+import dataclasses
 import re
 
 import pytest
 
 from kfforge.coverage import ROWS, Bucket, CoverageRow, get
 from kfforge.intake.compile import compile_spec
+from kfforge.intake.schema import (
+    START_STAGE,
+    AppSpec,
+    CaseWalk,
+    DataModel,
+    DecisionPoint,
+    FieldReq,
+    ListSpec,
+    MasterData,
+    PageIntent,
+    Personas,
+    PersonaView,
+    ProblemGoal,
+    ReworkLoops,
+    Roles,
+    RoleSpec,
+    Routing,
+    Stages,
+    StageSpec,
+    StepFill,
+    TestCases,
+    Timing,
+    VisibilityEntry,
+    VisibilityMatrix,
+    WidgetIntent,
+)
+from kfforge.types import FieldType, Visibility
 
 # Reused across suites: the one fully-populated synthetic AppSpec that carries a real decision
 # split (Diagnose -> Yes:Repair / No:Return). Imported by bare module name — pytest's default
@@ -36,7 +64,7 @@ REQUIRED_KEYS = frozenset({
     # buildable
     "sequential-splits",          # #26's bold "several splits"
     # refuses-loudly (#26's bold refusals + word-list/section/report gaps)
-    "nested-split", "auto-step", "cross-branch-jump",
+    "nested-split", "auto-step", "cross-branch-jump", "unclaimed-value",
     "word-list-dropdown", "section-styling", "report-widget",
     # absorbed #7 API-impossible set
     "report-creation", "rich-text-content", "custom-component", "role-scoped-visibility",
@@ -46,7 +74,7 @@ REQUIRED_KEYS = frozenset({
 # Exclusions, not unbuilt capabilities. Pinning this set is what tests AC4: any
 # pending refuse-row that loses its ticket would fall into this set and fail, and a
 # Known Exclusion that accidentally gains one would too.
-KNOWN_EXCLUSION_KEYS = frozenset({"cross-branch-jump", "auto-step"})
+KNOWN_EXCLUSION_KEYS = frozenset({"cross-branch-jump", "auto-step", "unclaimed-value", "nested-split"})
 
 
 def test_table_exists_as_data() -> None:
@@ -165,6 +193,139 @@ def test_one_split_row_is_wired_to_a_real_parallel_build() -> None:
     assert get("one-split").captured  # the row asserts the shape builds...
     plan = compile_spec(_full_spec())  # ...and the compiler really builds it
     workflow = next(op for op in plan.ops if op.kind == "build_workflow")
-    parallel = workflow.args["parallel"]
-    assert parallel is not None, "one-split spec must compile to a Parallel gateway"
-    assert len(parallel["branches"]) == 2  # Yes -> Repair, No -> Return to Customer
+    parallels = workflow.args["parallels"]
+    assert len(parallels) == 1, "one-split spec must compile to exactly one Parallel gateway"
+    assert len(parallels[0]["branches"]) == 2  # Yes -> Repair, No -> Return to Customer
+
+
+# ---- S4 (#35): the "unclaimed-value" row is WIRED — not aspirational --------------------------
+
+def test_unclaimed_value_row_is_wired_to_a_real_refusal() -> None:
+    """The enforcement behind AC4 for this row: compiling a spec whose deciding field's list has
+    a value ("Maybe") claimed by no branch option actually raises, naming the `unclaimed-value`
+    coverage row — the table's claim that this shape refuses is backed by real code in
+    `_check_all_deciding_values_claimed`, not just a table entry with no code behind it."""
+    full = _full_spec()
+    bad_lists = tuple(
+        dataclasses.replace(l, values=("Yes", "No", "Maybe")) if l.name == "Yes No" else l
+        for l in full.master_data.lists
+    )
+    bad = dataclasses.replace(full, master_data=MasterData(lists=bad_lists))
+    with pytest.raises(ValueError, match="unclaimed-value"):
+        compile_spec(bad)
+    row = get("unclaimed-value")
+    assert row.bucket is Bucket.REFUSES_LOUDLY
+    assert row.ticket is None
+
+
+# ---- S2 (#33): the "sequential-splits" row is WIRED — not aspirational ------------------------
+# S2 makes the engine BUILD N sequential decision splits offline (`_check_at_most_one_split`'s
+# hard cap of one lifts). The coverage row moves from "waiting on #33" to "waiting on #16" (the
+# live built-app-vs-input comparator) — it stays BUILDABLE, not captured-live, since no live
+# capture of several sequential splits exists yet.
+
+def _two_split_spec() -> AppSpec:
+    """A fresh, minimal AppSpec with TWO sequential decision splits: Triage (Severity: High/Low)
+    then, later in the same chain, Approve (Approval Type: Manager Approval/Auto Approve).
+    Distinct branch names across the two splits (High/Low vs Manager Approval/Auto Approve) — same
+    -named branches across splits are refused in S2 — and neither split's `at_stage` sits inside
+    the OTHER split's branch stages (Approve is not Escalate/Standard Review; Triage is not
+    Manager Review/Finalize), which is the nested-split shape S2 refuses separately.
+    """
+    return AppSpec(
+        app_name="Escalation Tracker",
+        problem_goal=ProblemGoal(
+            pain="requests get routed inconsistently",
+            goal="every request is triaged and approved through a consistent path",
+            done_definition="the request is closed",
+            terminal_states=("Closed",),
+            result_values=("Resolved",),
+        ),
+        roles=Roles(roles=(
+            RoleSpec("Front Desk", is_admin=False),
+            RoleSpec("Manager", is_admin=True),
+        )),
+        stages=Stages(stages=(
+            StageSpec("Log", "Front Desk", "log the request", "a request comes in",
+                      "request logged"),
+            StageSpec("Triage", "Manager", "assess severity", "request logged",
+                      "severity recorded"),
+            StageSpec("Escalate", "Manager", "handle an escalated request", "severity is High",
+                      "escalation handled"),
+            StageSpec("Standard Review", "Manager", "handle a routine request", "severity is Low",
+                      "review complete"),
+            StageSpec("Approve", "Manager", "decide who approves", "triage complete",
+                      "approval route recorded"),
+            StageSpec("Manager Review", "Manager", "manager reviews the request",
+                      "approval route is Manager Approval", "manager reviewed"),
+            StageSpec("Finalize", "Manager", "auto-finalize the request",
+                      "approval route is Auto Approve", "finalized"),
+            StageSpec("Close", "Front Desk", "close the request", "review or finalize complete",
+                      "request closed"),
+        )),
+        routing=Routing(points=(
+            DecisionPoint(at_stage="Triage", field_name="Severity", options=("High", "Low"),
+                          route_per_option=(("High", ("Escalate",)), ("Low", ("Standard Review",)))),
+            DecisionPoint(at_stage="Approve", field_name="Approval Type",
+                          options=("Manager Approval", "Auto Approve"),
+                          route_per_option=(("Manager Approval", ("Manager Review",)),
+                                            ("Auto Approve", ("Finalize",)))),
+        )),
+        rework_loops=ReworkLoops(loops=(), confirmed_none=True),
+        data_model=DataModel(
+            fields=(
+                FieldReq("Request Text", FieldType.TEXT, True, "Log"),
+                FieldReq("Severity", FieldType.SELECT, True, "Triage", list_name="Severity Levels"),
+                FieldReq("Approval Type", FieldType.SELECT, True, "Approve",
+                         list_name="Approval Types"),
+            ),
+            tables=(),
+            computed=(),
+        ),
+        master_data=MasterData(lists=(
+            ListSpec("Severity Levels", ("High", "Low"), "Manager"),
+            ListSpec("Approval Types", ("Manager Approval", "Auto Approve"), "Manager"),
+        )),
+        visibility=VisibilityMatrix(entries=(
+            VisibilityEntry("Log", START_STAGE, Visibility.EDITABLE),
+            VisibilityEntry("Log", "Log", Visibility.EDITABLE),
+            VisibilityEntry("Triage", "Triage", Visibility.EDITABLE),
+            VisibilityEntry("Approve", "Approve", Visibility.EDITABLE),
+        )),
+        timing=Timing(sla_notes="", batch_days=(), reminders=()),
+        personas=Personas(views=(
+            PersonaView("Manager", pages=(PageIntent("Dashboard", (WidgetIntent("general/label"),)),),
+                        kpis=(), actions=()),
+        )),
+        test_cases=TestCases(cases=(
+            CaseWalk(
+                "Escalated, manager-approved",
+                fills=(
+                    StepFill("Log", (("Request Text", "Server down"),)),
+                    StepFill("Triage", (("Severity", "High"),)),
+                    StepFill("Approve", (("Approval Type", "Manager Approval"),)),
+                ),
+                expected_path=("Log", "Triage", "Escalate", "Approve", "Manager Review", "Close"),
+                expected_result="Resolved",
+            ),
+        )),
+        approved=True,
+    )
+
+
+def test_sequential_splits_row_wired_to_a_real_build() -> None:
+    """The enforcement behind AC4 for this row: compiling a spec with TWO sequential decision
+    splits actually emits two Parallel gateways, one per split, in order — the table's claim that
+    this shape builds (S2, #33) is backed by real code, not just a table entry with no code
+    behind it. The row itself now waits on #16 (the live comparator), not #33 — S2 is the offline
+    build, #16 is the still-missing live capture."""
+    row = get("sequential-splits")
+    assert row.bucket is Bucket.BUILDABLE
+    assert row.ticket == "#16"
+
+    plan = compile_spec(_two_split_spec())
+    workflow = next(op for op in plan.ops if op.kind == "build_workflow")
+    parallels = workflow.args["parallels"]
+    assert len(parallels) == 2, "two decision splits must compile to TWO Parallel gateways"
+    assert len(parallels[0]["branches"]) == 2  # Triage: High -> Escalate, Low -> Standard Review
+    assert len(parallels[1]["branches"]) == 2  # Approve: Manager Approval / Auto Approve
