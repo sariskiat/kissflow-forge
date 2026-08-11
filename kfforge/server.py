@@ -696,17 +696,22 @@ def forge_publish(kind: str, flow_id: str, app_id: str | None = None) -> dict[st
 
 
 @mcp.tool()
-def forge_doctor(flow_id: str, kind: str = "process") -> dict[str, Any]:
+def forge_doctor(
+    flow_id: str, kind: str = "process",
+    visibility_role_claims: list[str] | None = None,
+) -> dict[str, Any]:
     """Read-only health check (dev only, KF_APP): fetch the LIVE draft, harvest every Select
     field's REAL list options (CLAUDE.md: "never guess a literal — read it"), and run
     verify.doctor for real. Run this after ANY builder edit; `ok: true` and `problems: []` mean
     clean. A list whose items fetch fails is recorded in `list_fetch_errors`, never silently
-    dropped from the audit.
+    dropped from the audit. Pass the plan's doctor-op `visibility_role_claims` through verbatim
+    — each claim FAILs the audit (role-scoped visibility is API-impossible, #6/ADR-0004).
     """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(run_doctor(c, flow_id, kind=kind))  # type: ignore[arg-type]
+    return _result(run_doctor(c, flow_id, kind=kind,  # type: ignore[arg-type]
+                               visibility_role_claims=visibility_role_claims))
 
 
 @mcp.tool()

@@ -323,3 +323,15 @@ def test_field_types_cache_returns_a_read_only_mapping() -> None:
     assert isinstance(got, _types.MappingProxyType)
     with pytest.raises(TypeError):
         got["injected"] = str            # type: ignore[index]
+
+
+def test_visibility_entry_role_claim_round_trips() -> None:
+    """#6: the `role` claim slot (role-scoped visibility, doctor-refused) survives the wire."""
+    full = _full_spec()
+    vm = full.visibility
+    claimed = dataclasses.replace(vm.entries[0], role="Finance")
+    spec = dataclasses.replace(
+        full, visibility=dataclasses.replace(vm, entries=(claimed,) + vm.entries[1:]))
+    got = spec_from_dict(spec_to_dict(spec))
+    assert got == spec
+    assert got.visibility.entries[0].role == "Finance"

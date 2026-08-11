@@ -209,3 +209,25 @@ def test_sparse_permission_matrix_counted(clean_draft: Draft) -> None:
 
     report = doctor(d)
     assert any(f"sparse: {len(doomed)} (unit, step) pairs unset" in p for p in report.problems)
+
+
+# ---- 6. role-scoped visibility claims (#6, ADR-0004) -----------------------------
+
+def test_role_scoped_visibility_claim_fails_the_doctor(clean_draft: Draft) -> None:
+    """A spec claiming role-scoped visibility must FAIL the doctor with a stated reason naming
+    the coverage row — API-impossible, refused, never best-effort (ADR-0004)."""
+    claim = "section 'Repair Cost' at stage 'Review' visible only to role 'Finance'"
+    report = doctor(clean_draft, visibility_role_claims=(claim,))
+    assert report.ok() is False
+    assert any(
+        claim in p and "role-scoped visibility is API-impossible" in p
+        and "step-scoped" in p and "role-scoped-visibility" in p
+        for p in report.problems
+    )
+    assert report.checked["role_scoped_visibility_claims"] == 1
+
+
+def test_no_role_claims_leaves_the_doctor_clean(clean_draft: Draft) -> None:
+    report = doctor(clean_draft)
+    assert report.ok() is True
+    assert report.checked["role_scoped_visibility_claims"] == 0

@@ -134,9 +134,11 @@ ROWS: tuple[CoverageRow, ...] = (
     ),
     CoverageRow(
         "role-scoped-visibility", "role-scoped visibility",
-        Bucket.REFUSES_LOUDLY, ticket="#6",
-        reason="API-impossible; the doctor's refusal, not compile's (ADR-0003), "
-               "tracked separately in #6.",
+        Bucket.REFUSES_LOUDLY,
+        reason="API-impossible (a Permission node is (column, step), never (column, role)); "
+               "refused at the DOCTOR gate, not compile's (ADR-0003/0004, #6): verify.doctor "
+               "FAILs each `VisibilityEntry.role` claim compile threads into the doctor op, "
+               "naming this row — restructure to step-scoped.",
     ),
     # ── refuses-loudly, permanent Known Exclusion (a written reason, no ticket) ──
     CoverageRow(

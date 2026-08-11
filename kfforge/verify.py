@@ -56,13 +56,25 @@ def _nodes(draft: Draft) -> dict[str, Any]:
     return {k: v for k, v in draft.items() if isinstance(v, dict)}
 
 
-def doctor(draft: Draft, *, list_options: dict[str, list[str]] | None = None) -> DoctorReport:
+def doctor(
+    draft: Draft,
+    *,
+    list_options: dict[str, list[str]] | None = None,
+    visibility_role_claims: tuple[str, ...] | list[str] = (),
+) -> DoctorReport:
     """Audit one flow's draft graph offline. Read-only: reports, never mutates `draft`.
 
     `list_options` maps a Kissflow LIST id (the value of a Select field's `ReferredList`) to its
     live legal option values. A branch's literal is checked against real options ONLY when its
     sibling comparison is against a Select field whose list id is a key of this map; every other
     literal is recorded in `unvalidated` — never silently accepted, never silently flagged.
+
+    `visibility_role_claims` carries the SPEC's role-scoped visibility claims (one human-readable
+    sentence each), supplied by the caller because the graph itself can never hold one — a
+    Permission node is (column, step), never (column, role), so a role-scoped claim is
+    API-impossible and each one FAILs the audit outright with a stated reason (#6, ADR-0004:
+    refuse, never best-effort). Compile threads these from `VisibilityEntry.role` into the plan's
+    doctor op; a caller with no spec in hand just leaves it empty.
     """
     root = draft.get("Root")
     if not isinstance(root, str) or root not in draft:
@@ -74,6 +86,14 @@ def doctor(draft: Draft, *, list_options: dict[str, list[str]] | None = None) ->
     unvalidated: list[str] = []
     checked: dict[str, int] = {}
     unvalidatable_scripts = 0
+
+    # 0. role-scoped visibility claims  <- API-impossible, refused here, never built best-effort
+    checked["role_scoped_visibility_claims"] = len(visibility_role_claims)
+    for claim in visibility_role_claims:
+        problems.append(
+            f"{claim}: role-scoped visibility is API-impossible; restructure to step-scoped "
+            f"(coverage row role-scoped-visibility, #6)"
+        )
 
     # 1. event scripts pointing at a node that no longer exists  <- breaks the form at load
     events = [v for v in N.values() if v.get("Kind") == "Event"]

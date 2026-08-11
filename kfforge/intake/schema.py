@@ -379,11 +379,18 @@ class VisibilityEntry:
     place that pool is assembled. `stage` is normally a real Stage name, but MAY also be the
     literal `START_STAGE` ("Start") — the workflow's actual entry point, which is not itself a
     business stage but still needs an owning section, or the submission form renders empty.
+
+    `role` is a CLAIM slot, not a build input: "only this role sees it" is role-scoped
+    visibility, which the API cannot express (a Permission node is (column, step), never
+    (column, role)). Intake records the claim here verbatim rather than dropping it; compile
+    threads it to the doctor op, and `verify.doctor` FAILs it with a stated reason naming the
+    `role-scoped-visibility` coverage row (#6, ADR-0004: refuse, never best-effort).
     """
     section: str
     stage: str
     permission: Visibility
     field: str | None = None
+    role: str | None = None
 
 
 @dataclass(frozen=True)

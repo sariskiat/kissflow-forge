@@ -1570,6 +1570,7 @@ def apply_section_style(
 
 def run_doctor(
     client: KfClient, flow_id: str, kind: FlowKind = "process",
+    visibility_role_claims: list[str] | None = None,
 ) -> dict[str, Any] | Err:
     """Fetch the LIVE draft, harvest every Select field's REAL list options (CLAUDE.md: 'never
     guess a literal — read it'), and run verify.doctor for real — the read-only diagnostic behind
@@ -1578,6 +1579,9 @@ def run_doctor(
     A list whose items fetch fails is recorded in `list_fetch_errors` (never silently dropped from
     the audit) and simply excluded from `list_options`, so any branch literal that depended on it
     reports as `unvalidated` rather than falsely `ok`.
+
+    `visibility_role_claims` (from the plan's doctor op — see compile's `_op_doctor`) FAILs the
+    audit per claim: role-scoped visibility is API-impossible (#6, ADR-0004).
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
@@ -1599,7 +1603,8 @@ def run_doctor(
         list_options[list_id] = list(items) if isinstance(items, list) else []
 
     try:
-        report = doctor(draft, list_options=list_options)
+        report = doctor(draft, list_options=list_options,
+                        visibility_role_claims=visibility_role_claims or ())
     except ValueError as e:
         return Err("verify", f"doctor could not run: {e}")
 

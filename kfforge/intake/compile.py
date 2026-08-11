@@ -1134,7 +1134,14 @@ def _op_publish(spec: AppSpec) -> tuple[Op, ...]:
 
 
 def _op_doctor(spec: AppSpec) -> tuple[Op, ...]:
-    return (Op(kind="doctor", args={},
+    # #6: a VisibilityEntry carrying `role` is a role-scoped visibility claim — API-impossible,
+    # and the DOCTOR's refusal, not compile's (ADR-0003/0004, AC4 of B2). Compile's job here is
+    # only to thread each claim through, so the doctor can FAIL it with the row named.
+    claims = tuple(
+        f"section {e.section!r} at stage {e.stage!r} visible only to role {e.role!r}"
+        for e in spec.visibility.entries if e.role
+    )
+    return (Op(kind="doctor", args={"visibility_role_claims": claims},
                 why="read-only health check — THE RULE: a 200 and a clean publish prove nothing"),)
 
 

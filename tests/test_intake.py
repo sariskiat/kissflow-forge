@@ -1635,3 +1635,36 @@ def test_set_navigation_binds_the_shared_page_to_both_its_roles() -> None:
         ("Service Manager", "Manager Dashboard"),
         ("Technician", "My Jobs"),
     ]
+
+
+# ---- #6: role-scoped visibility is a claim the doctor refuses, not compile ----------------------
+
+class TestRoleScopedVisibilityClaim:
+    @staticmethod
+    def _spec_with_role_claim() -> AppSpec:
+        full = _full_spec()
+        vm = full.visibility
+        claimed = dataclasses.replace(vm.entries[3], role="Front Desk")
+        new_vm = dataclasses.replace(
+            vm, entries=vm.entries[:3] + (claimed,) + vm.entries[4:])
+        return dataclasses.replace(full, visibility=new_vm)
+
+    def test_compile_does_not_refuse_a_role_claim(self) -> None:
+        """AC4 (B2) held: the refusal is the DOCTOR's gate, not compile's — compile still emits a
+        plan, threading the claim through to the doctor op."""
+        plan = compile_spec(self._spec_with_role_claim())
+        assert any(op.kind == "doctor" for op in plan.ops)
+
+    def test_doctor_op_carries_the_role_claim(self) -> None:
+        plan = compile_spec(self._spec_with_role_claim())
+        (doctor_op,) = [op for op in plan.ops if op.kind == "doctor"]
+        claims = doctor_op.args["visibility_role_claims"]
+        assert len(claims) == 1
+        (claim,) = claims
+        entry = self._spec_with_role_claim().visibility.entries[3]
+        assert entry.section in claim and entry.stage in claim and "Front Desk" in claim
+
+    def test_doctor_op_claims_empty_without_role_entries(self) -> None:
+        plan = compile_spec(_full_spec())
+        (doctor_op,) = [op for op in plan.ops if op.kind == "doctor"]
+        assert tuple(doctor_op.args["visibility_role_claims"]) == ()

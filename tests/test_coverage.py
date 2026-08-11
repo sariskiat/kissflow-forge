@@ -85,6 +85,9 @@ KNOWN_EXCLUSION_KEYS = frozenset({
     # tiles (#23, proven live 2026-08-11), the native-rendered status pill, and the multi-pane
     # tabbed interface (D6: no silent downgrade, no composition builder, no build ticket scoped yet).
     "kpi-tile-live-number", "delta-pill", "status-pill", "page-tabs",
+    # #6: wired to the DOCTOR-gate refusal (verify.doctor's visibility_role_claims rule), the one
+    # Known Exclusion enforced at the doctor rather than compile (ADR-0003/0004).
+    "role-scoped-visibility",
 })
 
 
@@ -395,12 +398,12 @@ API_IMPOSSIBLE_COMPILE_KEYS = frozenset({
 
 # The refuse-rows that legitimately remain pending after B2 closes the contract: three future BUILD
 # capabilities (a word-list-backed dropdown #13, section colour-styling #11, wiring an EXISTING
-# report into a widget #23) and the one API-impossible capability enforced at the DOCTOR, not
-# compile (role-scoped visibility #6, ADR-0003/0004). Pinning this set is what makes "no refuse-row
-# is left pending" provable: any NEW pending refuse-row, or a B2 row that regressed to pending,
-# breaks the equality.
+# report into a widget #23). Role-scoped visibility left this set when #6 wired its doctor-gate
+# refusal (verify.doctor's visibility_role_claims rule). Pinning this set is what makes "no
+# refuse-row is left pending" provable: any NEW pending refuse-row, or a B2 row that regressed to
+# pending, breaks the equality.
 PENDING_REFUSE_ALLOWLIST = frozenset({
-    "word-list-dropdown", "section-styling", "report-widget", "role-scoped-visibility",
+    "word-list-dropdown", "section-styling", "report-widget",
     # #20 page layer: the donut chart + its legend-with-counts are a report widget's own rendering,
     # covered by report-widget (#23) — pending the same wire-an-existing-report capability.
     "chart-legend",
@@ -476,12 +479,14 @@ def test_report_creation_row_is_wired_to_a_real_refusal() -> None:
 
 
 def test_role_scoped_visibility_stays_a_doctor_refusal() -> None:
-    """AC4 (B2): role-scoped visibility is NOT re-implemented as a compile refusal here — it stays
-    the doctor's, tracked in #6 (ADR-0003: known exclusions are judge/doctor-owned, not the
-    builder's). So its row keeps ticket #6 and is never among the compile-refused set."""
+    """AC4 (B2), then wired by #6: role-scoped visibility is NOT a compile refusal — it is the
+    doctor's (ADR-0003: known exclusions are judge/doctor-owned, not the builder's). #6 landed
+    the refusal (verify.doctor FAILs each claim, naming this row), so the row is now WIRED (no
+    ticket, a written Known Exclusion) and still never among the compile-refused set."""
     row = get("role-scoped-visibility")
     assert row.bucket is Bucket.REFUSES_LOUDLY
-    assert row.ticket == "#6"
+    assert not row.pending, "wired by #6 — a doctor-gate refusal, no longer promised by a ticket"
+    assert "DOCTOR" in (row.reason or "")
     assert "role-scoped-visibility" not in API_IMPOSSIBLE_COMPILE_KEYS
 
 
