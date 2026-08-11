@@ -483,6 +483,37 @@ def spec_with_tiered_branches() -> AppSpec:
     )
 
 
+def spec_with_branch_local_loop() -> AppSpec:
+    """S3 (#34) AC4: a split ("Triage") whose "Complex" branch is a multi-stage SEQUENCE [Deep
+    Review, Fix, Verify] carrying a rework loop BETWEEN two of its OWN stages (Verify -> Fix). Both
+    loop endpoints are branch stages, so the dashed backward edge is drawn inside the branch, not
+    across the spine -- the shape the Confirmation diagram must render truthfully."""
+    stages = Stages(stages=(
+        Stage("Log", "Intake", "Log the claim."),
+        Stage("Triage", "Adjuster", "Pick the path."),
+        Stage("Quick Close", "Adjuster", "Close a simple claim."),
+        Stage("Deep Review", "Adjuster", "Review a complex claim."),
+        Stage("Fix", "Adjuster", "Correct the claim."),
+        Stage("Verify", "Adjuster", "Verify the correction."),
+        Stage("Close", "Intake", "Close the claim."),
+    ))
+    routing = Routing(points=(
+        RoutingPoint(at_stage="Triage", field_name="Path", options=("Simple", "Complex"),
+                     route_per_option=(("Simple", ("Quick Close",)),
+                                       ("Complex", ("Deep Review", "Fix", "Verify")))),
+    ))
+    rework_loops = ReworkLoops(loops=(
+        Loop(from_stage="Verify", to_stage="Fix", gate_field="Fix Approved"),
+    ))
+    empty_dm = DataModel(fields=(), tables=())
+    return AppSpec(
+        app_name="Branch Local Loop", problem_goal=_empty_problem_goal(), stages=stages,
+        routing=routing, rework_loops=rework_loops, data_model=empty_dm,
+        master_data=MasterData(lists=()), visibility=VisibilityMatrix(entries=()),
+        personas=Personas(views=()), test_cases=TestCases(cases=()),
+    )
+
+
 def spec_with_multistage_branches() -> AppSpec:
     """S1 (#32): a split ("Route") whose two branches are ORDERED STAGE SEQUENCES of different
     lengths -- branch A = [A1, A2] (2 stages), branch B = [B1] (1 stage) -- merging at "Wrap".
@@ -713,6 +744,23 @@ class TestFlowDiagram:
         dashed_edges = [c for c in root.findall(".//mxCell")
                          if c.get("edge") == "1" and "dashed=1" in (c.get("style") or "")]
         assert len(dashed_edges) == len(spec.rework_loops.loops)
+
+    def test_branch_local_loop_renders_a_dashed_edge_between_its_branch_stages(self):
+        """S3 (#34) AC4: a loop whose BOTH endpoints are stages of one multi-stage branch
+        (Verify -> Fix) renders one dashed backward edge, and it resolves to those branch stages'
+        own vertices -- the diagram draws the branch-local loop, not just spine loops."""
+        spec = spec_with_branch_local_loop()
+        doc = flow_diagram_xml(spec)
+        _assert_valid_mxgraph(doc)  # every edge (incl. this loop) resolves to a real vertex
+        root = ET.fromstring(doc)
+        cells = {c.get("id"): c for c in root.findall(".//mxCell")}
+        dashed = [c for c in cells.values()
+                  if c.get("edge") == "1" and "dashed=1" in (c.get("style") or "")]
+        assert len(dashed) == 1
+        edge = dashed[0]
+        endpoints = {cells[edge.get("source")].get("value"), cells[edge.get("target")].get("value")}
+        assert endpoints == {"Verify", "Fix"}
+        assert "Fix Approved" in (edge.get("value") or "")
 
     def test_loop_edge_labeled_with_gate_field(self):
         spec = sample_spec()

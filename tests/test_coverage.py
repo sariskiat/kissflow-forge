@@ -25,6 +25,7 @@ from kfforge.intake.schema import (
     DecisionPoint,
     FieldReq,
     ListSpec,
+    LoopSpec,
     MasterData,
     PageIntent,
     Personas,
@@ -49,7 +50,7 @@ from kfforge.types import FieldType, Visibility
 # split (Diagnose -> Yes:Repair / No:Return). Imported by bare module name — pytest's default
 # prepend import mode puts tests/ on sys.path (no tests/__init__.py), and _full_spec is a pure
 # factory with no import-time side effects.
-from test_intake import _full_spec
+from test_intake import _branch_local_loop_spec, _full_spec
 
 TICKET_RE = re.compile(r"^#\d+$")
 KEY_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -65,6 +66,7 @@ REQUIRED_KEYS = frozenset({
     "sequential-splits",          # #26's bold "several splits"
     # refuses-loudly (#26's bold refusals + word-list/section/report gaps)
     "nested-split", "auto-step", "cross-branch-jump", "unclaimed-value",
+    "duplicate-branch-step",      # S3 (#34): same step name in two branches
     "word-list-dropdown", "section-styling", "report-widget",
     # absorbed #7 API-impossible set
     "report-creation", "rich-text-content", "custom-component", "role-scoped-visibility",
@@ -74,7 +76,9 @@ REQUIRED_KEYS = frozenset({
 # Exclusions, not unbuilt capabilities. Pinning this set is what tests AC4: any
 # pending refuse-row that loses its ticket would fall into this set and fail, and a
 # Known Exclusion that accidentally gains one would too.
-KNOWN_EXCLUSION_KEYS = frozenset({"cross-branch-jump", "auto-step", "unclaimed-value", "nested-split"})
+KNOWN_EXCLUSION_KEYS = frozenset({
+    "cross-branch-jump", "auto-step", "unclaimed-value", "nested-split", "duplicate-branch-step",
+})
 
 
 def test_table_exists_as_data() -> None:
@@ -311,6 +315,46 @@ def _two_split_spec() -> AppSpec:
         )),
         approved=True,
     )
+
+
+# ---- S3 (#34): the branch-local-loop, cross-branch-jump, and duplicate-branch-step rows are WIRED
+
+def test_branch_local_loop_row_is_wired_to_a_real_build() -> None:
+    """The `branch-local-loop` row is CAPTURED_LIVE and the autonomous compiler really builds it:
+    a loop whose endpoints both live in one branch compiles to an add_goto_gate op naming that
+    branch, so the goto is placed inside it (CLAUDE.md Conditional routing), never mis-derived."""
+    row = get("branch-local-loop")
+    assert row.bucket is Bucket.CAPTURED_LIVE
+    assert row.ticket is None and not row.pending
+    plan = compile_spec(_branch_local_loop_spec())
+    goto = next(op for op in plan.ops if op.kind == "add_goto_gate")
+    assert goto.args["branch_name"] == "Complex"
+
+
+def test_cross_branch_jump_row_is_wired_to_a_real_refusal() -> None:
+    """The `cross-branch-jump` row refuses in real code: a loop from one branch into another raises
+    at compile, naming the row. `_check_loop_not_cross_branch` backs the table's claim."""
+    spec = dataclasses.replace(_branch_local_loop_spec(), rework_loops=ReworkLoops(loops=(
+        LoopSpec(from_stage="Verify", to_stage="Quick Close", gate_field="Fix Approved"),
+    )))
+    with pytest.raises(ValueError, match="cross-branch-jump"):
+        compile_spec(spec)
+    assert get("cross-branch-jump").bucket is Bucket.REFUSES_LOUDLY
+
+
+def test_duplicate_branch_step_row_is_wired_to_a_real_refusal() -> None:
+    """The `duplicate-branch-step` row refuses in real code: the same step name in two branches
+    raises at compile, naming the row. `_check_no_duplicate_step_across_branches` backs the claim."""
+    spec = dataclasses.replace(_branch_local_loop_spec(), routing=Routing(points=(
+        DecisionPoint(at_stage="Triage", field_name="Path", options=("Simple", "Complex"),
+                      route_per_option=(("Simple", ("Quick Close", "Fix")),
+                                        ("Complex", ("Deep Review", "Fix", "Verify")))),
+    )))
+    with pytest.raises(ValueError, match="duplicate-branch-step"):
+        compile_spec(spec)
+    row = get("duplicate-branch-step")
+    assert row.bucket is Bucket.REFUSES_LOUDLY
+    assert row.ticket is None  # a permanent Known Exclusion, not a pending capability
 
 
 def test_sequential_splits_row_wired_to_a_real_build() -> None:

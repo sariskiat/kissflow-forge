@@ -297,6 +297,73 @@ def _linear_spec(*, approved: bool = True) -> AppSpec:
     )
 
 
+def _branch_local_loop_spec(*, approved: bool = True) -> AppSpec:
+    """S3 (#34): a split whose 'Complex' branch is a SEQUENCE of stages (Deep Review -> Fix ->
+    Verify) with a rework loop INSIDE that branch — Verify jumps back to Fix, gated on a Boolean.
+    Both loop endpoints live in the same branch, so it is branch-local (never cross-branch). The
+    'Simple' branch is a single stage with no loop. Minimal but fully valid across all 11 dims."""
+    return AppSpec(
+        app_name="Claim Review",
+        problem_goal=ProblemGoal(
+            pain="claims get handled inconsistently", goal="every claim is triaged and closed",
+            done_definition="the claim is closed", terminal_states=("Closed",),
+            result_values=("Settled",)),
+        roles=Roles(roles=(
+            RoleSpec("Intake", is_admin=False),
+            RoleSpec("Adjuster", is_admin=True),
+        )),
+        stages=Stages(stages=(
+            StageSpec("Log", "Intake", "log the claim", "a claim arrives", "claim logged"),
+            StageSpec("Triage", "Adjuster", "decide the path", "claim logged", "path chosen"),
+            StageSpec("Quick Close", "Adjuster", "close a simple claim", "path is Simple",
+                      "claim closed"),
+            StageSpec("Deep Review", "Adjuster", "review a complex claim", "path is Complex",
+                      "reviewed"),
+            StageSpec("Fix", "Adjuster", "correct the claim", "review found an issue", "corrected"),
+            StageSpec("Verify", "Adjuster", "verify the correction", "corrected", "verified"),
+            StageSpec("Close", "Intake", "close the claim", "verified or quick-closed", "closed"),
+        )),
+        routing=Routing(points=(
+            DecisionPoint(at_stage="Triage", field_name="Path", options=("Simple", "Complex"),
+                          route_per_option=(("Simple", ("Quick Close",)),
+                                            ("Complex", ("Deep Review", "Fix", "Verify")))),
+        )),
+        rework_loops=ReworkLoops(loops=(
+            LoopSpec(from_stage="Verify", to_stage="Fix", gate_field="Fix Approved", max_rounds=3),
+        )),
+        data_model=DataModel(
+            fields=(
+                FieldReq("Claim Text", FieldType.TEXT, True, "Log"),
+                FieldReq("Path", FieldType.SELECT, True, "Triage", list_name="Paths"),
+                FieldReq("Fix Approved", FieldType.BOOLEAN, False, "Verify"),
+            ),
+            tables=(), computed=()),
+        master_data=MasterData(lists=(ListSpec("Paths", ("Simple", "Complex"), "Adjuster"),)),
+        visibility=VisibilityMatrix(entries=(
+            VisibilityEntry("Log", START_STAGE, Visibility.EDITABLE),
+            VisibilityEntry("Log", "Log", Visibility.EDITABLE),
+            VisibilityEntry("Triage", "Triage", Visibility.EDITABLE),
+            VisibilityEntry("Verify", "Verify", Visibility.EDITABLE),
+        )),
+        timing=Timing(sla_notes="", batch_days=(), reminders=()),
+        personas=Personas(views=(
+            PersonaView("Adjuster", pages=(PageIntent("Board", (WidgetIntent("general/label"),)),),
+                        kpis=(), actions=()),
+        )),
+        test_cases=TestCases(cases=(
+            CaseWalk("Complex claim, one rework round",
+                     fills=(
+                         StepFill("Log", (("Claim Text", "Water damage"),)),
+                         StepFill("Triage", (("Path", "Complex"),)),
+                         StepFill("Verify", (("Fix Approved", "true"),)),
+                     ),
+                     expected_path=("Log", "Triage", "Deep Review", "Fix", "Verify", "Close"),
+                     expected_result="Settled"),
+        )),
+        approved=approved,
+    )
+
+
 _EMPTY_SPEC = AppSpec(
     app_name="",
     problem_goal=ProblemGoal(pain="", goal="", done_definition="", terminal_states=(),
@@ -1073,6 +1140,77 @@ def test_two_splits_sharing_a_branch_name_are_refused() -> None:
     message = str(exc_info.value)
     assert "Diagnose" in message
     assert "Quality Check" in message
+
+
+# ---- S3 (#34): a rework loop is scoped to ITS branch — carried explicitly, and branch-local ----
+
+def test_branch_local_loop_goto_op_carries_its_branch_name() -> None:
+    """S3 AC1/US11: a loop whose endpoints both live in one branch compiles to an add_goto_gate op
+    that NAMES that branch, so the live layer places the GotoTask inside it (last within it)
+    instead of mis-deriving it from an ambiguous target name."""
+    plan = compile_spec(_branch_local_loop_spec())
+    goto_ops = [op for op in plan.ops if op.kind == "add_goto_gate"]
+    assert len(goto_ops) == 1
+    args = goto_ops[0].args
+    assert (args["from_stage"], args["to_stage"]) == ("Verify", "Fix")
+    assert args["branch_name"] == "Complex"
+
+
+def test_spine_to_branch_loop_resolves_to_the_target_branch() -> None:
+    """The `_full_spec` golden loop is Quality Check (spine) -> Repair (inside the 'Yes' branch):
+    one endpoint on the spine, one in a branch. That is NOT cross-branch (it stays allowed) and the
+    op names the single branch its stages touch — the target's branch, made explicit."""
+    plan = compile_spec(_full_spec())
+    goto = next(op for op in plan.ops if op.kind == "add_goto_gate")
+    assert goto.args["branch_name"] == "Yes"
+
+
+def test_spine_only_loop_goto_op_has_no_branch_name() -> None:
+    """A rework loop whose endpoints are both on the linear spine (no split involved) carries
+    branch_name=None — a plain root-chain loop, the pre-S3 shape, now stated explicitly."""
+    base = _linear_spec()
+    spec = dataclasses.replace(
+        base,
+        rework_loops=ReworkLoops(loops=(
+            LoopSpec(from_stage="Handle Ticket", to_stage="Log Ticket", gate_field="Redo"),
+        )),
+        data_model=dataclasses.replace(base.data_model, fields=base.data_model.fields + (
+            FieldReq("Redo", FieldType.BOOLEAN, False, "Handle Ticket"),
+        )),
+    )
+    goto = next(op for op in compile_spec(spec).ops if op.kind == "add_goto_gate")
+    assert goto.args["branch_name"] is None
+
+
+def test_duplicate_step_name_across_branches_is_refused() -> None:
+    """S3 AC2/AC5: the SAME step name in two different branches is refused, naming the
+    `duplicate-branch-step` coverage row — a loop's branch is derived from its step names, so a
+    name owned by two branches makes that derivation (and the branch id) a coin flip."""
+    spec = dataclasses.replace(_branch_local_loop_spec(), routing=Routing(points=(
+        DecisionPoint(at_stage="Triage", field_name="Path", options=("Simple", "Complex"),
+                      # both branches route through "Fix" — one step name, two branches
+                      route_per_option=(("Simple", ("Quick Close", "Fix")),
+                                        ("Complex", ("Deep Review", "Fix", "Verify")))),
+    )))
+    with pytest.raises(ValueError, match="duplicate-branch-step") as exc_info:
+        compile_spec(spec)
+    message = str(exc_info.value)
+    assert "Fix" in message
+    assert "Simple" in message and "Complex" in message
+
+
+def test_cross_branch_loop_is_refused() -> None:
+    """S3 AC3: a loop whose from_stage sits in one branch and to_stage in ANOTHER is refused,
+    naming the `cross-branch-jump` coverage row — a loop must stay within its own branch. Verify
+    (in 'Complex') jumps back to Quick Close (in 'Simple'): backward in stage order, but across
+    branches."""
+    spec = dataclasses.replace(_branch_local_loop_spec(), rework_loops=ReworkLoops(loops=(
+        LoopSpec(from_stage="Verify", to_stage="Quick Close", gate_field="Fix Approved"),
+    )))
+    with pytest.raises(ValueError, match="cross-branch-jump") as exc_info:
+        compile_spec(spec)
+    message = str(exc_info.value)
+    assert "Complex" in message and "Simple" in message
 
 
 # ---- S4 (#35): one decision split's branch attaches real conditions, not just an unconditional

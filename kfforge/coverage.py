@@ -143,6 +143,14 @@ ROWS: tuple[CoverageRow, ...] = (
                "2b already flags a GotoTask whose target sits in a different ProcessDef.",
     ),
     CoverageRow(
+        "duplicate-branch-step", "the same step name in two different branches",
+        Bucket.REFUSES_LOUDLY,
+        reason="a branch id is a hash of (model, kind, index, name) and a rework loop's branch is "
+               "DERIVED from its step names (D7, #29) — one step name owned by two branches makes "
+               "both the branch id and the loop's branch-of derivation a coin flip. Refused at "
+               "compile so the goto is placed explicitly, never mis-derived from an ambiguous name.",
+    ),
+    CoverageRow(
         "auto-step", "a step that is not a person's task (auto step, approval gate, webhook)",
         Bucket.REFUSES_LOUDLY,
         reason="no captured shape for a non-person task; refused rather than silently "

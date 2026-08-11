@@ -300,6 +300,62 @@ def _check_no_duplicate_branch_names(spec: AppSpec) -> None:
             owner_by_value.setdefault(option, point.at_stage)
 
 
+def _stage_branch_owner(spec: AppSpec) -> dict[str, str]:
+    """stage name -> the branch (option) name whose route sequence contains it, for branch stages
+    only (a spine stage is simply absent). Safe to build with `setdefault` — a stage owned by two
+    branches is refused first by `_check_no_duplicate_step_across_branches`, so every stage present
+    here has exactly one owner by the time any op-builder or the cross-branch check reads this."""
+    owner: dict[str, str] = {}
+    for point in spec.routing.points:
+        for option, seq in point.route_per_option:
+            for stage in seq:
+                owner.setdefault(stage, option)
+    return owner
+
+
+def _check_no_duplicate_step_across_branches(spec: AppSpec) -> None:
+    """D3/D7 (#29 spec decisions): S3 (#34). A rework loop's branch is DERIVED from its step names
+    (a loop names from_stage/to_stage; which branch it sits in is read off those). If one step name
+    appears in TWO different branches, that derivation is a coin flip — and the branch id itself
+    (a hash of (model, kind, index, name)) collides. Refused at compile, naming the
+    `duplicate-branch-step` coverage row, so the goto is placed explicitly rather than mis-derived.
+    Distinct from `_check_no_duplicate_branch_names` (the branch NAME/option colliding across
+    splits); this is a step INSIDE two branches' sequences."""
+    owner: dict[str, str] = {}
+    for point in spec.routing.points:
+        for option, seq in point.route_per_option:
+            for stage in seq:
+                prior = owner.get(stage)
+                if prior is not None and prior != option:
+                    row = coverage.get("duplicate-branch-step")
+                    raise ValueError(
+                        f"step {stage!r} appears in branch {prior!r} and branch {option!r} — the "
+                        f"same step name in two different branches (coverage row {row.key!r}: "
+                        f"{row.reason}). Give each branch's steps distinct names."
+                    )
+                owner.setdefault(stage, option)
+
+
+def _check_loop_not_cross_branch(spec: AppSpec) -> None:
+    """D3 (#29): S3 (#34). A rework loop must be branch-LOCAL — jump back to an earlier step of its
+    OWN branch, never from one branch into another (CLAUDE.md: verify.doctor rule 2b already flags
+    a GotoTask whose target sits in a different ProcessDef; a cross-branch jump has no captured
+    shape, THE RULE). A loop with one endpoint on the spine and the other in a branch is NOT
+    cross-branch — that is the common spine->branch rework shape and stays allowed; only two
+    DIFFERENT real branches are refused, naming the `cross-branch-jump` coverage row."""
+    owner = _stage_branch_owner(spec)
+    for loop in spec.rework_loops.loops:
+        from_branch = owner.get(loop.from_stage)
+        to_branch = owner.get(loop.to_stage)
+        if from_branch is not None and to_branch is not None and from_branch != to_branch:
+            row = coverage.get("cross-branch-jump")
+            raise ValueError(
+                f"rework loop {loop.from_stage!r} -> {loop.to_stage!r} jumps from branch "
+                f"{from_branch!r} into branch {to_branch!r} — a jump from one branch into another "
+                f"(coverage row {row.key!r}: {row.reason}). A loop must stay within its own branch."
+            )
+
+
 def _check_routing_stages(spec: AppSpec) -> None:
     """A DecisionPoint's at_stage, or any stage in one of its route SEQUENCES, naming an unknown
     stage — a branch is an ordered sequence of stages now (P1), so every stage in the sequence is
@@ -691,7 +747,8 @@ _CROSS_CHECKS: tuple[Callable[[AppSpec], None], ...] = (
     _check_tables,
     _check_computed_fields,
     _check_no_split_nested_in_branch,   # D3 (#29) — nested split has no captured shape, ever
-    _check_no_duplicate_branch_names,   # D3 (#29) — cross-split branch-id collision
+    _check_no_duplicate_branch_names,   # D3 (#29) — cross-split branch-NAME collision
+    _check_no_duplicate_step_across_branches,  # D7 (#29) S3 — same step name in two branches
     _check_routing_field_and_options,   # F4 — before the other routing checks, not inside them
     _check_routing_stages,
     _check_routing_complete,
@@ -699,6 +756,7 @@ _CROSS_CHECKS: tuple[Callable[[AppSpec], None], ...] = (
     _check_all_deciding_values_claimed,  # AC3 — the inverse of _check_routing_literals
     _check_loop_stages,
     _check_loop_gate_is_boolean,
+    _check_loop_not_cross_branch,       # D3 (#29) S3 — a loop must be branch-local
     _check_visibility_entries,
     _check_start_owned,
     _check_required_fields_editable,    # F1 — after visibility entries/Start are known-valid
@@ -913,15 +971,28 @@ def _op_set_assignees(spec: AppSpec) -> tuple[Op, ...]:
 
 def _op_add_goto_gate(spec: AppSpec) -> tuple[Op, ...]:
     """One op per rework loop (dimension 5). `_check_loop_stages`/`_check_loop_gate_is_boolean`
-    have already refused any loop that isn't backward or isn't gated on a real Boolean field."""
-    return tuple(
-        Op(kind="add_goto_gate",
-           args={"from_stage": l.from_stage, "to_stage": l.to_stage,
-                 "gate_field": l.gate_field, "max_rounds": l.max_rounds},
-           why=f"backward GotoTask {l.to_stage!r} -> {l.from_stage!r}, Boolean-gated, fail-closed "
-               f"(Gate polarity)")
-        for l in spec.rework_loops.loops
-    )
+    have already refused any loop that isn't backward or isn't gated on a real Boolean field, and
+    `_check_loop_not_cross_branch` any loop spanning two branches.
+
+    S3 (#34, D7/US11): each op carries the `branch_name` it belongs to, so the goto is placed
+    EXPLICITLY inside that branch (last within it) instead of the live layer mis-deriving it from
+    an ambiguous target name (`forge_add_goto_gate`'s own `branch_name` parameter). Derived from the
+    loop's own stages: the single branch owning from_stage/to_stage, or `None` for a plain spine
+    loop. A spine->branch loop resolves to that one branch; two branches are already refused."""
+    owner = _stage_branch_owner(spec)
+    ops = []
+    for l in spec.rework_loops.loops:
+        branches = {owner[s] for s in (l.from_stage, l.to_stage) if s in owner}
+        branch_name = branches.pop() if len(branches) == 1 else None  # 0 -> spine loop, 2 -> refused
+        ops.append(Op(
+            kind="add_goto_gate",
+            args={"from_stage": l.from_stage, "to_stage": l.to_stage,
+                  "gate_field": l.gate_field, "max_rounds": l.max_rounds,
+                  "branch_name": branch_name},
+            why=f"backward GotoTask {l.from_stage!r} -> {l.to_stage!r}, Boolean-gated, fail-closed "
+                f"(Gate polarity)" + (f", placed inside branch {branch_name!r}" if branch_name else
+                                      ", plain root-chain loop")))
+    return tuple(ops)
 
 
 def _op_set_branch_conditions(spec: AppSpec) -> tuple[Op, ...]:
