@@ -630,6 +630,47 @@ def _check_persona_roles(spec: AppSpec) -> None:
             )
 
 
+# ADR-0004 (#7, B2 #36): three page-widget capabilities are impossible through the API and are
+# refused at COMPILE with a stated reason naming their coverage row, never built best-effort. A
+# report widget needs a report to exist first, and creating one has no API path (report-creation) —
+# distinct from the future capability to WIRE an existing report into a widget (report-widget #23,
+# still pending). Role-scoped visibility is the FOURTH API-impossible capability but is the doctor's
+# refusal, not compile's (ADR-0003, #6), so it is not here.
+_API_IMPOSSIBLE_WIDGET_ROWS: dict[str, str] = {
+    "general/rich_text": "rich-text-content",
+    "custom": "custom-component",
+}
+
+
+def _api_impossible_row(slug: str) -> str | None:
+    """The coverage-row key a widget `slug` is refused under, or None if it is buildable. Every
+    `report/*` slug maps to `report-creation` (any report widget requires creating a report first)."""
+    if slug in _API_IMPOSSIBLE_WIDGET_ROWS:
+        return _API_IMPOSSIBLE_WIDGET_ROWS[slug]
+    if slug.startswith("report/"):
+        return "report-creation"
+    return None
+
+
+def _check_no_api_impossible_widgets(spec: AppSpec) -> None:
+    """B2 (#36): a page widget for an API-impossible capability (rich-text render, custom component,
+    report creation) is refused at compile, naming its coverage row (ADR-0004). Runs BEFORE
+    `_check_widgets` so the refusal fires on the impossible SLUG itself rather than surfacing as a
+    missing-config error for the same widget."""
+    for view in spec.personas.views:
+        for page in view.pages:
+            for w in page.widgets:
+                row_key = _api_impossible_row(w.slug)
+                if row_key is None:
+                    continue
+                row = coverage.get(row_key)
+                raise ValueError(
+                    f"page {page.name!r} widget {w.slug!r} is API-impossible (coverage row "
+                    f"{row.key!r}: {row.reason}) — refused at compile per ADR-0004, never built "
+                    f"best-effort."
+                )
+
+
 def _check_widgets(spec: AppSpec) -> None:
     """A widget slug outside `kfforge.pages.WIDGET_SLUGS`, or missing a config key
     `kfforge.pages.WIDGET_REQUIRED_CONFIG` demands for that slug (`add_widget` itself refuses to
@@ -761,6 +802,7 @@ _CROSS_CHECKS: tuple[Callable[[AppSpec], None], ...] = (
     _check_start_owned,
     _check_required_fields_editable,    # F1 — after visibility entries/Start are known-valid
     _check_persona_roles,
+    _check_no_api_impossible_widgets,   # B2 (#36) — ADR-0004, before the config check
     _check_widgets,
     _check_test_cases,
 )

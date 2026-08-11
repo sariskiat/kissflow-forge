@@ -78,6 +78,9 @@ REQUIRED_KEYS = frozenset({
 # Known Exclusion that accidentally gains one would too.
 KNOWN_EXCLUSION_KEYS = frozenset({
     "cross-branch-jump", "auto-step", "unclaimed-value", "nested-split", "duplicate-branch-step",
+    # B2 (#36): the API-impossible set, flipped from pending #36 to permanent Known Exclusions —
+    # each is now wired to a compile refusal (ADR-0004), no capability ticket left to wait on.
+    "rich-text-content", "custom-component", "report-creation",
 })
 
 
@@ -373,3 +376,103 @@ def test_sequential_splits_row_wired_to_a_real_build() -> None:
     assert len(parallels) == 2, "two decision splits must compile to TWO Parallel gateways"
     assert len(parallels[0]["branches"]) == 2  # Triage: High -> Escalate, Low -> Standard Review
     assert len(parallels[1]["branches"]) == 2  # Approve: Manager Approval / Auto Approve
+
+
+# ---- B2 (#36): the API-impossible set is refused at COMPILE, its rows wired, not pending --------
+# ADR-0004 (#7): rich-text render, custom-component upload, and report creation are impossible
+# through the API. B2 wires each to a compile refusal naming its coverage row and flips the row
+# from pending #36 to a permanent Known Exclusion (THE RULE: refuse, never best-effort). Role-scoped
+# visibility is the FOURTH API-impossible capability but stays the DOCTOR's refusal (ADR-0003, #6),
+# not re-implemented at compile here.
+
+API_IMPOSSIBLE_COMPILE_KEYS = frozenset({
+    "rich-text-content", "custom-component", "report-creation",
+})
+
+# The refuse-rows that legitimately remain pending after B2 closes the contract: three future BUILD
+# capabilities (a word-list-backed dropdown #13, section colour-styling #11, wiring an EXISTING
+# report into a widget #23) and the one API-impossible capability enforced at the DOCTOR, not
+# compile (role-scoped visibility #6, ADR-0003/0004). Pinning this set is what makes "no refuse-row
+# is left pending" provable: any NEW pending refuse-row, or a B2 row that regressed to pending,
+# breaks the equality.
+PENDING_REFUSE_ALLOWLIST = frozenset({
+    "word-list-dropdown", "section-styling", "report-widget", "role-scoped-visibility",
+})
+
+
+def _spec_with_widget(widget: WidgetIntent) -> AppSpec:
+    """`_full_spec()` with one extra widget on its first page — the minimal way to feed compile a
+    page carrying an API-impossible widget without rebuilding a whole spec."""
+    full = _full_spec()
+    view = full.personas.views[0]
+    page = view.pages[0]
+    new_page = dataclasses.replace(page, widgets=page.widgets + (widget,))
+    new_view = dataclasses.replace(view, pages=(new_page,) + view.pages[1:])
+    return dataclasses.replace(
+        full, personas=Personas(views=(new_view,) + full.personas.views[1:])
+    )
+
+
+def test_no_api_impossible_refuse_row_is_pending() -> None:
+    """AC1 (B2): the API-impossible compile-refuse rows are wired, not promised — each is a
+    REFUSES_LOUDLY row carrying no ticket (a permanent Known Exclusion per ADR-0004)."""
+    for key in API_IMPOSSIBLE_COMPILE_KEYS:
+        row = get(key)
+        assert row.bucket is Bucket.REFUSES_LOUDLY
+        assert not row.pending, f"{key!r} is API-impossible — refused at compile, must not be pending"
+        assert row.ticket is None
+
+
+def test_pending_refuse_rows_are_exactly_the_allowlist() -> None:
+    """AC1 (B2): "no refuse-row is left pending" made provable. Every refuses-loudly row still
+    carrying a ticket must be one of the four justified pending rows (three future BUILD
+    capabilities + the doctor-side role-scoped-visibility). A new pending refuse-row can't slip in
+    silently, and none of the three B2 rows may regress to pending."""
+    pending = {r.key for r in ROWS if r.bucket is Bucket.REFUSES_LOUDLY and r.pending}
+    assert pending == PENDING_REFUSE_ALLOWLIST, (
+        f"pending refuse-rows must be exactly {sorted(PENDING_REFUSE_ALLOWLIST)}; "
+        f"got {sorted(pending)}"
+    )
+
+
+def test_rich_text_content_row_is_wired_to_a_real_refusal() -> None:
+    """AC2/AC3 (B2): a page carrying a rich-text widget is refused at compile, naming the
+    `rich-text-content` row — ADR-0004, never built as best-effort plain text."""
+    spec = _spec_with_widget(WidgetIntent("general/rich_text"))
+    with pytest.raises(ValueError, match="rich-text-content"):
+        compile_spec(spec)
+    assert get("rich-text-content").bucket is Bucket.REFUSES_LOUDLY
+
+
+def test_custom_component_row_is_wired_to_a_real_refusal() -> None:
+    """AC2/AC3 (B2): a page carrying a custom component is refused at compile, naming the
+    `custom-component` row — no API-driven install path (ADR-0004)."""
+    spec = _spec_with_widget(WidgetIntent("custom"))
+    with pytest.raises(ValueError, match="custom-component"):
+        compile_spec(spec)
+    assert get("custom-component").bucket is Bucket.REFUSES_LOUDLY
+
+
+def test_report_creation_row_is_wired_to_a_real_refusal() -> None:
+    """AC2/AC3 (B2): a page carrying a report widget is refused at compile, naming the
+    `report-creation` row — building it would need a report to exist first, and creating one has no
+    API path (ADR-0004). Config is deliberately VALID (the full report trio) so this proves the
+    API-impossible refusal fires on the slug itself, not a missing-config error. Distinct from
+    wiring an existing report (report-widget #23, still pending)."""
+    spec = _spec_with_widget(WidgetIntent(
+        "report/chart",
+        config=(("flow_type", "process"), ("flow_id", "RepairJobs"), ("report_id", "R1")),
+    ))
+    with pytest.raises(ValueError, match="report-creation"):
+        compile_spec(spec)
+    assert get("report-creation").bucket is Bucket.REFUSES_LOUDLY
+
+
+def test_role_scoped_visibility_stays_a_doctor_refusal() -> None:
+    """AC4 (B2): role-scoped visibility is NOT re-implemented as a compile refusal here — it stays
+    the doctor's, tracked in #6 (ADR-0003: known exclusions are judge/doctor-owned, not the
+    builder's). So its row keeps ticket #6 and is never among the compile-refused set."""
+    row = get("role-scoped-visibility")
+    assert row.bucket is Bucket.REFUSES_LOUDLY
+    assert row.ticket == "#6"
+    assert "role-scoped-visibility" not in API_IMPOSSIBLE_COMPILE_KEYS

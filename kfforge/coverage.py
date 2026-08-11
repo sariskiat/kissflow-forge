@@ -111,23 +111,26 @@ ROWS: tuple[CoverageRow, ...] = (
         reason="no tool to read a report or wire one into a page widget yet (#23); "
                "distinct from creating a report (see report-creation).",
     ),
+    # B2 (#36) wired these three to a real COMPILE refusal
+    # (`compile._check_no_api_impossible_widgets`), so each is now a permanent Known Exclusion (no
+    # ticket) — API-impossible, refused forever per ADR-0004, never a pending capability (THE RULE).
     CoverageRow(
         "report-creation", "report creation",
-        Bucket.REFUSES_LOUDLY, ticket="#36",
-        reason="no tool to create a report; refused at compile per ADR-0004, wired "
-               "by the B2 closing gate.",
+        Bucket.REFUSES_LOUDLY,
+        reason="no API path to create a report; refused at compile per ADR-0004 (a report widget "
+               "needs a report to exist first). Distinct from wiring an EXISTING report into a "
+               "widget, still pending (report-widget, #23).",
     ),
     CoverageRow(
         "rich-text-content", "rich-text component content",
-        Bucket.REFUSES_LOUDLY, ticket="#36",
-        reason="rich-text serialization is uncaptured (Pages known gaps); refused "
-               "at compile per ADR-0004, wired by the B2 closing gate.",
+        Bucket.REFUSES_LOUDLY,
+        reason="rich-text serialization is uncaptured (Pages known gaps); refused at compile per "
+               "ADR-0004, never built as best-effort plain text.",
     ),
     CoverageRow(
         "custom-component", "custom component",
-        Bucket.REFUSES_LOUDLY, ticket="#36",
-        reason="no API-driven component install path exists; refused at compile per "
-               "ADR-0004, wired by the B2 closing gate.",
+        Bucket.REFUSES_LOUDLY,
+        reason="no API-driven component install path exists; refused at compile per ADR-0004.",
     ),
     CoverageRow(
         "role-scoped-visibility", "role-scoped visibility",
