@@ -1112,3 +1112,14 @@ Default 5 canonical roles, label string equals role name. See
 
 Single-context — `CONTEXT.md` + `docs/adr/` at repo root, already in place.
 See `docs/agents/domain.md`.
+
+### Reader skill
+
+Turn the two input files (a `.drawio` flow capture + an HTML page design) into
+spec JSON, consumed via the existing `forge_update_spec` → `forge_approve_spec`
+→ `forge_plan_app` surface — the engine never parses `.drawio` (D5). Ask on any
+blocking gap, never enrich a guess; validate every routing literal against the
+LIVE word list; refuse any `kfforge.coverage` shape marked `refuses-loudly`,
+naming the row. Token discipline: never open the XML whole, analyze with
+`python3`. See `docs/agents/reader.md`; its output boundary is proven by
+`tests/test_reader_boundary.py`.
