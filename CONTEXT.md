@@ -57,3 +57,32 @@ A rework loop gates on a Boolean; an unticked gate keeps the item in the loop.
 Intentional — a trapped item is visible and fixable; a silently skipped rework
 round is neither.
 _Avoid_: blocking, stuck
+
+
+## Pages
+
+**Governed Page Path**:
+The sanctioned way a page reaches the tenant: `AppSpec → compile → BuildPlan`,
+with compile refusing any unbuildable page shape before a plan is emitted.
+`forge_build_page` is the primitive the plan's `build_page` op describes, not a
+second build surface that skips the contract (ADR-0005).
+_Avoid_: page builder, the pages API (those name the tool, not the governed path)
+
+**Build-Correctness Bar (pages)**:
+What a built page must get right: content and behavior — widgets, KPIs, actions,
+popups, events. A missing or wrong one of these is a build defect.
+_Avoid_: parity, fidelity (those name the eval bar)
+
+**Eval-Parity (pages)**:
+How close a built page's layout and styling match a specific mockup's pixels.
+Owned by the eval harness, never a build gate — a built page takes the
+platform's default look, and mockup-exact layout/color is graded in eval, not
+refused or faked at build (ADR-0005).
+_Avoid_: build correctness, identical (those name the build bar)
+
+**Page Coverage Contract**:
+The page rows of `kfforge/coverage.py` — every mockup element in exactly one
+bucket (captured-live / buildable / refuses-loudly). Compile consults it; every
+page refusal names its row. Same module and contract test as the workflow rows,
+so the two cannot drift.
+_Avoid_: page matrix, supported widgets list

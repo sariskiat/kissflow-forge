@@ -1,3 +1,7 @@
+# RULE 
+
+ remember generalise the aiclinic comparison cases are just eval!
+ 
 # Kissflow Forge — Engine Manual
 
 This file is the manual a fresh-context agent needs to build **any** Kissflow app
