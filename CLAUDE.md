@@ -1004,6 +1004,26 @@ API-driven install path at all; card- and pivot-type report widgets need a
 matching report of that exact type to already exist; and a progress-bar
 widget has been seen configured correctly yet render blank, cause unresolved.
 
+- **`Page::Component` registration is NOT load-bearing (#24, proven live
+  2026-08-11).** `kfforge/pages.py` never writes `Page::Component`, so a
+  built page leaves the key absent entirely. Test: built a page with three
+  `general/label` widgets (their Component ids never registered, `Page::Component`
+  absent), published, opened the builder — all three rendered fine. So an
+  unregistered Component still renders; `add_widget` needs no registration step.
+  A page's earlier partial registration (30 of 34) is therefore cosmetic, not
+  a render gate. Recorded so nobody chases it again.
+- **A freely-bound single live value on a page is a Known Exclusion (#23,
+  proven live 2026-08-11).** No shape reaches it through this engine + API:
+  every live page on the tenant has ZERO `VariableRef` nodes (re-confirmed
+  live), and the only `VariableRef` builder (`_bind_repeater_row_label`) binds
+  repeater ROW LABELS, never a standalone value; a `general/card`'s `count` is
+  a static int; and a report widget only renders a PRE-EXISTING report's type,
+  which this engine has no route to create. The one genuine live-number path
+  is the native `metrics`/`stepmetrics` widget (flow id only) — but it renders
+  a fixed per-step analytics TABLE, not an arbitrary bound number. So a KPI
+  tile showing e.g. a live "open cases" count is refused at compile, not faked;
+  the metrics table is the buildable substitute where a per-step breakdown fits.
+
 A few operational gotchas:
 
 - Data-bound widgets obey a sticky **"Viewing as" role lens** in the builder —
