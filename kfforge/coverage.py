@@ -170,6 +170,95 @@ ROWS: tuple[CoverageRow, ...] = (
                "the compile gate is a hard refusal. An intentional fall-through must be modeled "
                "as an explicit branch claiming that value.",
     ),
+
+    # ══ PAGE LAYER (#20) — what a page MOCKUP can express, the pages half of the matrix ══════════
+    # The MOCKUP is the bar, never the oracle (a new input has no oracle; targeting a reference app
+    # would inherit its shortfalls). Per ADR-0005 (#38) the governed page plan carries CONTENT +
+    # BEHAVIOR; layout geometry and exact styling take the platform default at build and their
+    # mockup parity is graded in the eval harness (#16/#28), never refused or faked at build.
+
+    # ── captured-live: a live capture proves the shape builds ────────────────────────────────────
+    # A fresh page has its flex layout values filled in; #24 (proven live 2026-08-11) built a page
+    # of general/label widgets, published, and rendered it in the builder — so the page's default
+    # layout, its text labels, and engine-set page colour (2 pages this engine restyled with raw hex,
+    # proven rendering, see CLAUDE.md Pages) all have a live capture. Exact mockup geometry / type /
+    # colour parity is eval-only (ADR-0005), not a build gate — so these are the DEFAULT-look shapes.
+    CoverageRow("page-layout", "page container layout (flex direction/gap/padding)", Bucket.CAPTURED_LIVE),
+    CoverageRow("page-typography", "page text via label widgets", Bucket.CAPTURED_LIVE),
+    CoverageRow("page-colour-styling", "page colour via Style (raw hex or token ref)", Bucket.CAPTURED_LIVE),
+    # The oracle's ACTUAL KPI tile: a pair of static labels with no value slot — plain general/label
+    # widgets, which render live (#24). The live-number version is a separate, refused row below.
+    CoverageRow("kpi-tile-static", "KPI tile as a static label pair (no value slot)", Bucket.CAPTURED_LIVE),
+
+    # ── buildable: engine builds it offline, not yet captured rendering live; pending #16 ─────────
+    # pages.add_popup + pages.add_event_mapping build both shapes offline, and #22 wired the event
+    # step into the governed compile path (a button that opens a popup). No live render/open capture
+    # exists yet, so — like sequential-splits — they wait on #16 (the live built-app-vs-input
+    # comparator), staying BUILDABLE, not captured-live.
+    CoverageRow(
+        "page-popup", "a popup subtree opened by a button",
+        Bucket.BUILDABLE, ticket="#16",
+    ),
+    CoverageRow(
+        "on-click-action", "an on-click action (open-popup / JS action)",
+        Bucket.BUILDABLE, ticket="#16",
+    ),
+
+    # ── refuses-loudly, pending a wiring ticket ──────────────────────────────────────────────────
+    # The donut chart AND its legend-with-counts are a report widget's own rendering — the report
+    # defines its own visualization and legend, so wiring one delivers both. Covered by report-widget
+    # (#23): no tool to create or wire a report into a page widget yet. Referenced, not duplicated.
+    CoverageRow(
+        "chart-legend", "a donut chart plus its legend-with-counts",
+        Bucket.REFUSES_LOUDLY, ticket="#23",
+        reason="a donut chart and its legend-with-counts are a report widget's own rendering, "
+               "covered by report-widget (#23) — no tool to create or wire a report yet. The "
+               "per-category counts come from the report, not a page node.",
+    ),
+
+    # ── refuses-loudly, permanent Known Exclusion (a written reason, no ticket) ───────────────────
+    # A freely-bound single live value on a page is a Known Exclusion, proven live 2026-08-11 (#23):
+    # every live page on the tenant has ZERO VariableRef nodes; the only VariableRef builder binds
+    # repeater ROW LABELS, never a standalone value; a general/card count is a static int; and a
+    # report widget only renders a PRE-EXISTING report's type this engine has no route to create.
+    # The one genuine live-number path is the native metrics/stepmetrics widget (flow id only), but
+    # it renders a fixed per-step analytics TABLE, not an arbitrary bound number. Refused at compile,
+    # not faked; the metrics table is the buildable substitute where a per-step breakdown fits.
+    CoverageRow(
+        "kpi-tile-live-number", "KPI tile bound to a live count",
+        Bucket.REFUSES_LOUDLY,
+        reason="a freely-bound live value on a page is a Known Exclusion (#23, proven live "
+               "2026-08-11): no shape reaches it (zero live VariableRef nodes; the only VariableRef "
+               "builder binds repeater row labels; a general/card count is a static int; a report "
+               "widget only renders a pre-existing report the engine can't create). The native "
+               "metrics/stepmetrics widget is the one live-number path but renders a fixed per-step "
+               "analytics table, not an arbitrary bound count. Refused, not faked.",
+    ),
+    CoverageRow(
+        "delta-pill", "a pill showing a live delta (e.g. +2, 50%)",
+        Bucket.REFUSES_LOUDLY,
+        reason="a delta pill shows a computed live change — the SAME live-value class as "
+               "kpi-tile-live-number, refused for the same reason (#23). A static-text pill is just "
+               "a label (page-typography + page-colour-styling); a delta bound to real data has no "
+               "reachable shape.",
+    ),
+    CoverageRow(
+        "status-pill", "a status pill / per-row progress bar",
+        Bucket.REFUSES_LOUDLY,
+        reason="status pills and per-row progress bars are native view-widget rendering of the "
+               "underlying Select/number field, not a page node the engine authors — you get them "
+               "by binding a view/table widget, never as a standalone page node. A permanent Known "
+               "Exclusion for the page-node expression.",
+    ),
+    CoverageRow(
+        "page-tabs", "a multi-pane tabbed interface",
+        Bucket.REFUSES_LOUDLY,
+        reason="a multi-pane tabbed interface is behavior (pane switching via an active-tab Variable "
+               "+ one Criteria per pane) — refused rather than silently downgraded to stacked panes "
+               "(D6). pages.py has no Variable/Criteria/multi-pane composition builder (its scope "
+               "note); the single general/tab widget is not the switching composition. No build "
+               "ticket scoped yet, so a written Known Exclusion until one exists.",
+    ),
 )
 
 

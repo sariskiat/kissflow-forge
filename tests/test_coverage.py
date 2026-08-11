@@ -81,6 +81,10 @@ KNOWN_EXCLUSION_KEYS = frozenset({
     # B2 (#36): the API-impossible set, flipped from pending #36 to permanent Known Exclusions —
     # each is now wired to a compile refusal (ADR-0004), no capability ticket left to wait on.
     "rich-text-content", "custom-component", "report-creation",
+    # #20 page layer: permanent Known Exclusions (a written reason, no ticket). The two live-value
+    # tiles (#23, proven live 2026-08-11), the native-rendered status pill, and the multi-pane
+    # tabbed interface (D6: no silent downgrade, no composition builder, no build ticket scoped yet).
+    "kpi-tile-live-number", "delta-pill", "status-pill", "page-tabs",
 })
 
 
@@ -397,6 +401,9 @@ API_IMPOSSIBLE_COMPILE_KEYS = frozenset({
 # breaks the equality.
 PENDING_REFUSE_ALLOWLIST = frozenset({
     "word-list-dropdown", "section-styling", "report-widget", "role-scoped-visibility",
+    # #20 page layer: the donut chart + its legend-with-counts are a report widget's own rendering,
+    # covered by report-widget (#23) — pending the same wire-an-existing-report capability.
+    "chart-legend",
 })
 
 
@@ -476,3 +483,118 @@ def test_role_scoped_visibility_stays_a_doctor_refusal() -> None:
     assert row.bucket is Bucket.REFUSES_LOUDLY
     assert row.ticket == "#6"
     assert "role-scoped-visibility" not in API_IMPOSSIBLE_COMPILE_KEYS
+
+
+# ---- #20: the PAGE-LAYER coverage rows — the pages half of the coverage matrix ------------------
+# Enumerate what a page MOCKUP can express (layout, typography, colour, KPI tiles, status pills,
+# charts, tabs, popups, actions, live numbers, delta pills, chart legend) and land EACH in exactly
+# one bucket. The MOCKUP is the bar (#20), never the oracle — a new input has no oracle. Per ADR-0005
+# (#38) the governed page plan carries CONTENT + BEHAVIOR; layout/exact-styling parity is eval-only
+# (#16/#28), never a build gate. Buckets are justified inline in coverage.py's ROWS.
+
+PAGE_LAYER_KEYS = frozenset({
+    "page-layout", "page-typography", "page-colour-styling", "kpi-tile-static",
+    "kpi-tile-live-number", "delta-pill", "status-pill",
+    "page-popup", "on-click-action", "page-tabs", "chart-legend",
+})
+
+# The bucket #20 assigns each page-layer row. Union must equal PAGE_LAYER_KEYS (a real partition).
+PAGE_CAPTURED_LIVE = frozenset({
+    "page-layout", "page-typography", "page-colour-styling", "kpi-tile-static",
+})
+PAGE_BUILDABLE = frozenset({"page-popup", "on-click-action"})
+PAGE_REFUSED = frozenset({
+    "kpi-tile-live-number", "delta-pill", "status-pill", "page-tabs", "chart-legend",
+})
+
+
+def test_page_layer_rows_present() -> None:
+    """Every enumerated mockup element has a row — none silently passes (#20 Done-when)."""
+    missing = PAGE_LAYER_KEYS - {r.key for r in ROWS}
+    assert not missing, f"page-layer coverage rows missing: {sorted(missing)}"
+
+
+def test_page_layer_rows_partition_by_bucket() -> None:
+    """Each page-layer row lands in EXACTLY the one bucket #20 assigned it, and the three
+    bucket-sets truly partition the page keys (no row unbucketed, none double-counted)."""
+    assert PAGE_CAPTURED_LIVE | PAGE_BUILDABLE | PAGE_REFUSED == PAGE_LAYER_KEYS
+    assert not (PAGE_CAPTURED_LIVE & PAGE_BUILDABLE)
+    assert not (PAGE_CAPTURED_LIVE & PAGE_REFUSED)
+    assert not (PAGE_BUILDABLE & PAGE_REFUSED)
+    for key in PAGE_CAPTURED_LIVE:
+        assert get(key).bucket is Bucket.CAPTURED_LIVE, key
+    for key in PAGE_BUILDABLE:
+        assert get(key).bucket is Bucket.BUILDABLE, key
+    for key in PAGE_REFUSED:
+        assert get(key).bucket is Bucket.REFUSES_LOUDLY, key
+
+
+def test_page_layer_refused_rows_name_ticket_or_reason() -> None:
+    """#20 Done-when: any refused row carries a ticket OR a written Known Exclusion reason — no
+    silent downgrade (D6)."""
+    for key in PAGE_REFUSED:
+        row = get(key)
+        assert row.ticket is not None or row.reason, f"{key} refuses with no ticket and no reason"
+
+
+def test_page_layer_captured_rows_carry_no_marker() -> None:
+    """A captured-live page row is done: no pending ticket, no refusal reason (layout/typography/
+    colour/static-tile all build today; exact mockup parity is eval-only, not a build gate)."""
+    for key in PAGE_CAPTURED_LIVE:
+        row = get(key)
+        assert row.ticket is None and row.reason is None, key
+
+
+def test_page_live_number_is_a_permanent_known_exclusion() -> None:
+    """A freely-bound live value on a page is refused, not faked (#23, proven live 2026-08-11): a
+    live KPI count and a delta pill are the SAME live-value class — no reachable shape, so a
+    permanent Known Exclusion (ticket None), each naming #23 as the proving finding."""
+    for key in ("kpi-tile-live-number", "delta-pill"):
+        row = get(key)
+        assert row.bucket is Bucket.REFUSES_LOUDLY
+        assert row.ticket is None, f"{key} is a permanent Known Exclusion (#23), not pending"
+        assert "#23" in (row.reason or ""), key
+
+
+def test_kpi_static_tile_is_captured_live() -> None:
+    """The oracle's actual KPI tile: a pair of static labels with no value slot — plain general/label
+    widgets, which render live (#24). Captured-live, no ticket, no reason."""
+    row = get("kpi-tile-static")
+    assert row.bucket is Bucket.CAPTURED_LIVE
+    assert row.ticket is None and row.reason is None
+
+
+def test_status_pill_is_a_permanent_known_exclusion() -> None:
+    """Status pills / per-row progress bars are native view-widget rendering of the underlying
+    field, not a page node the engine authors — a permanent Known Exclusion (no ticket)."""
+    row = get("status-pill")
+    assert row.bucket is Bucket.REFUSES_LOUDLY
+    assert row.ticket is None and row.reason
+
+
+def test_page_tabs_refused_no_silent_downgrade() -> None:
+    """A multi-pane tabbed interface is behavior (pane switching), refused rather than silently
+    downgraded to stacked panes (D6). No Variable/Criteria composition builder, no build ticket
+    scoped yet — a written Known Exclusion (no ticket)."""
+    row = get("page-tabs")
+    assert row.bucket is Bucket.REFUSES_LOUDLY
+    assert row.ticket is None and row.reason
+
+
+def test_page_popup_and_action_are_buildable_pending_capture() -> None:
+    """Popups + on-click actions are built offline today (pages.add_popup / add_event_mapping, wired
+    into compile by #22) but not yet captured rendering live — BUILDABLE, pending a live-capture
+    ticket."""
+    for key in ("page-popup", "on-click-action"):
+        row = get(key)
+        assert row.bucket is Bucket.BUILDABLE
+        assert row.pending, f"{key} is BUILDABLE and must carry a live-capture ticket"
+
+
+def test_chart_legend_points_at_report_widget_ticket() -> None:
+    """The donut chart + its legend-with-counts are a report widget's own rendering — covered by
+    report-widget (#23), pending the same wire-an-existing-report capability (referenced, not
+    duplicated)."""
+    row = get("chart-legend")
+    assert row.bucket is Bucket.REFUSES_LOUDLY
+    assert row.ticket == "#23"
