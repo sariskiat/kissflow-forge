@@ -325,6 +325,71 @@ def test_field_types_cache_returns_a_read_only_mapping() -> None:
         got["injected"] = str            # type: ignore[index]
 
 
+def test_page_behavior_popup_and_open_popup_action_round_trips() -> None:
+    """#39: a page carrying a PopupIntent + an OpenPopup on-click action survives the wire
+    unchanged. Behavior is the schema half of ADR-0005; serde is reflection-driven, so this must
+    pass with ZERO serde code change (the two-arm OnClickAction is a discriminant + optional
+    payloads, never an `A | B` union serde can't reflect)."""
+    from kfforge.intake.schema import (
+        ClickActionKind,
+        OnClickAction,
+        PageIntent,
+        PersonaView,
+        PopupIntent,
+        WidgetIntent,
+    )
+
+    base = _full_spec()
+    page = PageIntent(
+        name="Board",
+        widgets=(WidgetIntent("general/label"),),
+        popups=(PopupIntent(name="Detail", widgets=(WidgetIntent("general/label"),)),),
+        on_click=(
+            OnClickAction("Show detail", ClickActionKind.OPEN_POPUP, target_popup="Detail"),
+            OnClickAction("Notify", ClickActionKind.JS_ACTION, script="await kf.client.showInfo('x');"),
+        ),
+    )
+    view = PersonaView(role=base.roles.roles[0].name, pages=(page,), kpis=(), actions=("Show detail",))
+    spec = dataclasses.replace(
+        base, personas=dataclasses.replace(base.personas, views=(view,)))
+
+    got = spec_from_dict(spec_to_dict(spec))
+    assert got == spec
+    rt_page = got.personas.views[0].pages[0]
+    assert rt_page.popups[0].name == "Detail"
+    assert rt_page.on_click[0].kind is ClickActionKind.OPEN_POPUP
+    assert rt_page.on_click[0].target_popup == "Detail" and rt_page.on_click[0].script is None
+    assert rt_page.on_click[1].kind is ClickActionKind.JS_ACTION
+    assert rt_page.on_click[1].script and rt_page.on_click[1].target_popup is None
+
+
+def test_page_behavior_spec_still_compiles_no_regression() -> None:
+    """#39 acceptance: a spec carrying popups + on-click wiring still `compile_spec`s — behavior is
+    IGNORED by compile at this stage (T2 wires it), so it must not break op derivation either."""
+    from kfforge.intake.compile import compile_spec
+    from kfforge.intake.schema import (
+        ClickActionKind,
+        OnClickAction,
+        PageIntent,
+        PersonaView,
+        PopupIntent,
+        WidgetIntent,
+    )
+
+    base = _full_spec()
+    v0 = base.personas.views[0]
+    page = dataclasses.replace(
+        v0.pages[0],
+        popups=(PopupIntent(name="Detail", widgets=(WidgetIntent("general/label"),)),),
+        on_click=(OnClickAction("Show detail", ClickActionKind.OPEN_POPUP, target_popup="Detail"),),
+    )
+    view = dataclasses.replace(v0, pages=(page,) + v0.pages[1:])
+    spec = dataclasses.replace(
+        base, personas=dataclasses.replace(base.personas, views=(view,) + base.personas.views[1:]))
+    plan = compile_spec(spec)
+    assert plan.ops  # compiled to a real plan, behavior fields silently ignored
+
+
 def test_visibility_entry_role_claim_round_trips() -> None:
     """#6: the `role` claim slot (role-scoped visibility, doctor-refused) survives the wire."""
     full = _full_spec()

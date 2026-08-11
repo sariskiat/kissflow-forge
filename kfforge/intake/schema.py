@@ -101,6 +101,16 @@ scoped, none is silently pretended away:
   compiles clean and fails at publish time, not here.
 - The required-field/visibility check covers `data_model.fields` only. A required TABLE COLUMN in
   a table hidden at its own stage compiles clean — same fatal class, narrower reach.
+- Page BEHAVIOR (`PageIntent.popups`/`.on_click`, #39 T1) is pure vocabulary today — nothing
+  validates it yet, matching this file's "dataclasses don't enforce their own hints" convention.
+  Three checks are owed to #39 T2, the ticket that actually compiles behavior into `EventMapping`
+  nodes: (a) an `OnClickAction`'s exactly-one-arm contract — `target_popup` set iff
+  `kind is OPEN_POPUP`, `script` set iff `JS_ACTION` — is unenforced, so both-set or both-`None`
+  constructs clean; (b) `OnClickAction.target_popup` is never cross-checked against a real
+  `PopupIntent.name` on the same page (an OpenPopup arm can name a popup that doesn't exist); and
+  (c) `OnClickAction.action` is never cross-checked against the owning `PersonaView.actions`. All
+  three serialize and `compile_spec` fine at T1 and would only surface when T2 tries to build the
+  node — logged here, per this file's own rule, rather than discovered there.
 """
 from __future__ import annotations
 
@@ -432,10 +442,57 @@ class WidgetIntent:
     row_fields: tuple[str, ...] = ()
 
 
+class ClickActionKind(StrEnum):
+    """The two on-click arms proven live (CLAUDE.md Pages, shapes/event_mapping.json's two
+    `EventMapping.Type` values). `OPEN_POPUP` is the scriptless arm — its Property is
+    `Type:"Popup"` naming the target popup directly. `JS_ACTION` is arbitrary JS in a Code-typed
+    Property. No third arm has been captured, so this enum is closed at two.
+    """
+    OPEN_POPUP = "OpenPopup"  # scriptless: opens a popup by name
+    JS_ACTION = "JSAction"    # a raw JS body run on click
+
+
 @dataclass(frozen=True)
-class PageIntent:
+class OnClickAction:
+    """One on-click wiring on a page: `action` names the button/action (a string that appears in a
+    `PersonaView.actions`) whose click this describes, and `kind` picks which of the two proven
+    arms fires. Exactly one arm's payload is populated, the other stays `None`:
+
+    - `kind is OPEN_POPUP` -> `target_popup` names a `PopupIntent` on the SAME `PageIntent`
+      (`script` is `None`).
+    - `kind is JS_ACTION`  -> `script` is the raw JS body (`target_popup` is `None`).
+
+    This is spec VOCABULARY only (#39 T1): `compile_spec` ignores it at this stage — turning it
+    into a real `EventMapping`/`Property` node pair is T2. Two optional payload fields under one
+    discriminant (rather than an `A | B` union of two dataclasses) is deliberate: `serde` only
+    reflects `T | None` unions, so this shape round-trips with zero serde code.
+    """
+    action: str
+    kind: ClickActionKind
+    target_popup: str | None = None
+    script: str | None = None
+
+
+@dataclass(frozen=True)
+class PopupIntent:
+    """A popup subtree hosted on a page (CLAUDE.md Pages: "Popup — its own Container subtree").
+    Mirrors `PageIntent`'s content half (a name plus hosted widgets); an `OnClickAction` with
+    `kind is OPEN_POPUP` targets one of these by `name`.
+    """
     name: str
     widgets: tuple[WidgetIntent, ...]
+
+
+@dataclass(frozen=True)
+class PageIntent:
+    """A page's content (`widgets`) plus its BEHAVIOR half (`popups` + `on_click`), the schema
+    side of ADR-0005 ("the governed plan carries content AND behavior"). Both behavior fields
+    default empty, so a plain content-only page still constructs as `PageIntent(name, widgets)`.
+    """
+    name: str
+    widgets: tuple[WidgetIntent, ...]
+    popups: tuple[PopupIntent, ...] = ()
+    on_click: tuple[OnClickAction, ...] = ()
 
 
 @dataclass(frozen=True)
