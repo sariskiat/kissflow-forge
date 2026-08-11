@@ -49,7 +49,39 @@
       "Kind": "Property",
       "Type": "Value",
       "FieldMapping": "FieldMapping_Sample03",
-      "Value": "myitems"
+      "Value": null
+    },
+    "FieldMapping_Sample04": {
+      "Id": "FieldMapping_Sample04",
+      "Kind": "FieldMapping",
+      "Name": "instance_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample04"
+      ]
+    },
+    "Property_Sample04": {
+      "Id": "Property_Sample04",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample04",
+      "Value": null
+    },
+    "FieldMapping_Sample05": {
+      "Id": "FieldMapping_Sample05",
+      "Kind": "FieldMapping",
+      "Name": "activity_instance_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample05"
+      ]
+    },
+    "Property_Sample05": {
+      "Id": "Property_Sample05",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample05",
+      "Value": null
     },
     "Container_Sample01": {
       "Id": "Container_Sample01",
@@ -69,7 +101,9 @@
       "Container::FieldMapping": [
         "FieldMapping_Sample01",
         "FieldMapping_Sample02",
-        "FieldMapping_Sample03"
+        "FieldMapping_Sample03",
+        "FieldMapping_Sample04",
+        "FieldMapping_Sample05"
       ],
       "Container::Style": [
         "Style_Sample01"
@@ -86,7 +120,9 @@
       "Data": {
         "manifest_id": "Form",
         "category": "view",
-        "visualization_type": "form"
+        "visualization_type": "form",
+        "flow_type": "Form",
+        "flow_id": "Flow_Sample01"
       },
       "Container": "Container_Sample01"
     },
@@ -98,6 +134,7 @@
     }
   },
   "notes": [
+    "The live working view/form ships view_id=null, plus instance_id=null and activity_instance_id=null — this is why view_id is OPTIONAL for view/form in WIDGET_REQUIRED_CONFIG (unlike every other view/* slug, where it stays required): a truthy requirement would make this exact live binding unreachable. The flow/report binding is double-encoded (Data AND FieldMapping) — flow_type/flow_id also live in Component.Data, same convention widget_metrics/widget_general_masterdetail already prove. view_id is NOT mirrored into Data here (it is null).",
     "A page-hosted view/form widget auto-creates a fresh junk Draft item on every render it is shown to a user — this inflates the flow's Draft item count over time purely from people viewing the page, not from real submissions.",
     "ALL view/* widgets bind via this same flow_type/flow_id/view_id trio, regardless of which visual the widget renders — only Script.web (and Data.manifest_id/visualization_type) differ between them.",
     "A data-bound widget renders per the BOUND VIEW's own type, not the widget's name: e.g. a view bound to \"myitems\" (a table-type view) shows a table inside a kanban/timeline/matrix widget until a matching view TYPE actually exists on the flow — this is expected, not a bug in the widget.",

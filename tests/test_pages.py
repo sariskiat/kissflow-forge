@@ -125,7 +125,11 @@ def test_add_widget_view_table_binds_flow_view_trio() -> None:
     )
     fm_index = {page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]]["Value"]
                 for fid in page[host]["Container::FieldMapping"]}
-    assert fm_index == {"flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "allitems"}
+    # Subset, not ==: view/table now also carries the display-config slots showform/steps/caption
+    # (ticket #21); the load-bearing binding trio is what this test guards.
+    assert fm_index["flow_type"] == "Process"
+    assert fm_index["flow_id"] == "Flow_abc123"
+    assert fm_index["view_id"] == "allitems"
     _assert_backrefs_resolve(page)
 
 
@@ -145,6 +149,125 @@ def test_add_widget_report_chart_binds_flow_report_trio() -> None:
     assert fm_index["flow_type"] == "Form"
     assert fm_index["report_id"] == "Report_r1"
     _assert_backrefs_resolve(page)
+
+
+# ---------------------------------------------------------------------------------------------
+# ticket #21: the three data-bound widget families must reach their full live binding --
+# view/form (view_id/instance_id/activity_instance_id nullable), view/table (showform/steps/
+# caption slots), report/chart (showHeader + a FilterParam-typed filterParameters Property). All
+# three double-encode the flow/report binding into Component.Data as well as the FieldMapping set,
+# same convention widget_metrics/widget_general_masterdetail already prove. Neutral string values
+# only (blindness contract, test_p0_scaffold.py) -- this test guards the binding SHAPE, not the
+# eval case's literal ids.
+# ---------------------------------------------------------------------------------------------
+
+def _host_component(page: dict, host: str) -> dict:
+    return next(v for v in page.values() if isinstance(v, dict) and v.get("Kind") == "Component"
+               and v.get("Container") == host)
+
+
+def _fm_values(page: dict, host: str) -> dict:
+    return {page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]].get("Value")
+            for fid in page[host]["Container::FieldMapping"]}
+
+
+def test_add_widget_view_form_reaches_live_binding_view_id_null() -> None:
+    """The live working view/form ships view_id=null (and instance_id/activity_instance_id=null) --
+    a binding that was unreachable while view_id was required+truthy (ticket #21). Building with
+    only flow_type/flow_id must succeed and leave those three slots null, and flow_type/flow_id must
+    ALSO mirror into Component.Data (double-encoded live)."""
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="view/form",
+        config={"flow_type": "Process", "flow_id": "Flow_abc123"},
+    )
+    assert _fm_values(page, host) == {
+        "flow_type": "Process", "flow_id": "Flow_abc123",
+        "view_id": None, "instance_id": None, "activity_instance_id": None,
+    }
+    assert _host_component(page, host)["Data"] == {
+        "manifest_id": "Form", "category": "view", "visualization_type": "form",
+        "flow_type": "Process", "flow_id": "Flow_abc123",
+    }
+    _assert_backrefs_resolve(page)
+
+
+def test_add_widget_view_form_still_requires_flow_id() -> None:
+    """Relaxing view_id to optional must NOT relax flow_id: a view/form with no flow_id still binds
+    to the shape's own placeholder id and must raise before any node is written."""
+    page = new_page_graph("Sample Page")
+    with pytest.raises(ValueError, match="flow_id"):
+        add_widget(page, container_id="Container001", widget="view/form",
+                   config={"flow_type": "Process"})
+
+
+def test_add_widget_view_table_reaches_live_binding_and_mirrors_data() -> None:
+    """view/table's full live binding: the flow/view trio PLUS the display-config slots
+    showform/steps/caption, with flow_type/flow_id/view_id mirrored into Component.Data. caption
+    here differs from the shape default ("") so a silent no-op cannot make the assertion pass."""
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="view/table",
+        config={"flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "myitems",
+                "showform": True, "steps": "all", "caption": "Neutral Caption"},
+    )
+    assert _fm_values(page, host) == {
+        "flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "myitems",
+        "showform": True, "steps": "all", "caption": "Neutral Caption",
+    }
+    assert _host_component(page, host)["Data"] == {
+        "manifest_id": "Table", "category": "view", "visualization_type": "table",
+        "flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "myitems",
+    }
+    _assert_backrefs_resolve(page)
+
+
+def test_add_widget_view_table_still_requires_view_id() -> None:
+    """Ticket #21 safe assumption: view_id stays REQUIRED for view/table (only view/form has a live
+    example shipping null). Building view/table without it must still raise."""
+    page = new_page_graph("Sample Page")
+    with pytest.raises(ValueError, match="view_id"):
+        add_widget(page, container_id="Container001", widget="view/table",
+                   config={"flow_type": "Process", "flow_id": "Flow_abc123"})
+
+
+def test_add_widget_report_chart_reaches_live_binding_with_filterparam() -> None:
+    """report/chart's full live binding: the flow/report trio, showHeader, and a filterParameters
+    FieldMapping whose Property is Type:"FilterParam" (NOT the usual "Value") with Value:null. The
+    trio also mirrors into Component.Data."""
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="report/chart",
+        config={"flow_type": "Process", "flow_id": "Flow_abc123", "report_id": "Report_r1",
+                "showHeader": False},
+    )
+    host_fms = {page[fid]["Name"]: page[fid] for fid in page[host]["Container::FieldMapping"]}
+    fp_prop = page[host_fms["filterParameters"]["FieldMapping::Property"][0]]
+    assert fp_prop["Type"] == "FilterParam"
+    assert fp_prop.get("Value") is None
+    fm = _fm_values(page, host)
+    assert fm["flow_type"] == "Process"
+    assert fm["flow_id"] == "Flow_abc123"
+    assert fm["report_id"] == "Report_r1"
+    assert fm["showHeader"] is False
+    assert _host_component(page, host)["Data"] == {
+        "manifest_id": "ChartReport", "category": "report", "report_type": "ChartReport",
+        "visualization_type": "chart", "flow_type": "Process",
+        "flow_id": "Flow_abc123", "report_id": "Report_r1",
+    }
+    _assert_backrefs_resolve(page)
+
+
+def test_add_widget_report_chart_show_header_routes_when_overridden() -> None:
+    """showHeader defaults false (live capture); a caller CAN flip it -- proving the slot is a real
+    routed FieldMapping, not a static default read back at itself."""
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="report/chart",
+        config={"flow_type": "Process", "flow_id": "Flow_abc123", "report_id": "Report_r1",
+                "showHeader": True},
+    )
+    assert _fm_values(page, host)["showHeader"] is True
 
 
 def test_add_widget_metrics_binds_stepmetrics_and_mirrors_component_data() -> None:

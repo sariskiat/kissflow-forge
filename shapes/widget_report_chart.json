@@ -51,6 +51,38 @@
       "FieldMapping": "FieldMapping_Sample03",
       "Value": "Report_Sample01"
     },
+    "FieldMapping_Sample04": {
+      "Id": "FieldMapping_Sample04",
+      "Kind": "FieldMapping",
+      "Name": "showHeader",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample04"
+      ]
+    },
+    "Property_Sample04": {
+      "Id": "Property_Sample04",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample04",
+      "Value": false
+    },
+    "FieldMapping_Sample05": {
+      "Id": "FieldMapping_Sample05",
+      "Kind": "FieldMapping",
+      "Name": "filterParameters",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": [
+        "Property_Sample05"
+      ]
+    },
+    "Property_Sample05": {
+      "Id": "Property_Sample05",
+      "Kind": "Property",
+      "Type": "FilterParam",
+      "FieldMapping": "FieldMapping_Sample05",
+      "Value": null
+    },
     "Container_Sample01": {
       "Id": "Container_Sample01",
       "Kind": "Container",
@@ -69,7 +101,9 @@
       "Container::FieldMapping": [
         "FieldMapping_Sample01",
         "FieldMapping_Sample02",
-        "FieldMapping_Sample03"
+        "FieldMapping_Sample03",
+        "FieldMapping_Sample04",
+        "FieldMapping_Sample05"
       ],
       "Container::Style": [
         "Style_Sample01"
@@ -87,7 +121,10 @@
         "manifest_id": "ChartReport",
         "category": "report",
         "visualization_type": "chart",
-        "report_type": "ChartReport"
+        "report_type": "ChartReport",
+        "flow_type": "Process",
+        "flow_id": "Flow_Sample01",
+        "report_id": "Report_Sample01"
       },
       "Container": "Container_Sample01"
     },
@@ -106,6 +143,7 @@
     }
   },
   "notes": [
+    "Beyond the flow/report trio, a live report/chart carries showHeader (boolean, false in the capture) and filterParameters — whose Property is Type:\"FilterParam\" (NOT the usual Type:\"Value\") with Value:null. These are display config, not binding, so they are NOT mirrored into Component.Data; only the flow_type/flow_id/report_id trio is double-encoded there (same convention widget_metrics/widget_general_masterdetail prove).",
     "ALL report/* widgets bind via the flow_id/flow_type/report_id trio (report_id instead of view_id — the one difference from the view/* binding trio).",
     "Data.report_type on the Component itself is \"ChartReport\" for this widget, distinct from Data.visualization_type — both are written, and both matter (report_type selects the report DEFINITION kind; visualization_type selects the widget's own render mode).",
     "A report widget re-renders ANY report definition it is bound to in its OWN visualization (unlike view/* widgets, which are constrained by the bound view's type) — card/pivot report widgets specifically need a matching report_type to already exist on the flow, or the bind has nothing compatible to show.",

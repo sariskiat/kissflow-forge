@@ -82,6 +82,13 @@ WIDGET_SLUGS: dict[str, str] = {
 # (CLAUDE.md: publishes clean, renders broken) this table exists to close off.
 WIDGET_REQUIRED_CONFIG: dict[str, tuple[str, ...]] = {
     **{slug: ("flow_type", "flow_id", "view_id") for slug in WIDGET_SLUGS if slug.startswith("view/")},
+    # view/form is the ONE view/* slug whose live working example ships view_id=null (plus
+    # instance_id/activity_instance_id=null -- see widget_view_form.json): a truthy view_id
+    # requirement makes that exact captured binding unreachable, so view/form drops view_id to
+    # optional (flow_type/flow_id stay required -- they still name a real flow that cannot be
+    # guessed). This explicit entry overrides the view/* comprehension above (later key wins). Every
+    # OTHER view/* slug keeps view_id required until a live example proves otherwise (ticket #21).
+    "view/form": ("flow_type", "flow_id"),
     # report/* binds via the SAME flow_type/flow_id/report_id trio as view/* binds flow_type/
     # flow_id/view_id (widget_report_*.json's own note) -- report_id alone is not enough: every
     # report shape's flow_id FieldMapping is ALSO Sample-shaped ("Flow_Sample01"), so a build that
