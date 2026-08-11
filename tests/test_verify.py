@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from synthetic import OWNERS, synthetic_process_draft, with_goto_and_event
 
-from kfforge.graph import progressive_matrix, set_step_permissions
+from kfforge.graph import add_sequence_number, progressive_matrix, set_step_permissions
 from kfforge.verify import DoctorReport, doctor
 
 Draft = dict[str, Any]
@@ -193,7 +193,17 @@ def test_section_stripped_of_editable_permissions_flagged(clean_draft: Draft) ->
     assert any("Problem" in p and "never editable" in p for p in report.problems)
 
 
-# ---- 5. sparse permission matrix -----------------------------------------------
+# ---- 5. sparse permission matrix -------------------------------------------
+
+def test_sequence_column_not_counted_as_permission_gap(clean_draft: Draft) -> None:
+    # CLAUDE.md > Visibility (#9): a SequenceNumber column takes no Permissions, so its absence
+    # from the matrix is not a gap — even when the column is not IsHidden.
+    d = add_sequence_number(clean_draft, "Running No", "Intake", "TCK-", "0001", "Ticket arrives")
+    (seq_field,) = _nodes_of(d, Kind="Field", Type="SequenceNumber")
+    del d[seq_field["Column"]]["IsHidden"]
+    report = doctor(d)
+    assert not any("sparse" in p for p in report.problems)
+
 
 def test_sparse_permission_matrix_counted(clean_draft: Draft) -> None:
     d = copy.deepcopy(clean_draft)

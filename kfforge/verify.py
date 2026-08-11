@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .graph import NO_PERMISSION_NODETYPES, _table_child_columns
+from .graph import NO_PERMISSION_NODETYPES, _no_permission_columns, _table_child_columns
 
 Draft = dict[str, Any]
 
@@ -242,10 +242,10 @@ def doctor(
     checked["required_fields"] = required_checked
 
     # 5. sparse permission matrix  <- fields silently keep a default visibility
-    # A hidden column has no per-step visibility to set — the builder writes zero Permissions for
-    # a system-filled column (e.g. an auto-number), which is never shown on a form.
-    units = ({k for k, v in N.items() if v.get("Kind") == "Column"
-              and v.get("Type") == "Field" and not v.get("IsHidden")} - _table_child_columns(draft))
+    # A hidden or SequenceNumber column has no per-step visibility to set — the builder writes
+    # zero Permissions for a system-filled column, which is never shown on a form (#9).
+    units = ({k for k, v in N.items() if v.get("Kind") == "Column" and v.get("Type") == "Field"}
+             - _table_child_columns(draft) - _no_permission_columns(draft))
     units |= {k for k, v in N.items() if v.get("Type") == "Model"}
     acts = [k for k, v in N.items() if v.get("Kind") == "Activity"
             and v.get("NodeType") not in ROUTING_NODE_TYPES]

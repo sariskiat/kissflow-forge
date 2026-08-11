@@ -1108,6 +1108,16 @@ def _kind(draft: Draft, kind: str) -> dict[str, dict[str, Any]]:
     return {k: v for k, v in draft.items() if isinstance(v, dict) and v.get("Kind") == kind}
 
 
+def _no_permission_columns(draft: Draft) -> set[str]:
+    """Columns the builder never permissions (CLAUDE.md > Visibility): any `IsHidden` column
+    (a hidden column has no per-step visibility to set) and any SequenceNumber field's column.
+    Property-based, not name-based, so the exclusion holds on any app and any call order."""
+    hidden = {k for k, v in _kind(draft, "Column").items() if v.get("IsHidden")}
+    seq = {c for f in _kind(draft, "Field").values()
+           if f.get("Type") == "SequenceNumber" and isinstance(c := f.get("Column"), str)}
+    return hidden | seq
+
+
 def _table_child_columns(draft: Draft) -> set[str]:
     """Columns that live INSIDE a child table. They are `Type:"Field"` but belong to the nested
     Model, not the form, so they are never step-permissioned individually — the table as a whole is."""
@@ -1291,10 +1301,15 @@ def set_step_permissions(draft: Draft, matrix: Matrix, field_matrix: Matrix | No
         if missing:
             raise ValueError(f"field_matrix names a field that does not exist: {missing}")
     overridden_cols = set(field_col_of_name.values())
+    excluded = _no_permission_columns(new)
+    banned = [n for n, c in field_col_of_name.items() if c in excluded]
+    if banned:
+        raise ValueError(f"field_matrix targets columns that take no Permissions "
+                         f"(IsHidden or SequenceNumber): {banned}")
 
     covered = {c for name in matrix for c in members.get(sec_id_of_name.get(name, ""), [])}
     all_field_cols = ({k for k, v in _kind(new, "Column").items() if v.get("Type") == "Field"}
-                      - _table_child_columns(new))
+                      - _table_child_columns(new) - excluded)
     if all_field_cols - covered:
         # a sparse matrix means those fields silently keep their default visibility -> fail loud
         raise ValueError(f"field columns outside every matrix section: {sorted(all_field_cols - covered)}")
@@ -1314,8 +1329,8 @@ def set_step_permissions(draft: Draft, matrix: Matrix, field_matrix: Matrix | No
         if sid is None:
             raise ValueError(f"matrix names a section that does not exist: {name!r}")
         for col_id in members[sid]:
-            if col_id in overridden_cols:
-                continue            # this field has its own row in field_matrix; skip the section default
+            if col_id in overridden_cols or col_id in excluded:
+                continue            # own row in field_matrix, or a no-Permission column (#9)
             _write_row(col_id, row)
     for fname, row in (field_matrix or {}).items():
         _write_row(field_col_of_name[fname], row)

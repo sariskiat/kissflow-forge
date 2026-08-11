@@ -5,6 +5,7 @@ draft (tests/synthetic.py) — no live counts, no real-app content.
 """
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 import pytest
@@ -12,6 +13,7 @@ from synthetic import OWNERS, synthetic_process_draft
 
 from kfforge.graph import (
     NO_PERMISSION_NODETYPES,
+    add_sequence_number,
     progressive_matrix,
     set_step_permissions,
 )
@@ -139,3 +141,59 @@ def test_sparse_matrix_raises(draft, matrix):
     incomplete = {k: v for k, v in matrix.items() if k != "Intake"}
     with pytest.raises(ValueError):
         set_step_permissions(draft, incomplete)
+
+
+# ---- hidden / SequenceNumber columns take no Permissions (#9) --------------
+# CLAUDE.md > Visibility: "Hidden columns ... and sequence-number columns themselves
+# take no Permissions at all." Rule is stated on column properties, not field names.
+
+@pytest.fixture(scope="module")
+def seq_draft(draft: Draft) -> Draft:
+    return add_sequence_number(draft, "Running No", "Intake", "TCK-", "0001", "Ticket arrives")
+
+
+def _seq_col(d: Draft) -> str:
+    return next(v["Column"] for v in _nodes(d, "Field").values()
+                if v.get("Type") == "SequenceNumber")
+
+
+def test_sequence_column_gets_no_permissions(seq_draft, matrix):
+    applied = set_step_permissions(seq_draft, matrix)
+    col = _seq_col(applied)
+    assert [p for p in _nodes(applied, "Permission").values() if p["Column"] == col] == []
+    assert not (_nodes(applied, "Column")[col].get("Column::Permission") or [])
+
+
+def test_plain_hidden_column_gets_no_permissions(draft, matrix):
+    d = copy.deepcopy(draft)
+    f = next(v for v in _nodes(d, "Field").values() if v.get("Name") == "Extra Note")
+    col = f["Column"]
+    d[col]["IsHidden"] = True
+    applied = set_step_permissions(d, matrix)
+    assert [p for p in _nodes(applied, "Permission").values() if p["Column"] == col] == []
+
+
+def test_field_matrix_on_excluded_column_raises(seq_draft, matrix):
+    row = next(iter(matrix.values()))
+    with pytest.raises(ValueError, match="no Permissions"):
+        set_step_permissions(seq_draft, matrix, field_matrix={"Running No": dict(row)})
+
+
+def test_sequence_exclusion_is_call_order_independent(draft, seq_draft, matrix):
+    # the ticket's requirement: seq-then-visibility and visibility-then-seq give the same graph
+    seq_first = set_step_permissions(seq_draft, matrix)
+    vis_first = add_sequence_number(set_step_permissions(draft, matrix),
+                                    "Running No", "Intake", "TCK-", "0001", "Ticket arrives")
+    assert len(_nodes(seq_first, "Permission")) == len(_nodes(vis_first, "Permission"))
+    for d in (seq_first, vis_first):
+        col = _seq_col(d)
+        assert [p for p in _nodes(d, "Permission").values() if p["Column"] == col] == []
+
+
+def test_sequence_exclusion_does_not_ride_on_ishidden(seq_draft, matrix):
+    # exercise the SequenceNumber clause on its own: a seq column that is NOT IsHidden
+    d = copy.deepcopy(seq_draft)
+    del d[_seq_col(d)]["IsHidden"]
+    applied = set_step_permissions(d, matrix)
+    assert [p for p in _nodes(applied, "Permission").values()
+            if p["Column"] == _seq_col(applied)] == []
