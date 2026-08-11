@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import dataclasses
 import html
+import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from itertools import count, pairwise
 from typing import TYPE_CHECKING, Any
@@ -542,7 +543,83 @@ def flow_diagram_xml(spec: AppSpecLike) -> str:
         label = f"{lp.gate_field}{_DIRECTION_SUFFIX[direction]}"
         c.edge(source=src, target=dst, label=label, dashed=(direction == "backward"))
 
-    return c.xml()
+    doc = c.xml()
+    verify_flow_diagram_branches(spec, doc)  # #4: never hand a human a diagram that lies
+    return doc
+
+
+def verify_flow_diagram_branches(spec: AppSpecLike, xml_text: str) -> None:
+    """#4's machine pre-check: re-read the RENDERED XML and assert its branch structure matches
+    the spec's routing, raising ValueError before the diagram ever reaches an approver. The render
+    once nearly drew a sequential spine through parallel branches; the visual fix landed, this is
+    the guarantee a regression can't silently undo it. Checks, per routing point: the decision
+    diamond exists, is labeled with the deciding field, and is wired FROM the fork stage; every
+    option has a fork edge labeled with that option landing on that option's own branch entry; and
+    the fork stage draws NO plain unlabeled spine edge (its only outgoing paths are its diamonds
+    -- an unlabeled edge out of a fork stem is exactly the sequential-spine lie). Deliberately
+    parses the output rather than trusting the code that produced it -- same code proving itself
+    is no check at all."""
+    root = ET.fromstring(xml_text)
+    vertices: dict[str, tuple[str, str]] = {}
+    edges: list[tuple[str, str, str, bool]] = []
+    for cell in root.findall(".//mxCell"):
+        cid = cell.get("id") or ""
+        if cell.get("vertex") == "1":
+            vertices[cid] = (cell.get("value") or "", cell.get("style") or "")
+        elif cell.get("edge") == "1":
+            edges.append((cell.get("source") or "", cell.get("target") or "",
+                           html.unescape(cell.get("value") or ""),
+                           "dashed=1" in (cell.get("style") or "")))
+
+    def business_name(value: str) -> str:
+        # A stage label is name<br>role (post-XML-decode); a fallback box is just the name; an
+        # orphan carries the "(unreachable?)" flag inside its first line.
+        first = html.unescape(value.split("<br>", 1)[0])
+        return first.removesuffix(" (unreachable?)")
+
+    id_by_name: dict[str, str] = {}
+    for vid, (value, style) in vertices.items():
+        if "rhombus" not in style:
+            id_by_name.setdefault(business_name(value), vid)
+
+    problems: list[str] = []
+    fork_ids: set[str] = set()
+    for rp in _seq(spec.routing):
+        at_id = id_by_name.get(rp.at_stage)
+        if at_id is None:
+            problems.append(f"routing stage {rp.at_stage!r} has no box in the render")
+            continue
+        fork_ids.add(at_id)
+        dia_ids = {t for s, t, _, _ in edges
+                   if s == at_id and "rhombus" in vertices.get(t, ("", ""))[1]
+                   and html.unescape(vertices[t][0]) == str(rp.field_name)}
+        if not dia_ids:
+            problems.append(
+                f"no decision diamond {rp.field_name!r} wired from stage {rp.at_stage!r}")
+            continue
+        mapping = dict(rp.route_per_option)
+        for option in rp.options:
+            seq = list(mapping.get(option) or ())
+            entry = seq[0] if seq else option
+            hit = any(s in dia_ids and label == option
+                      and business_name(vertices.get(t, ("", ""))[0]) == entry
+                      for s, t, label, _ in edges)
+            if not hit:
+                problems.append(
+                    f"branch {option!r} at {rp.at_stage!r} is not drawn as a fork edge to "
+                    f"its entry {entry!r}")
+    for s, t, label, dashed in edges:
+        if s in fork_ids and not label and not dashed \
+                and "rhombus" not in vertices.get(t, ("", ""))[1]:
+            src = business_name(vertices[s][0])
+            dst = business_name(vertices.get(t, ("?", ""))[0])
+            problems.append(
+                f"fork stage {src!r} draws a plain sequential spine edge to {dst!r} -- "
+                f"parallel branches rendered as a sequence")
+    if problems:
+        raise ValueError(
+            "confirmation diagram does not match the spec's branch structure: "
+            + "; ".join(problems))
 
 
 def schema_diagram_xml(spec: AppSpecLike) -> str:

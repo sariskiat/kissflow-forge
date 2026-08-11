@@ -42,6 +42,7 @@ from kfforge.design.diagram import (
     _stage_index,
     flow_diagram_xml,
     schema_diagram_xml,
+    verify_flow_diagram_branches,
 )
 from kfforge.design.mockup import (
     _format_sequence,
@@ -881,6 +882,87 @@ class TestFlowDiagram:
             geo = cell.find("mxGeometry")
             ghost_coords.add((geo.get("x"), geo.get("y")))
         assert len(ghost_coords) == 4, f"fallback nodes stacked: {ghost_coords}"
+
+
+class TestBranchRenderPreCheck:
+    """#4: the machine pre-check that the rendered diagram's branch structure matches the spec's
+    routing, so a regression in the render can never put a lying confirmation diagram in front of
+    an approver. `flow_diagram_xml` runs it on every render; these tests also feed the verifier
+    deliberately-tampered XML directly and confirm it raises."""
+
+    @staticmethod
+    def _cell_id(root: ET.Element, name: str) -> str:
+        # A box's label is either the bare name (a fallback minted by resolve()) or
+        # name<br>role -- match the first line, same rule the verifier itself uses.
+        return next(c.get("id") for c in root.findall(".//mxCell")
+                     if c.get("vertex") == "1"
+                     and (c.get("value") or "").split("<br>", 1)[0] == name)
+
+    def test_faithful_render_passes(self):
+        spec = sample_spec()
+        verify_flow_diagram_branches(spec, flow_diagram_xml(spec))  # must not raise
+
+    def test_removing_a_fork_option_edge_raises(self):
+        spec = sample_spec()
+        root = ET.fromstring(flow_diagram_xml(spec))
+        parent = root.find(".//root")
+        dia_id = next(c.get("id") for c in root.findall(".//mxCell")
+                       if "rhombus" in (c.get("style") or ""))
+        victim = next(c for c in root.findall(".//mxCell")
+                       if c.get("edge") == "1" and c.get("source") == dia_id
+                       and (c.get("value") or "") == "Repairable")
+        parent.remove(victim)
+        with pytest.raises(ValueError, match="Repairable"):
+            verify_flow_diagram_branches(spec, ET.tostring(root, encoding="unicode"))
+
+    def test_removing_the_diamond_raises(self):
+        spec = sample_spec()
+        root = ET.fromstring(flow_diagram_xml(spec))
+        parent = root.find(".//root")
+        dia = next(c for c in root.findall(".//mxCell") if "rhombus" in (c.get("style") or ""))
+        dia_id = dia.get("id")
+        parent.remove(dia)
+        for c in list(root.findall(".//mxCell")):
+            if c.get("edge") == "1" and dia_id in (c.get("source"), c.get("target")):
+                parent.remove(c)
+        with pytest.raises(ValueError, match="Diagnosis Result"):
+            verify_flow_diagram_branches(spec, ET.tostring(root, encoding="unicode"))
+
+    def test_sequential_spine_edge_through_a_split_raises(self):
+        """The exact lie this ticket exists for: a plain spine edge drawn out of a fork stem, as
+        if the branches were sequential steps."""
+        spec = sample_spec()
+        root = ET.fromstring(flow_diagram_xml(spec))
+        parent = root.find(".//root")
+        stem_id = self._cell_id(root, "Diagnosis")
+        repair_id = self._cell_id(root, "Repair")
+        fake = ET.SubElement(parent, "mxCell", {
+            "id": "tamper1", "value": "", "style": "edgeStyle=orthogonalEdgeStyle;html=1;",
+            "edge": "1", "parent": "1", "source": stem_id, "target": repair_id,
+        })
+        ET.SubElement(fake, "mxGeometry", {"relative": "1", "as": "geometry"})
+        with pytest.raises(ValueError, match="[Ss]equential"):
+            verify_flow_diagram_branches(spec, ET.tostring(root, encoding="unicode"))
+
+    def test_option_edge_to_the_wrong_branch_entry_raises(self):
+        spec = sample_spec()
+        root = ET.fromstring(flow_diagram_xml(spec))
+        victim = next(c for c in root.findall(".//mxCell")
+                       if c.get("edge") == "1" and (c.get("value") or "") == "Beyond Repair")
+        victim.set("target", self._cell_id(root, "Repair"))  # should go to Closed - Rejected
+        with pytest.raises(ValueError, match="Beyond Repair"):
+            verify_flow_diagram_branches(spec, ET.tostring(root, encoding="unicode"))
+
+    def test_render_itself_runs_the_pre_check(self, monkeypatch):
+        """flow_diagram_xml must call the verifier on its own output -- the gate lives in the
+        render path, not only as an opt-in helper."""
+        import kfforge.design.diagram as diagram_mod
+        called: list[str] = []
+        real = diagram_mod.verify_flow_diagram_branches
+        monkeypatch.setattr(diagram_mod, "verify_flow_diagram_branches",
+                             lambda spec, xml: called.append("yes") or real(spec, xml))
+        flow_diagram_xml(sample_spec())
+        assert called == ["yes"]
 
 
 class TestFlowDiagramBranchMerge:
