@@ -30,7 +30,8 @@ from __future__ import annotations
 
 import dataclasses
 import html
-from itertools import count
+from collections.abc import Iterator
+from itertools import count, pairwise
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -140,6 +141,15 @@ def _loop_direction(idx: dict[str, int], lp: LoopLike) -> str:
     return "backward" if ti < fi else "forward"
 
 
+def _route_sequences(routing: list[Any]) -> Iterator[tuple[str, ...]]:
+    """Every branch's ordered target SEQUENCE across all routing points (P1: a branch is a
+    sequence of stages -- `route_per_option` maps each option to one). The single place the
+    two-level `route_per_option` walk lives, so the several readers below don't each re-open it."""
+    for rp in routing:
+        for targets in dict(rp.route_per_option).values():
+            yield tuple(targets)
+
+
 def _terminal_stages(spec: AppSpecLike) -> list[str]:
     """Stage (or off-spine routing-target) names that nothing routes away from.
 
@@ -157,14 +167,13 @@ def _terminal_stages(spec: AppSpecLike) -> list[str]:
     universe = list(stage_names)  # a LIST, not a set: layout order matters downstream
     outgoing: set[str] = set(stage_names[:-1]) if stage_names else set()
     outgoing |= {rp.at_stage for rp in routing}
-    for rp in routing:
-        for targets in dict(rp.route_per_option).values():
-            for target in targets:  # a branch is a SEQUENCE of stages now (P1) — every one counts
-                # ponytail: O(stages × options × seqlen) via `not in` on a list; all three are tiny
-                # bounded per-flow config (dozens, not unbounded input), so the list stays. If a flow
-                # ever carried unbounded stages, track membership in a parallel set.
-                if target not in universe:
-                    universe.append(target)
+    for targets in _route_sequences(routing):
+        for target in targets:  # a branch is a SEQUENCE of stages now (P1) — every one counts
+            # ponytail: O(stages × options × seqlen) via `not in` on a list; all three are tiny
+            # bounded per-flow config (dozens, not unbounded input), so the list stays. If a flow
+            # ever carried unbounded stages, track membership in a parallel set.
+            if target not in universe:
+                universe.append(target)
     for lp in loops:
         if lp.to_stage not in universe:
             universe.append(lp.to_stage)
@@ -186,9 +195,8 @@ def _reachable_stage_names(
     for i in range(1, len(stage_names)):
         if stage_names[i - 1] not in routing_at_stages:
             reachable.add(stage_names[i])
-    for rp in routing:
-        for targets in dict(rp.route_per_option).values():
-            reachable.update(targets)  # every stage in every branch sequence receives an edge (P1)
+    for targets in _route_sequences(routing):
+        reachable.update(targets)  # every stage in every branch sequence receives an edge (P1)
     for lp in loops:
         reachable.add(lp.to_stage)
     return reachable
@@ -208,6 +216,14 @@ def _forward_next_stages(spec: AppSpecLike) -> dict[str, str | None]:
     entry target, unless a BACKWARD rework loop's `from_stage` is owned by that entry (owner = the
     most recent entry at-or-before it in spine order), in which case the loop's `from_stage` is the
     terminal -- the stage the branch really ends at, and the one that must jump to the merge.
+
+    A route sequence of length >= 2 (S1, #32) is a SECOND, independent model layered on top of the
+    one above: when a branch's own sequence names two or more on-spine stages ([A1, A2, ...]), the
+    interior edges (A1 -> A2 -> ...) are drawn explicitly from the sequence order itself, and the
+    sequence's own LAST stage -- not its entry -- becomes the terminal that jumps to the merge. A
+    length-1 sequence (just the entry) is untouched by this and keeps running the original model:
+    the rest of that branch extends along the spine, with a backward rework loop's `from_stage`
+    (if any) marking where it really ends.
     """
     stages = _seq(spec.stages)
     stage_names = [st.name for st in stages]
@@ -220,10 +236,9 @@ def _forward_next_stages(spec: AppSpecLike) -> dict[str, str | None]:
     # A branch ENTERS at its first stage (P1); the rest of the sequence runs forward on the spine,
     # so only the entry is a fork target here — never a mid-branch stage.
     entries: set[str] = set()
-    for rp in routing:
-        for targets in dict(rp.route_per_option).values():
-            if targets and targets[0] in idx:
-                entries.add(targets[0])
+    for targets in _route_sequences(routing):
+        if targets and targets[0] in idx:
+            entries.add(targets[0])
 
     # owner[name] = the most recent entry at-or-before it; None before the first branch.
     owner: dict[str, str | None] = {}
@@ -233,9 +248,31 @@ def _forward_next_stages(spec: AppSpecLike) -> dict[str, str | None]:
             last_entry = name
         owner[name] = last_entry
 
-    # terminal per entry, defaulting to the entry itself; a backward loop's from_stage overrides
-    # the terminal of the entry that owns it.
+    # intra_next[s_i] = s_{i+1} for a MULTI-stage route sequence (len(seq) >= 2, on-spine stages
+    # only) -- the explicit forward edge WITHIN a branch (e.g. A1 -> A2), plus that sequence's own
+    # explicit terminal (its LAST on-spine stage, not its entry). A length-1 sequence is untouched
+    # here -- it stays on the original entry-only/spine-extension model above. This is what fixes
+    # S1's bug: without it, A1 (an interior stage now correctly NOT a fork target past the first)
+    # fell through to the plain spine-next branch below and pointed at the merge too early, while
+    # A2 fell through the SAME way and pointed at the next SPINE stage -- a sibling branch's own
+    # stage.
+    intra_next: dict[str, str] = {}
+    explicit_terminal: dict[str, str] = {}
+    for targets in _route_sequences(routing):
+        seq = [t for t in targets if t in idx]
+        if len(seq) < 2:
+            continue
+        for a, b in pairwise(seq):
+            intra_next[a] = b
+        explicit_terminal[seq[0]] = seq[-1]
+
+    # terminal per entry, defaulting to the entry itself, overridden by a multi-stage sequence's
+    # own explicit terminal (applied BEFORE the loop-override pass below, so a genuine backward
+    # rework loop inside a branch can still win over this default -- S3 territory, no loop-in-
+    # branch fixture exercises it yet, but the ordering is what keeps that future case correct);
+    # a backward loop's from_stage otherwise overrides the terminal of the entry that owns it.
     terminal: dict[str, str] = {e: e for e in entries}
+    terminal.update(explicit_terminal)
     for lp in loops:
         fi, ti = idx.get(lp.from_stage), idx.get(lp.to_stage)
         if fi is None or ti is None or ti >= fi:
@@ -263,6 +300,8 @@ def _forward_next_stages(spec: AppSpecLike) -> dict[str, str | None]:
             next_of[name] = None
         elif name in routing_at_stages:
             next_of[name] = None  # the fork's outgoing is its diamond, not a spine edge
+        elif name in intra_next:
+            next_of[name] = intra_next[name]  # explicit multi-stage branch edge (s_i -> s_i+1)
         elif name in terminal_set:
             next_of[name] = merge  # branch terminal jumps to the merge (or ends)
         else:

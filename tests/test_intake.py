@@ -913,6 +913,79 @@ def test_build_workflow_carries_stage_descriptions() -> None:
     assert intake["entry_criteria"] and intake["exit_criteria"]
 
 
+# ---- S1 (#32): one decision split compiles to a Parallel gateway with its branches ------------
+
+def _workflow_op(spec: AppSpec) -> Op:
+    return next(op for op in compile_spec(spec).ops if op.kind == "build_workflow")
+
+
+def test_one_split_compiles_to_a_parallel_with_its_branches() -> None:
+    """S1 (#32) AC1: the single DecisionPoint in _full_spec (Diagnose -> Yes:Repair / No:Return)
+    is lifted into a Parallel gateway whose branches ARE the option route sequences, and the
+    branch stages are removed from the linear spine. Still ONE build_workflow op (the whole
+    ProcessDef), now carrying the parallel structure kfforge.graph.build_workflow consumes."""
+    op = _workflow_op(_full_spec())
+    # branch stages lifted out of the linear spine; the fork stem and merge stay linear
+    assert op.args["steps"] == ("Intake", "Diagnose", "Quality Check")
+    parallel = op.args["parallel"]
+    assert parallel is not None
+    assert parallel["name"] == "Repairable"            # the deciding field
+    assert parallel["after"] == 1                       # inserted right after "Diagnose"
+    assert parallel["branches"] == (
+        {"name": "Yes", "stages": ("Repair",)},
+        {"name": "No", "stages": ("Return to Customer",)},
+    )
+
+
+def test_split_branch_may_be_a_multi_stage_sequence() -> None:
+    """A branch is an ORDERED SEQUENCE of stages (P1 #30): the whole sequence becomes ONE
+    Parallel branch, in order, every stage lifted out of the linear spine."""
+    spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
+        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
+                      route_per_option=(("Yes", ("Repair", "Quality Check")),
+                                        ("No", ("Return to Customer",)))),
+    )))
+    parallel = _workflow_op(spec).args["parallel"]
+    assert parallel["branches"][0] == {"name": "Yes", "stages": ("Repair", "Quality Check")}
+    # both branch's stages are gone from the linear spine; only stem + prefix remain
+    assert _workflow_op(spec).args["steps"] == ("Intake", "Diagnose")
+
+
+def test_branch_order_follows_declared_options_not_route_map_order() -> None:
+    """Branch order is the DECIDING FIELD's declared option order, so it lines up with the diagram
+    (which iterates `options`) and with S4's per-branch conditions — not whatever order
+    route_per_option's pairs happen to be written in."""
+    spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
+        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
+                      # route pairs written No-first on purpose
+                      route_per_option=(("No", ("Return to Customer",)), ("Yes", ("Repair",)))),
+    )))
+    names = [b["name"] for b in _workflow_op(spec).args["parallel"]["branches"]]
+    assert names == ["Yes", "No"]
+
+
+def test_linear_spec_has_no_parallel() -> None:
+    """S1 (#32) AC3: a spec with no decision split is unaffected — no Parallel, steps are simply
+    every stage in order."""
+    op = _workflow_op(_linear_spec())
+    assert op.args["parallel"] is None
+    assert op.args["steps"] == tuple(s.name for s in _linear_spec().stages.stages)
+
+
+def test_several_splits_refused_pending_s2() -> None:
+    """No silent downgrade (CLAUDE.md D6): with routing now consumed, a spec with more than one
+    decision split must refuse loudly rather than build only the first. Several sequential splits
+    is the 'sequential-splits' coverage row, pending #33 (S2)."""
+    spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
+        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
+                      route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
+        DecisionPoint(at_stage="Quality Check", field_name="Repairable", options=("Yes", "No"),
+                      route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
+    )))
+    with pytest.raises(ValueError, match="#33"):
+        compile_spec(spec)
+
+
 def test_build_page_carries_aggregated_kpis_and_actions() -> None:
     plan = compile_spec(_full_spec())
     build_ops = {op.args["name"]: op for op in plan.ops if op.kind == "build_page"}

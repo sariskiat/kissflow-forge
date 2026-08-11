@@ -483,6 +483,38 @@ def spec_with_tiered_branches() -> AppSpec:
     )
 
 
+def spec_with_multistage_branches() -> AppSpec:
+    """S1 (#32): a split ("Route") whose two branches are ORDERED STAGE SEQUENCES of different
+    lengths -- branch A = [A1, A2] (2 stages), branch B = [B1] (1 stage) -- merging at "Wrap".
+    Pins the fix for the live-verified bug: `_forward_next_stages` used to treat every branch as
+    a single entry stage and let interior branch stages fall through to the next SPINE stage, so
+    A1 -> Wrap (skipping A2) and A2 -> B1 (spilling into the sibling branch) instead of the
+    truthful A1 -> A2 -> Wrap and B1 -> Wrap. Branch B stays length-1 specifically so this
+    fixture also proves the existing length-1 model (spine-extension via `route_seq[0]` at the
+    fork, terminal-by-loop-override elsewhere) is untouched by the new multi-stage handling."""
+    stages = Stages(stages=(
+        Stage("Intake", "Requester", "Open the request."),
+        Stage("Route", "Lead", "Pick a path."),
+        Stage("A1", "Analyst", "First step of branch A."),
+        Stage("A2", "Analyst", "Second step of branch A."),
+        Stage("B1", "Analyst", "Only step of branch B."),
+        Stage("Wrap", "Lead", "Close out, both branches land here."),
+    ))
+    routing = Routing(points=(
+        RoutingPoint(at_stage="Route", field_name="Choice", options=("A", "B"),
+                     route_per_option=(("A", ("A1", "A2")), ("B", ("B1",)))),
+    ))
+    empty_dm = DataModel(fields=(), tables=())
+    empty_md = MasterData(lists=())
+    empty_personas = Personas(views=())
+    return AppSpec(
+        app_name="Multistage Branch Test", problem_goal=_empty_problem_goal(), stages=stages,
+        routing=routing, rework_loops=ReworkLoops(loops=()), data_model=empty_dm,
+        master_data=empty_md, visibility=VisibilityMatrix(entries=()), personas=empty_personas,
+        test_cases=TestCases(cases=()),
+    )
+
+
 def spec_with_forward_loop() -> AppSpec:
     """A "loop" whose to_stage comes AFTER its from_stage in the spine -- not a genuine rework
     loop by kfforge.intake.schema.LoopSpec's own contract. Proves this package says so rather
@@ -823,6 +855,77 @@ class TestFlowDiagramBranchMerge:
         assert (self._vertex_id(root, "Self Service"), summary) in pairs
         assert (self._vertex_id(root, "Light Confirm"), summary) in pairs
         assert (self._vertex_id(root, "Full Confirm"), summary) in pairs
+
+
+class TestFlowDiagramMultiStageBranchSequences:
+    """S1 (#32): a route sequence of >=2 stages must draw its own interior stages truthfully --
+    s0 -> s1 -> ... -> sk explicit intra-branch edges, sk (the LAST stage) -> merge, and no
+    interior stage may spill into a sibling branch's stages. The fork edges themselves
+    (diamond -> each branch's first stage) were already correct before this fix; only the
+    forward edges INSIDE a multi-stage branch were wrong."""
+
+    @staticmethod
+    def _first_line(value: str) -> str:
+        return value.split("<br>", 1)[0].strip()
+
+    def _vertex_id(self, root, name: str) -> str:
+        for c in root.findall(".//mxCell"):
+            if c.get("vertex") == "1" and self._first_line(c.get("value") or "") == name:
+                return c.get("id")
+        raise AssertionError(f"no vertex named {name!r}")
+
+    def _edge_pairs(self, root) -> set[tuple[str, str]]:
+        return {(c.get("source"), c.get("target")) for c in root.findall(".//mxCell")
+                if c.get("edge") == "1"}
+
+    def test_intra_branch_edge_follows_the_sequence_order(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
+        pairs = self._edge_pairs(root)
+        a1, a2 = self._vertex_id(root, "A1"), self._vertex_id(root, "A2")
+        assert (a1, a2) in pairs, "A1 -> A2 must be drawn explicitly for a multi-stage sequence"
+
+    def test_branch_terminal_is_the_last_sequence_stage_not_the_entry(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
+        pairs = self._edge_pairs(root)
+        a2, wrap = self._vertex_id(root, "A2"), self._vertex_id(root, "Wrap")
+        assert (a2, wrap) in pairs, "A2 (the branch's LAST stage) must be the one that jumps to the merge"
+
+    def test_entry_stage_does_not_skip_ahead_to_the_merge(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
+        pairs = self._edge_pairs(root)
+        a1, wrap = self._vertex_id(root, "A1"), self._vertex_id(root, "Wrap")
+        assert (a1, wrap) not in pairs, "A1 is not the branch terminal -- it must not jump to the merge"
+
+    def test_interior_branch_stage_does_not_spill_into_the_sibling_branch(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
+        pairs = self._edge_pairs(root)
+        a2, b1 = self._vertex_id(root, "A2"), self._vertex_id(root, "B1")
+        assert (a2, b1) not in pairs, "A2 must not spill forward into sibling branch B's stage B1"
+
+    def test_single_stage_branch_still_reaches_the_merge_directly(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
+        pairs = self._edge_pairs(root)
+        b1, wrap = self._vertex_id(root, "B1"), self._vertex_id(root, "Wrap")
+        assert (b1, wrap) in pairs
+
+    def test_fork_edges_land_on_each_branchs_first_stage(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
+        spec = spec_with_multistage_branches()
+        diamond = next(c for c in root.findall(".//mxCell")
+                        if c.get("vertex") == "1" and "rhombus" in (c.get("style") or ""))
+        a1, b1 = self._vertex_id(root, "A1"), self._vertex_id(root, "B1")
+        # the fork edge from the diamond carries the option label ("A"/"B")
+        fork_edges = {(c.get("source"), c.get("target"), c.get("value") or "")
+                      for c in root.findall(".//mxCell") if c.get("edge") == "1"}
+        assert (diamond.get("id"), a1, "A") in fork_edges
+        assert (diamond.get("id"), b1, "B") in fork_edges
+        assert spec.routing.points[0].options == ("A", "B")  # sanity: fixture matches assumption
+
+    def test_a2_is_not_flagged_unreachable(self):
+        root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
+        a2 = next(c for c in root.findall(".//mxCell")
+                  if c.get("vertex") == "1" and self._first_line(c.get("value") or "") == "A2")
+        assert "unreachable" not in (a2.get("value") or "").lower()
 
 
 class TestSchemaDiagram:

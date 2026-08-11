@@ -15,6 +15,13 @@ import re
 import pytest
 
 from kfforge.coverage import ROWS, Bucket, CoverageRow, get
+from kfforge.intake.compile import compile_spec
+
+# Reused across suites: the one fully-populated synthetic AppSpec that carries a real decision
+# split (Diagnose -> Yes:Repair / No:Return). Imported by bare module name — pytest's default
+# prepend import mode puts tests/ on sys.path (no tests/__init__.py), and _full_spec is a pure
+# factory with no import-time side effects.
+from test_intake import _full_spec
 
 TICKET_RE = re.compile(r"^#\d+$")
 KEY_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -134,3 +141,30 @@ def test_get_returns_row_and_rejects_unknown_key() -> None:
         assert get(r.key) is r
     with pytest.raises(KeyError):
         get("no-such-shape")
+
+
+# ---- S1 (#32): the "one split" row is WIRED — not aspirational --------------------------------
+# The coverage table's claim that a shape builds must be backed by real code, or the table drifts
+# into fiction (spec #29 D13/D14: builder and contract read the same source). B1 classified
+# `one-split` as CAPTURED_LIVE; S1 is the autonomous-compiler path that makes that claim true.
+
+def test_one_split_row_is_wired_not_pending() -> None:
+    """The `one-split` row is CAPTURED_LIVE with no pending ticket — the shape is built, not
+    promised. (A pending row would carry a ticket; the integrity tests above pin that a
+    captured-live row carries none.)"""
+    row = get("one-split")
+    assert row.bucket is Bucket.CAPTURED_LIVE
+    assert row.ticket is None
+    assert not row.pending
+
+
+def test_one_split_row_is_wired_to_a_real_parallel_build() -> None:
+    """The enforcement behind AC4: compiling a spec with one decision split actually emits a
+    Parallel gateway carrying that split's branches. If the compiler ever stopped building the
+    `one-split` shape, this fails — so the row can never claim `wired` while the code regressed."""
+    assert get("one-split").captured  # the row asserts the shape builds...
+    plan = compile_spec(_full_spec())  # ...and the compiler really builds it
+    workflow = next(op for op in plan.ops if op.kind == "build_workflow")
+    parallel = workflow.args["parallel"]
+    assert parallel is not None, "one-split spec must compile to a Parallel gateway"
+    assert len(parallel["branches"]) == 2  # Yes -> Repair, No -> Return to Customer
