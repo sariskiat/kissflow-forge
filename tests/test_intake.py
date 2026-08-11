@@ -20,6 +20,7 @@ from kfforge.intake.schema import (
     START_STAGE,
     AppSpec,
     CaseWalk,
+    ClickActionKind,
     ComputedReq,
     DataModel,
     DecisionPoint,
@@ -28,9 +29,11 @@ from kfforge.intake.schema import (
     ListSpec,
     LoopSpec,
     MasterData,
+    OnClickAction,
     PageIntent,
     Personas,
     PersonaView,
+    PopupIntent,
     ProblemGoal,
     ReworkLoops,
     Roles,
@@ -1437,6 +1440,123 @@ def test_build_page_widget_dedup_by_slug_and_config() -> None:
     # must appear exactly once, not duplicated by the aggregation
     metrics = [w for w in dash.args["widgets"] if w["slug"] == "metrics"]
     assert len(metrics) == 1
+
+
+# ---- #40 T2: build_page carries page BEHAVIOR (popups + on-click), governed and refusing --------
+# #39 T1 gave PageIntent the popups/on_click vocabulary; compile ignored it. #40 wires it into the
+# governed build_page op, aggregated across every persona view (no silent drop, same as widgets),
+# refuses any behavior shape it can't build, and walks popup-hosted widgets through the same
+# widget cross-checks.
+
+def _dashboard_with_behavior() -> AppSpec:
+    """`_full_spec()` with the two roles that share 'Manager Dashboard' each declaring their OWN
+    popup + on-click wiring — so aggregation across roles (not just the first) is exercised. Both
+    actions used (`reassign job`, `notify customer`) are ones their own role already declares."""
+    full = _full_spec()
+    sm_view = full.personas.views[0]           # Service Manager, declares "reassign job"
+    sm_page = dataclasses.replace(
+        sm_view.pages[0],
+        popups=(PopupIntent("Job Detail", (WidgetIntent("general/label"),)),),
+        on_click=(OnClickAction("reassign job", ClickActionKind.OPEN_POPUP,
+                                target_popup="Job Detail"),),
+    )
+    sm2 = dataclasses.replace(sm_view, pages=(sm_page,))
+    fd_view = full.personas.views[2]           # Front Desk, same page name, declares "notify customer"
+    fd_page = dataclasses.replace(
+        fd_view.pages[0],
+        popups=(PopupIntent("Unit Detail", (WidgetIntent("general/label"),)),),
+        on_click=(OnClickAction("notify customer", ClickActionKind.JS_ACTION,
+                                script="kf.doThing()"),),
+    )
+    fd2 = dataclasses.replace(fd_view, pages=(fd_page,))
+    return dataclasses.replace(
+        full, personas=Personas(views=(sm2, full.personas.views[1], fd2)))
+
+
+def test_build_page_carries_popups_and_on_click_aggregated_across_roles() -> None:
+    plan = compile_spec(_dashboard_with_behavior())
+    dash = next(op for op in plan.ops
+               if op.kind == "build_page" and op.args["name"] == "Manager Dashboard")
+    # both roles' popups survive aggregation, neither silently dropped for sharing the page name
+    assert {p["name"] for p in dash.args["popups"]} == {"Job Detail", "Unit Detail"}
+    events = {(e["action"], e["kind"], e["target_popup"]) for e in dash.args["on_click"]}
+    assert ("reassign job", "OpenPopup", "Job Detail") in events
+    assert ("notify customer", "JSAction", None) in events
+
+
+def test_build_page_no_behavior_carries_empty_popups_and_on_click() -> None:
+    # a plain content-only page still emits the keys (empty), never omits them
+    plan = compile_spec(_full_spec())
+    jobs = next(op for op in plan.ops
+               if op.kind == "build_page" and op.args["name"] == "My Jobs")
+    assert jobs.args["popups"] == ()
+    assert jobs.args["on_click"] == ()
+
+
+def test_check_unknown_widget_slug_inside_popup_raises() -> None:
+    """AC4: an unknown-slug widget HIDDEN inside a popup is refused, not escaped."""
+    full = _full_spec()
+    v = full.personas.views[0]
+    p = dataclasses.replace(v.pages[0],
+                            popups=(PopupIntent("Detail", (WidgetIntent("not/a/real/slug"),)),))
+    bad = dataclasses.replace(
+        full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
+    with pytest.raises(ValueError, match="not/a/real/slug"):
+        compile_spec(bad)
+
+
+def test_check_api_impossible_widget_inside_popup_raises_naming_row() -> None:
+    """AC3/AC4: an API-impossible widget inside a popup is refused naming its coverage row — the
+    popup-opening action can't build, so it's refused, never downgraded to a static button (D6)."""
+    full = _full_spec()
+    v = full.personas.views[0]
+    p = dataclasses.replace(v.pages[0],
+                            popups=(PopupIntent("Detail", (WidgetIntent("general/rich_text"),)),))
+    bad = dataclasses.replace(
+        full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
+    with pytest.raises(ValueError, match="rich-text-content"):
+        compile_spec(bad)
+
+
+def test_check_on_click_dangling_target_popup_raises() -> None:
+    """An OpenPopup naming a popup that doesn't exist on the page — a build that would open nothing."""
+    full = _full_spec()
+    v = full.personas.views[0]
+    p = dataclasses.replace(v.pages[0],
+                            on_click=(OnClickAction("reassign job", ClickActionKind.OPEN_POPUP,
+                                                    target_popup="No Such Popup"),))
+    bad = dataclasses.replace(
+        full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
+    with pytest.raises(ValueError, match="No Such Popup"):
+        compile_spec(bad)
+
+
+def test_check_on_click_both_arms_set_raises() -> None:
+    """The exactly-one-arm contract #39 deferred to T2: OpenPopup carrying a script too is refused."""
+    full = _full_spec()
+    v = full.personas.views[0]
+    p = dataclasses.replace(
+        v.pages[0],
+        popups=(PopupIntent("Job Detail", (WidgetIntent("general/label"),)),),
+        on_click=(OnClickAction("reassign job", ClickActionKind.OPEN_POPUP,
+                                target_popup="Job Detail", script="kf.x()"),))
+    bad = dataclasses.replace(
+        full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
+    with pytest.raises(ValueError, match="exactly one arm"):
+        compile_spec(bad)
+
+
+def test_check_on_click_unknown_action_raises() -> None:
+    """`action` must name one the owning role actually declares (#39 gap (c))."""
+    full = _full_spec()
+    v = full.personas.views[0]
+    p = dataclasses.replace(v.pages[0],
+                            on_click=(OnClickAction("ghost action", ClickActionKind.JS_ACTION,
+                                                    script="kf.x()"),))
+    bad = dataclasses.replace(
+        full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
+    with pytest.raises(ValueError, match="ghost action"):
+        compile_spec(bad)
 
 
 # ---- F15: the loop-gate-type message shows the plain wire value, not the raw enum repr ---------

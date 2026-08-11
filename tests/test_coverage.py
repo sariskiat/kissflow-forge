@@ -15,6 +15,12 @@ import re
 
 import pytest
 
+# Reused across suites: the one fully-populated synthetic AppSpec that carries a real decision
+# split (Diagnose -> Yes:Repair / No:Return). Imported by bare module name — pytest's default
+# prepend import mode puts tests/ on sys.path (no tests/__init__.py), and _full_spec is a pure
+# factory with no import-time side effects.
+from test_intake import _branch_local_loop_spec, _full_spec
+
 from kfforge.coverage import ROWS, Bucket, CoverageRow, get
 from kfforge.intake.compile import compile_spec
 from kfforge.intake.schema import (
@@ -30,6 +36,7 @@ from kfforge.intake.schema import (
     PageIntent,
     Personas,
     PersonaView,
+    PopupIntent,
     ProblemGoal,
     ReworkLoops,
     Roles,
@@ -45,12 +52,6 @@ from kfforge.intake.schema import (
     WidgetIntent,
 )
 from kfforge.types import FieldType, Visibility
-
-# Reused across suites: the one fully-populated synthetic AppSpec that carries a real decision
-# split (Diagnose -> Yes:Repair / No:Return). Imported by bare module name — pytest's default
-# prepend import mode puts tests/ on sys.path (no tests/__init__.py), and _full_spec is a pure
-# factory with no import-time side effects.
-from test_intake import _branch_local_loop_spec, _full_spec
 
 TICKET_RE = re.compile(r"^#\d+$")
 KEY_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -603,3 +604,41 @@ def test_chart_legend_points_at_report_widget_ticket() -> None:
     row = get("chart-legend")
     assert row.bucket is Bucket.REFUSES_LOUDLY
     assert row.ticket == "#23"
+
+
+# ---- #40 T2: refuses-loudly PAGE rows now expressible via popup-hosted widgets are WIRED --------
+# #39 gave a page BEHAVIOR (popups + on_click); #40 governs it at compile. The refuses-loudly page
+# rows a spec can NEWLY express are the API-impossible widgets hidden inside a popup — the same
+# report-creation / rich-text-content / custom-component rows B2 (#36) wired for a top-level widget,
+# now reachable one level deeper. This extends B2's "every refuse-row is wired to a real refusal"
+# assertion to the newly-expressible popup path (AC6): a popup-hosted API-impossible widget is
+# refused at compile naming its coverage row, never escaping just because it sits in a popup.
+
+def _spec_with_popup_widget(widget: WidgetIntent) -> AppSpec:
+    """`_full_spec()` with `widget` hosted INSIDE a popup on its first page — the popup path B2's
+    `_spec_with_widget` (a top-level widget) never exercised."""
+    full = _full_spec()
+    view = full.personas.views[0]
+    page = view.pages[0]
+    new_page = dataclasses.replace(page, popups=(PopupIntent("Detail", (widget,)),))
+    new_view = dataclasses.replace(view, pages=(new_page,) + view.pages[1:])
+    return dataclasses.replace(
+        full, personas=Personas(views=(new_view,) + full.personas.views[1:]))
+
+
+def test_api_impossible_widget_inside_popup_is_wired_to_a_real_refusal() -> None:
+    """AC6: each API-impossible row is refused naming itself when the widget is popup-hosted, not
+    only top-level — the widget cross-check walks popup widgets too (#40 AC4). `report/chart` config
+    is deliberately VALID so the refusal fires on the slug, not a missing-config error."""
+    cases = {
+        "rich-text-content": WidgetIntent("general/rich_text"),
+        "custom-component": WidgetIntent("custom"),
+        "report-creation": WidgetIntent(
+            "report/chart",
+            config=(("flow_type", "process"), ("flow_id", "RepairJobs"), ("report_id", "R1")),
+        ),
+    }
+    for row_key, widget in cases.items():
+        with pytest.raises(ValueError, match=row_key):
+            compile_spec(_spec_with_popup_widget(widget))
+        assert get(row_key).bucket is Bucket.REFUSES_LOUDLY

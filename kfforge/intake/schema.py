@@ -101,16 +101,13 @@ scoped, none is silently pretended away:
   compiles clean and fails at publish time, not here.
 - The required-field/visibility check covers `data_model.fields` only. A required TABLE COLUMN in
   a table hidden at its own stage compiles clean — same fatal class, narrower reach.
-- Page BEHAVIOR (`PageIntent.popups`/`.on_click`, #39 T1) is pure vocabulary today — nothing
-  validates it yet, matching this file's "dataclasses don't enforce their own hints" convention.
-  Three checks are owed to #39 T2, the ticket that actually compiles behavior into `EventMapping`
-  nodes: (a) an `OnClickAction`'s exactly-one-arm contract — `target_popup` set iff
-  `kind is OPEN_POPUP`, `script` set iff `JS_ACTION` — is unenforced, so both-set or both-`None`
-  constructs clean; (b) `OnClickAction.target_popup` is never cross-checked against a real
-  `PopupIntent.name` on the same page (an OpenPopup arm can name a popup that doesn't exist); and
-  (c) `OnClickAction.action` is never cross-checked against the owning `PersonaView.actions`. All
-  three serialize and `compile_spec` fine at T1 and would only surface when T2 tries to build the
-  node — logged here, per this file's own rule, rather than discovered there.
+- Page BEHAVIOR (`PageIntent.popups`/`.on_click`, #39 T1) is pure vocabulary in THIS file — the
+  dataclasses still don't enforce their own hints. But the three referential checks #39 owed to T2
+  are now enforced at COMPILE (#40, `compile._check_on_click`): (a) an `OnClickAction`'s exactly-
+  one-arm contract (`target_popup` iff `OPEN_POPUP`, `script` iff `JS_ACTION`); (b) an OpenPopup
+  arm's `target_popup` must name a real `PopupIntent` on the same page; and (c) `action` must be one
+  the owning `PersonaView` declares. A malformed wiring compiles-refuses now, no longer surfacing
+  only when a later build tries the node.
 """
 from __future__ import annotations
 

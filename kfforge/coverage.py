@@ -193,10 +193,11 @@ ROWS: tuple[CoverageRow, ...] = (
     CoverageRow("kpi-tile-static", "KPI tile as a static label pair (no value slot)", Bucket.CAPTURED_LIVE),
 
     # ── buildable: engine builds it offline, not yet captured rendering live; pending #16 ─────────
-    # pages.add_popup + pages.add_event_mapping build both shapes offline, and #22 wired the event
-    # step into the governed compile path (a button that opens a popup). No live render/open capture
-    # exists yet, so — like sequential-splits — they wait on #16 (the live built-app-vs-input
-    # comparator), staying BUILDABLE, not captured-live.
+    # pages.add_popup + pages.add_event_mapping build both shapes offline; #22 wired them into the
+    # UNGOVERNED live surface (pages_live), and #40 T2 wired them into the GOVERNED compile path (the
+    # build_page op carries popups + on-click, refusing any popup-hosted shape it can't build). No
+    # live render/open capture exists yet, so — like sequential-splits — they wait on #16 (the live
+    # built-app-vs-input comparator), staying BUILDABLE, not captured-live.
     CoverageRow(
         "page-popup", "a popup subtree opened by a button",
         Bucket.BUILDABLE, ticket="#16",

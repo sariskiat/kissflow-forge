@@ -363,31 +363,36 @@ def test_page_behavior_popup_and_open_popup_action_round_trips() -> None:
     assert rt_page.on_click[1].script and rt_page.on_click[1].target_popup is None
 
 
-def test_page_behavior_spec_still_compiles_no_regression() -> None:
-    """#39 acceptance: a spec carrying popups + on-click wiring still `compile_spec`s — behavior is
-    IGNORED by compile at this stage (T2 wires it), so it must not break op derivation either."""
+def test_page_behavior_spec_compiles_and_is_now_governed() -> None:
+    """#39 gave the vocabulary; #40 T2 governs it — a spec carrying popups + on-click wiring now
+    compiles the behavior INTO the build_page op (no longer ignored), provided the wiring is legal
+    (the on-click action is one the owning role declares, its OpenPopup targets a real popup)."""
     from kfforge.intake.compile import compile_spec
     from kfforge.intake.schema import (
         ClickActionKind,
         OnClickAction,
-        PageIntent,
-        PersonaView,
         PopupIntent,
         WidgetIntent,
     )
 
     base = _full_spec()
-    v0 = base.personas.views[0]
+    v0 = base.personas.views[0]  # Service Manager — declares "reassign job"
     page = dataclasses.replace(
         v0.pages[0],
         popups=(PopupIntent(name="Detail", widgets=(WidgetIntent("general/label"),)),),
-        on_click=(OnClickAction("Show detail", ClickActionKind.OPEN_POPUP, target_popup="Detail"),),
+        on_click=(OnClickAction("reassign job", ClickActionKind.OPEN_POPUP, target_popup="Detail"),),
     )
     view = dataclasses.replace(v0, pages=(page,) + v0.pages[1:])
     spec = dataclasses.replace(
         base, personas=dataclasses.replace(base.personas, views=(view,) + base.personas.views[1:]))
     plan = compile_spec(spec)
-    assert plan.ops  # compiled to a real plan, behavior fields silently ignored
+    build = next(op for op in plan.ops
+                 if op.kind == "build_page" and op.args["name"] == page.name)
+    assert build.args["popups"] == ({"name": "Detail",
+                                     "widgets": ({"slug": "general/label", "config": {},
+                                                  "row_fields": ()},)},)
+    assert build.args["on_click"] == ({"action": "reassign job", "kind": "OpenPopup",
+                                       "target_popup": "Detail", "script": None},)
 
 
 def test_visibility_entry_role_claim_round_trips() -> None:

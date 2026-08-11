@@ -33,9 +33,12 @@ from ..types import FieldType, Visibility
 from .schema import (
     START_STAGE,
     AppSpec,
+    ClickActionKind,
     EventTrigger,
     FieldReq,
+    OnClickAction,
     PageIntent,
+    PopupIntent,
     TableReq,
     WidgetIntent,
 )
@@ -652,20 +655,32 @@ def _api_impossible_row(slug: str) -> str | None:
     return None
 
 
+def _page_widgets(page: PageIntent) -> Iterable[tuple[WidgetIntent, str]]:
+    """Every widget on a page — its top-level widgets AND every popup-hosted widget — each with a
+    human location string for a refusal message. #40 AC4: popup widgets are governed identically to
+    top-level ones, so an API-impossible or unknown-slug widget HIDDEN inside a popup is refused
+    naming its row, never escaping the cross-checks just because it sits one level deeper."""
+    for w in page.widgets:
+        yield w, f"page {page.name!r}"
+    for popup in page.popups:
+        for w in popup.widgets:
+            yield w, f"popup {popup.name!r} on page {page.name!r}"
+
+
 def _check_no_api_impossible_widgets(spec: AppSpec) -> None:
     """B2 (#36): a page widget for an API-impossible capability (rich-text render, custom component,
     report creation) is refused at compile, naming its coverage row (ADR-0004). Runs BEFORE
     `_check_widgets` so the refusal fires on the impossible SLUG itself rather than surfacing as a
-    missing-config error for the same widget."""
+    missing-config error for the same widget. #40: walks popup-hosted widgets too (`_page_widgets`)."""
     for view in spec.personas.views:
         for page in view.pages:
-            for w in page.widgets:
+            for w, where in _page_widgets(page):
                 row_key = _api_impossible_row(w.slug)
                 if row_key is None:
                     continue
                 row = coverage.get(row_key)
                 raise ValueError(
-                    f"page {page.name!r} widget {w.slug!r} is API-impossible (coverage row "
+                    f"{where} widget {w.slug!r} is API-impossible (coverage row "
                     f"{row.key!r}: {row.reason}) — refused at compile per ADR-0004, never built "
                     f"best-effort."
                 )
@@ -676,13 +691,13 @@ def _check_widgets(spec: AppSpec) -> None:
     `kfforge.pages.WIDGET_REQUIRED_CONFIG` demands for that slug (`add_widget` itself refuses to
     write a node under these exact conditions — this check exists so the SAME refusal happens at
     plan-compile time, naming the page and widget, rather than surfacing deep inside whatever
-    executes the plan)."""
+    executes the plan). #40: walks popup-hosted widgets too (`_page_widgets`)."""
     for view in spec.personas.views:
         for page in view.pages:
-            for w in page.widgets:
+            for w, where in _page_widgets(page):
                 if w.slug not in WIDGET_SLUGS:
                     raise ValueError(
-                        f"page {page.name!r} widget slug {w.slug!r} is not a known widget "
+                        f"{where} widget slug {w.slug!r} is not a known widget "
                         f"(kfforge.pages.WIDGET_SLUGS): {sorted(WIDGET_SLUGS)}"
                     )
                 required = WIDGET_REQUIRED_CONFIG.get(w.slug, ())
@@ -691,14 +706,65 @@ def _check_widgets(spec: AppSpec) -> None:
                     if key == "row_fields":
                         if not w.row_fields:
                             raise ValueError(
-                                f"page {page.name!r} widget {w.slug!r} is missing required "
+                                f"{where} widget {w.slug!r} is missing required "
                                 f"row_fields (repeater needs at least one)"
                             )
                         continue
                     if not config.get(key):
                         raise ValueError(
-                            f"page {page.name!r} widget {w.slug!r} is missing required config "
+                            f"{where} widget {w.slug!r} is missing required config "
                             f"{key!r} (kfforge.pages.WIDGET_REQUIRED_CONFIG)"
+                        )
+
+
+def _check_on_click(spec: AppSpec) -> None:
+    """#40 T2: an `OnClickAction`'s referential integrity — the three gaps #39 (T1) deferred to the
+    ticket that actually compiles behavior into a build op. Each wiring must:
+
+    (a) populate EXACTLY one arm — `target_popup` iff `OPEN_POPUP`, `script` iff `JS_ACTION`;
+    (b) an `OPEN_POPUP` arm must name a real `PopupIntent` on the SAME page; and
+    (c) `action` must be one the owning `PersonaView` actually declares in `actions`.
+
+    Any of the three would otherwise compile a `build_page` op that breaks at build (a dangling
+    popup open, an empty script, an action wired to no button) — the silent-loss class this module
+    exists to refuse. Named against the offending value, same as every sibling check."""
+    for view in spec.personas.views:
+        actions = set(view.actions)
+        for page in view.pages:
+            popup_names = {p.name for p in page.popups}
+            for e in page.on_click:
+                if e.action not in actions:
+                    raise ValueError(
+                        f"page {page.name!r} on-click wires action {e.action!r}, which role "
+                        f"{view.role!r} does not declare in its actions {sorted(actions)}"
+                    )
+                if e.kind is ClickActionKind.OPEN_POPUP:
+                    if e.script is not None:
+                        raise ValueError(
+                            f"page {page.name!r} on-click for {e.action!r} is OpenPopup but also "
+                            f"carries a script — exactly one arm may be set"
+                        )
+                    if e.target_popup is None:
+                        raise ValueError(
+                            f"page {page.name!r} on-click for {e.action!r} is OpenPopup but names "
+                            f"no target_popup"
+                        )
+                    if e.target_popup not in popup_names:
+                        raise ValueError(
+                            f"page {page.name!r} on-click for {e.action!r} opens popup "
+                            f"{e.target_popup!r}, which is not a popup on this page "
+                            f"{sorted(popup_names)}"
+                        )
+                else:  # JS_ACTION
+                    if e.target_popup is not None:
+                        raise ValueError(
+                            f"page {page.name!r} on-click for {e.action!r} is JSAction but also "
+                            f"names a target_popup — exactly one arm may be set"
+                        )
+                    if not e.script:
+                        raise ValueError(
+                            f"page {page.name!r} on-click for {e.action!r} is JSAction but carries "
+                            f"no script"
                         )
 
 
@@ -804,6 +870,7 @@ _CROSS_CHECKS: tuple[Callable[[AppSpec], None], ...] = (
     _check_persona_roles,
     _check_no_api_impossible_widgets,   # B2 (#36) — ADR-0004, before the config check
     _check_widgets,
+    _check_on_click,                    # #40 T2 — on-click referential integrity (the #39 gaps)
     _check_test_cases,
 )
 
@@ -1173,26 +1240,38 @@ def _op_create_page(spec: AppSpec) -> tuple[Op, ...]:
     )
 
 
-def _widget_args(w: Any) -> dict[str, Any]:
+def _widget_args(w: WidgetIntent) -> dict[str, Any]:
     return {"slug": w.slug, "config": dict(w.config), "row_fields": w.row_fields}
 
 
+def _popup_args(p: PopupIntent) -> dict[str, Any]:
+    return {"name": p.name, "widgets": tuple(_widget_args(w) for w in p.widgets)}
+
+
+def _event_args(e: OnClickAction) -> dict[str, Any]:
+    return {"action": e.action, "kind": e.kind.value,
+            "target_popup": e.target_popup, "script": e.script}
+
+
 def _op_build_page(spec: AppSpec) -> tuple[Op, ...]:
-    """`kpis`/`actions`/`widgets` (dimension 10) are ALL aggregated across EVERY persona view
-    that references this page — a shared page has no single "owning" role, so nothing is
-    silently dropped just because two roles both point at it.
+    """`kpis`/`actions`/`widgets` PLUS the page BEHAVIOR half (`popups`/`on_click`, #40 T2) are ALL
+    aggregated across EVERY persona view that references this page — a shared page has no single
+    "owning" role, so nothing is silently dropped just because two roles both point at it (the same
+    no-silent-drop invariant F6 fixed for widgets, now extended to behavior).
 
     F6: widgets used to come from whichever single `PageIntent` `_unique_pages` happened to keep
-    (first role wins), so a SECOND role sharing the page but declaring an extra widget the first
-    role didn't have that widget silently vanish from the plan — directly contradicting this
-    function's own claim that nothing is dropped (which was already true for kpis/actions, just
-    not for widgets). Widgets are deduped by `(slug, config)`: the SAME widget declared under two
-    roles collapses to one write, but two widgets differing in either field are both kept, in
-    first-seen order.
+    (first role wins), so a SECOND role sharing the page but declaring an extra widget had that
+    widget silently vanish from the plan. Widgets are deduped by `(slug, config)`; popups by `name`
+    (a popup's name is its identity — it is what an OpenPopup targets — so same-name popups collapse,
+    matching how pages themselves are deduped by name); on-click events by their full `(action, kind,
+    target_popup, script)` tuple. All kept in first-seen order. `_check_on_click` has already
+    refused a dangling/both-arms/unknown-action event, so this builder only shapes args.
     """
     kpis_by_page: dict[str, set[str]] = {}
     actions_by_page: dict[str, set[str]] = {}
     widgets_by_page: dict[str, dict[tuple[str, tuple[tuple[str, str], ...]], WidgetIntent]] = {}
+    popups_by_page: dict[str, dict[str, PopupIntent]] = {}
+    events_by_page: dict[str, dict[tuple[Any, ...], OnClickAction]] = {}
     page_order: list[str] = []
     for view in spec.personas.views:
         for page in view.pages:
@@ -1203,6 +1282,12 @@ def _op_build_page(spec: AppSpec) -> tuple[Op, ...]:
             bucket = widgets_by_page.setdefault(page.name, {})
             for w in page.widgets:
                 bucket.setdefault((w.slug, w.config), w)
+            popup_bucket = popups_by_page.setdefault(page.name, {})
+            for p in page.popups:
+                popup_bucket.setdefault(p.name, p)
+            event_bucket = events_by_page.setdefault(page.name, {})
+            for e in page.on_click:
+                event_bucket.setdefault((e.action, e.kind, e.target_popup, e.script), e)
     return tuple(
         Op(kind="build_page",
            args={
@@ -1210,8 +1295,11 @@ def _op_build_page(spec: AppSpec) -> tuple[Op, ...]:
                "widgets": tuple(_widget_args(w) for w in widgets_by_page[name].values()),
                "kpis": tuple(sorted(kpis_by_page.get(name, ()))),
                "actions": tuple(sorted(actions_by_page.get(name, ()))),
+               "popups": tuple(_popup_args(p) for p in popups_by_page[name].values()),
+               "on_click": tuple(_event_args(e) for e in events_by_page[name].values()),
            },
-           why=f"container/component graph for {name!r}'s widgets, KPIs, and actions")
+           why=f"container/component graph for {name!r}'s widgets, KPIs, actions, popups, and "
+               f"on-click behavior (a button that opens a popup / runs a script)")
         for name in page_order
     )
 
