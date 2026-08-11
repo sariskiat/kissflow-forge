@@ -13,6 +13,7 @@ from kfforge.pages import (
     _instantiate,
     _keep_subset,
     add_container,
+    add_event_mapping,
     add_popup,
     add_widget,
     load_shape,
@@ -528,6 +529,124 @@ def test_add_popup_content_can_be_added_via_add_widget() -> None:
 
 
 # ---------------------------------------------------------------------------------------------
+# add_event_mapping (#22: without this, a built popup/button has no way to ever open/fire)
+# ---------------------------------------------------------------------------------------------
+
+def test_add_event_mapping_open_popup_tree_complete() -> None:
+    page = new_page_graph("Sample Page")
+    page, popup_id = add_popup(page, name="Detail Popup")
+    page, button_host = add_widget(page, container_id="Container001", widget="general/button",
+                                   config={})
+
+    page, em_id = add_event_mapping(
+        page, container_id=button_host, type="OpenPopup", popup_id=popup_id
+    )
+
+    assert em_id in page[button_host]["Container::EventMapping"]
+    em = page[em_id]
+    assert em["Kind"] == "EventMapping"
+    assert em["Name"] == "on_click"
+    assert em["Type"] == "OpenPopup"
+    assert em["Container"] == button_host
+
+    prop_id = em["EventMapping::Property"][0]
+    prop = page[prop_id]
+    assert prop["Kind"] == "Property"
+    assert prop["Type"] == "Popup"
+    assert prop["Name"] == "popup_params"
+    assert prop["Value"] == popup_id
+    assert prop["EventMapping"] == em_id
+    _assert_backrefs_resolve(page)
+
+
+def test_add_event_mapping_js_action_tree_complete() -> None:
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(page, container_id="Container001", widget="general/button", config={})
+
+    script = 'await kf.app.page.setVariable("chosen", kf.eventParameters.item);'
+    page, em_id = add_event_mapping(page, container_id=host, type="JSAction", script=script)
+
+    assert em_id in page[host]["Container::EventMapping"]
+    em = page[em_id]
+    assert em["Kind"] == "EventMapping"
+    assert em["Name"] == "on_click"
+    assert em["Type"] == "JSAction"
+    assert em["Container"] == host
+
+    prop_id = em["EventMapping::Property"][0]
+    prop = page[prop_id]
+    assert prop["Kind"] == "Property"
+    assert prop["Type"] == "Code"
+    assert prop["Value"] == script
+    assert prop["EventMapping"] == em_id
+    _assert_backrefs_resolve(page)
+
+
+def test_add_event_mapping_custom_name_overrides_default() -> None:
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(page, container_id="Container001", widget="general/button", config={})
+    page, em_id = add_event_mapping(
+        page, container_id=host, type="JSAction", script="void 0;", name="on_change"
+    )
+    assert page[em_id]["Name"] == "on_change"
+
+
+def test_add_event_mapping_unknown_type_raises() -> None:
+    page = new_page_graph("Sample Page")
+    with pytest.raises(ValueError, match="unknown event mapping type"):
+        add_event_mapping(page, container_id="Container001", type="OnHover")  # type: ignore[arg-type]
+
+
+def test_add_event_mapping_open_popup_requires_popup_id() -> None:
+    page = new_page_graph("Sample Page")
+    with pytest.raises(ValueError, match="requires popup_id"):
+        add_event_mapping(page, container_id="Container001", type="OpenPopup")
+
+
+def test_add_event_mapping_js_action_requires_script() -> None:
+    page = new_page_graph("Sample Page")
+    with pytest.raises(ValueError, match="requires script"):
+        add_event_mapping(page, container_id="Container001", type="JSAction")
+
+
+def test_add_event_mapping_script_on_open_popup_raises() -> None:
+    page = new_page_graph("Sample Page")
+    page, popup_id = add_popup(page, name="Detail Popup")
+    with pytest.raises(ValueError, match="only valid for type='JSAction'"):
+        add_event_mapping(page, container_id="Container001", type="OpenPopup",
+                          popup_id=popup_id, script="void 0;")
+
+
+def test_add_event_mapping_popup_id_on_js_action_raises() -> None:
+    page = new_page_graph("Sample Page")
+    page, popup_id = add_popup(page, name="Detail Popup")
+    with pytest.raises(ValueError, match="only valid for type='OpenPopup'"):
+        add_event_mapping(page, container_id="Container001", type="JSAction",
+                          script="void 0;", popup_id=popup_id)
+
+
+def test_add_event_mapping_unknown_container_raises() -> None:
+    page = new_page_graph("Sample Page")
+    with pytest.raises(ValueError, match="no Container node"):
+        add_event_mapping(page, container_id="Container_nope", type="JSAction", script="void 0;")
+
+
+def test_add_event_mapping_unknown_popup_raises() -> None:
+    page = new_page_graph("Sample Page")
+    with pytest.raises(ValueError, match="no Popup node"):
+        add_event_mapping(page, container_id="Container001", type="OpenPopup",
+                          popup_id="Popup_nope")
+
+
+def test_add_event_mapping_does_not_mutate_input() -> None:
+    page = new_page_graph("Sample Page")
+    page, popup_id = add_popup(page, name="Detail Popup")
+    before = set(page)
+    add_event_mapping(page, container_id="Container001", type="OpenPopup", popup_id=popup_id)
+    assert set(page) == before, "add_event_mapping must not mutate its input draft"
+
+
+# ---------------------------------------------------------------------------------------------
 # _instantiate: leak scan now covers Value/Data too, not just structural back-refs. Driven
 # straight off shapes/event_mapping.json's own OpenPopup Property.Value -- a real cross-reference
 # to another node (the popup this click should open), not free-form content, so a caller who
@@ -595,6 +714,8 @@ def test_kitchen_sink_backrefs_resolve_after_a_full_composition() -> None:
     page, popup_id = add_popup(page, name="Detail Popup")
     root_container_id = page[popup_id]["Popup::Container"][0]
     page, _ = add_widget(page, container_id=root_container_id, widget="general/button", config={})
+    page, opener = add_widget(page, container_id="Container001", widget="general/button", config={})
+    page, _ = add_event_mapping(page, container_id=opener, type="OpenPopup", popup_id=popup_id)
     page = set_styles(page, rules={"Banner": {"Container.Background": {"ref": "Color.Info.300"}}})
 
     _assert_backrefs_resolve(page)

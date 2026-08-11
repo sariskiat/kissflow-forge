@@ -27,7 +27,7 @@ import pathlib
 import re
 import secrets
 import string
-from typing import Any
+from typing import Any, Literal
 
 Draft = dict[str, Any]
 
@@ -251,6 +251,12 @@ def _require_container(draft: Draft, container_id: str) -> None:
     node = draft.get(container_id)
     if not isinstance(node, dict) or node.get("Kind") != "Container":
         raise ValueError(f"no Container node {container_id!r} in this page")
+
+
+def _require_popup(draft: Draft, popup_id: str) -> None:
+    node = draft.get(popup_id)
+    if not isinstance(node, dict) or node.get("Kind") != "Popup":
+        raise ValueError(f"no Popup node {popup_id!r} in this page")
 
 
 def _apply_style_props(style_node: dict, props: dict[str, Any]) -> None:
@@ -560,6 +566,88 @@ def add_popup(page: Draft, *, name: str) -> tuple[Draft, str]:
     new.update(nodes)
     new[page_id].setdefault("Page::Popup", []).append(pop_id)
     return new, pop_id
+
+
+EventMappingType = Literal["OpenPopup", "JSAction"]
+
+# The two arms shapes/event_mapping.json actually captures (its own description: "Two real Type
+# values observed"). Each maps to the (EventMapping, Property) Sample-id pair add_event_mapping
+# mints for that arm -- the arm's own Container_SampleNN is deliberately NOT in this pair: it is
+# never minted, only ever `external`-mapped onto the caller's real, already-existing container_id
+# (the same pattern add_container/add_widget use for "Container001"), since an event hooks an
+# EXISTING container, it never brings its own.
+_EVENT_ARM_NODES: dict[str, tuple[str, str]] = {
+    "JSAction": ("EventMapping_Sample01", "Property_Sample01"),
+    "OpenPopup": ("EventMapping_Sample02", "Property_Sample02"),
+}
+_EVENT_ARM_CONTAINER_SAMPLE: dict[str, str] = {
+    "JSAction": "Container_Sample01",
+    "OpenPopup": "Container_Sample02",
+}
+
+
+def add_event_mapping(
+    page: Draft,
+    *,
+    container_id: str,
+    type: EventMappingType,
+    popup_id: str | None = None,
+    script: str | None = None,
+    name: str = "on_click",
+) -> tuple[Draft, str]:
+    """Add an EventMapping (shapes/event_mapping.json) -- an on_click-style hook wiring an
+    EXISTING Container to an action. Pure. This is the piece #22 found missing: without it, a
+    built Popup (add_popup) or Component has no way to ever actually open/fire, no matter how
+    correctly built (see this module's own docstring note on the gap this closes).
+
+    Two arms, matching the shape's own two captured samples:
+      - `type="OpenPopup"` needs `popup_id` (a real Popup id already on this page -- e.g. from
+        add_popup; validated to actually be a Popup node, not just any id, same discipline as
+        `_require_container`) -- the Property's Value is directly that Popup's id, no script
+        involved.
+      - `type="JSAction"` needs `script` (raw JS text, stored verbatim as the Property's Value --
+        this module makes no claim about what the event editor will or won't accept inside it;
+        only the wire shape is proven here, see event_mapping.json's own notes).
+    Passing the OTHER arm's argument (popup_id on a JSAction, script on an OpenPopup), an unknown
+    `type`, or omitting the arm's own required argument all raise ValueError before any node is
+    written -- a shape's own placeholder popup id or demo script left in place is exactly THE
+    RULE's "publishes clean, does nothing live" failure class.
+    """
+    if type not in _EVENT_ARM_NODES:
+        raise ValueError(f"unknown event mapping type {type!r}; known types: {sorted(_EVENT_ARM_NODES)}")
+    if type == "OpenPopup":
+        if script is not None:
+            raise ValueError("script is only valid for type='JSAction', not 'OpenPopup'")
+        if not popup_id:
+            raise ValueError("type='OpenPopup' requires popup_id")
+    else:  # JSAction
+        if popup_id is not None:
+            raise ValueError("popup_id is only valid for type='OpenPopup', not 'JSAction'")
+        if not script:
+            raise ValueError("type='JSAction' requires script")
+
+    new: Draft = copy.deepcopy(page)
+    _require_container(new, container_id)
+    if type == "OpenPopup":
+        _require_popup(new, popup_id)  # type: ignore[arg-type]
+
+    shape = load_shape("event_mapping")
+    em_sample, prop_sample = _EVENT_ARM_NODES[type]
+    subset = _keep_subset(shape["template"], (em_sample, prop_sample))
+    external = {_EVENT_ARM_CONTAINER_SAMPLE[type]: container_id}
+    if type == "OpenPopup":
+        external["Popup_Sample01"] = popup_id  # type: ignore[assignment]
+    nodes, idmap = _instantiate(subset, external=external)
+
+    em_id = idmap[em_sample]
+    prop_id = idmap[prop_sample]
+    nodes[em_id]["Name"] = name
+    if type == "JSAction":
+        nodes[prop_id]["Value"] = script
+
+    new.update(nodes)
+    new[container_id].setdefault("Container::EventMapping", []).append(em_id)
+    return new, em_id
 
 
 def set_styles(page: Draft, *, rules: dict[str, dict[str, Any]]) -> Draft:

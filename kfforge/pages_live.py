@@ -15,7 +15,7 @@ from typing import Any
 
 from .client import Err, KfClient
 from .nav import add_page_menu, point_all_navs_at, sweep_orphans
-from .pages import add_container, add_popup, add_widget, page_summary, set_styles
+from .pages import add_container, add_event_mapping, add_popup, add_widget, page_summary, set_styles
 
 Draft = dict[str, Any]
 _META_VERSION = "_meta_version"
@@ -71,10 +71,11 @@ def create_page_flow(
 
 @dataclass(frozen=True)
 class PageBuildStep:
-    """One page-build op. `kind` is one of "container" | "widget" | "popup" | "style"; `kwargs`
-    are passed straight to the matching kfforge.pages builder
-    (add_container/add_widget/add_popup/set_styles) — see their own docstrings for the accepted
-    keys. A spec dict from a caller (e.g. an MCP tool argument) becomes a list of these."""
+    """One page-build op. `kind` is one of "container" | "widget" | "popup" | "event" | "style";
+    `kwargs` are passed straight to the matching kfforge.pages builder
+    (add_container/add_widget/add_popup/add_event_mapping/set_styles) — see their own docstrings
+    for the accepted keys. A spec dict from a caller (e.g. an MCP tool argument) becomes a list of
+    these."""
     kind: str
     kwargs: dict[str, Any]
 
@@ -144,8 +145,8 @@ def apply_page_build(
     """GET the page draft -> apply every step offline via kfforge.pages's own builders (each
     returns a NEW draft; chained so ids added by an earlier step are addressable by a later one,
     e.g. add a container then add a widget INTO it) -> ONE guarded PUT -> READ-BACK verify every
-    step actually landed (a minted node id for container/widget/popup; the exact prop values for
-    style) -> optional publish, skipped if anything is missing.
+    step actually landed (a minted node id for container/widget/popup/event; the exact prop values
+    for style) -> optional publish, skipped if anything is missing.
 
     Every kfforge.pages builder already fails loud (ValueError) on a placeholder/unbound widget
     config or an unknown container — that rejection surfaces here as an `Err`, offline, before any
@@ -190,6 +191,20 @@ def apply_page_build(
                 label = f"popup:{step.kwargs.get('name')}={pid}"
                 applied.append(label)
                 checks.append((label, lambda rb, nid=pid: nid in rb))
+            elif step.kind == "event":
+                new, eid = add_event_mapping(new, **step.kwargs)
+                # Same "shell vs substance" trap as the widget branch above: the EventMapping node
+                # itself is the shell, the actual payload (the script text, or the target popup
+                # id) lives on a SEPARATE Property node, back-referenced via
+                # EventMapping::Property. Checking eid alone would read "verified" even if a write
+                # dropped that Property and left an inert, payload-less EventMapping behind.
+                prop_id = next((k for k, v in new.items()
+                               if isinstance(v, dict) and v.get("Kind") == "Property"
+                               and v.get("EventMapping") == eid), None)
+                event_ids = (eid, prop_id) if prop_id else (eid,)
+                label = f"event:{step.kwargs.get('type')}={eid}"
+                applied.append(label)
+                checks.append((label, lambda rb, ids=event_ids: all(i in rb for i in ids)))
             elif step.kind == "style":
                 new = set_styles(new, **step.kwargs)
                 rules = step.kwargs.get("rules", {})
@@ -204,7 +219,7 @@ def apply_page_build(
             else:
                 raise ValueError(
                     f"unknown page-build step kind {step.kind!r}; expected one of "
-                    "container/widget/popup/style"
+                    "container/widget/popup/event/style"
                 )
     except ValueError as e:
         return Err("verify", f"offline page build rejected step: {e}")
