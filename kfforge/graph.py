@@ -702,6 +702,7 @@ def add_field_validation(
     operator: str,
     value: str,
     rhs_type: str = "Value",
+    error_message: str | None = None,
 ) -> Draft:
     """Attach a per-field validation rule. Pure. Idempotent on (field_name, operator, value).
 
@@ -709,11 +710,18 @@ def add_field_validation(
     UI-built oracle, CLAUDE.md F7), NOT an Expression/Node AST:
 
         Field --FieldValidation::Criteria--> Criteria{FieldValidation:<fid>, Criteria::Condition:[...]}
-          Condition{Operator, HasArguments:true, Criteria:<cid>, RHSType:"Value", RHSValue:<literal>}
+          Condition{Operator, HasArguments:true, Criteria:<cid>, RHSType:"Value", RHSValue:<literal>,
+                    ErrorMessage:<human-readable failure text>}
 
     One Criteria per field (the builder writes one); each rule is one Condition under it. A second
     rule on the same field appends a Condition to the existing Criteria. `operator` is e.g.
     "CONTAINS" / "MAX_LENGTH"; `value` is the literal (a string); `rhs_type` defaults to "Value".
+
+    `error_message` (shapes/field_validation_criteria.json, live-captured 2026-08-12, #48) is the
+    Condition's own human-readable failure text — the platform writes one on every Condition it
+    creates; omitted here means the key is simply not written (the engine's own additive-Criteria-
+    reuse behavior still differs from the platform's one-Criteria-per-rule pattern — see that
+    shape's notes — but is left unchanged, only the missing key is closed).
     """
     new: Draft = copy.deepcopy(draft)
     model_id = _model_id(new)
@@ -737,9 +745,202 @@ def add_field_validation(
         new[cid] = {"Id": cid, "Kind": "Criteria", "FieldValidation": fid, "Criteria::Condition": []}
         fld["FieldValidation::Criteria"] = [cid]
     cond_id = _new_id("Condition", model_id, len(new[cid].get("Criteria::Condition", [])), field_name)
-    new[cond_id] = {"Id": cond_id, "Kind": "Condition", "Operator": operator, "HasArguments": True,
-                    "Criteria": cid, "RHSType": rhs_type, "RHSValue": value}
+    condition: dict[str, Any] = {"Id": cond_id, "Kind": "Condition", "Operator": operator,
+                                 "HasArguments": True, "Criteria": cid, "RHSType": rhs_type,
+                                 "RHSValue": value}
+    if error_message is not None:
+        condition["ErrorMessage"] = error_message
+    new[cond_id] = condition
     new[cid]["Criteria::Condition"] = (new[cid].get("Criteria::Condition") or []) + [cond_id]
+    return new
+
+
+# Function catalog captured live off the builder's Formula tool (docs/capabilities/config.computed.md,
+# #48): `rand randBetween dateDiff calendarDays currency number if concatenate date dateTime
+# dateFromText dateTimeFromText now initiatedat today isBlank false true not`. Not enforced as a
+# closed set here (a caller may reasonably use a function the sweep never happened to exercise) —
+# kept as a comment, not a validation gate, per this project's "never guess, but don't over-refuse
+# either" balance: refuse a MALFORMED formula shape, not an unfamiliar function name.
+
+
+def _computed_arg_node(
+    new: Draft, model_id: str, expr_id: str, parent_id: str, i: int, name: str, arg: dict[str, Any],
+) -> str:
+    """One leaf/branch Node of a computed-field formula AST. `arg` is `{"field": <name>}`,
+    `{"static": <value>}`, or a nested `{"fn": <name>, "args": [...]}`. Mutates `new` in place;
+    returns the new node's id. Raises ValueError on a field ref that does not resolve."""
+    if "field" in arg:
+        ref = next((v for v in new.values()
+                    if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == arg["field"]),
+                   None)
+        if ref is None:
+            raise ValueError(f"set_field_computed({name!r}): no field named {arg['field']!r} to reference")
+        nid = _new_id("Node", expr_id, i, f"field:{arg['field']}")
+        new[nid] = {"Id": nid, "Kind": "Node", "Type": "Field", "Field": ref["Id"],
+                    "DataType": ref.get("Type", "String"), "Node": parent_id}
+        if nid not in (ref.get("Field::Node") or []):
+            ref.setdefault("Field::Node", []).append(nid)
+        return nid
+    if "fn" in arg:
+        return _computed_fn_node(new, model_id, expr_id, parent_id, i, name, arg)
+    if "static" in arg:
+        value = arg["static"]
+        data_type = arg.get("data_type") or ("Number" if isinstance(value, (int, float)) else "String")
+        nid = _new_id("Node", expr_id, i, f"static:{value}")
+        new[nid] = {"Id": nid, "Kind": "Node", "Type": "Static", "Value": value,
+                    "DataType": data_type, "Node": parent_id}
+        return nid
+    raise ValueError(f"set_field_computed({name!r}): each arg needs one of field/static/fn, got {arg!r}")
+
+
+def _computed_fn_node(
+    new: Draft, model_id: str, expr_id: str, parent_id: str | None, i: int, name: str,
+    formula: dict[str, Any],
+) -> str:
+    fn = formula.get("fn")
+    args = formula.get("args") or []
+    if not isinstance(fn, str) or not fn:
+        raise ValueError(f"set_field_computed({name!r}): formula needs a non-empty 'fn' string")
+    data_type = formula.get("data_type", "String")
+    nid = _new_id("Node", expr_id, i, f"fn:{fn}")
+    child_ids = []
+    node: dict[str, Any] = {"Id": nid, "Kind": "Node", "Type": "Function", "Value": fn,
+                            "DataType": data_type, "Category": data_type}
+    if parent_id is None:
+        node["Expression"] = expr_id      # the ROOT node owns the Expression back-ref
+    else:
+        node["Node"] = parent_id          # a nested function call owns its parent Node back-ref
+    new[nid] = node
+    for j, arg in enumerate(args):
+        child_ids.append(_computed_arg_node(new, model_id, expr_id, nid, j, name, arg))
+    if child_ids:
+        new[nid]["Node::Node"] = child_ids
+    new[nid]["FieldRefCount"] = sum(1 for c in child_ids if new[c].get("Type") == "Field")
+    return nid
+
+
+def _formula_str(arg: dict[str, Any]) -> str:
+    """Best-effort human-readable mirror for ExpressionStr — NEVER evaluated, same "readable
+    mirror only" rule as every other Expression in this codebase."""
+    if "field" in arg:
+        return str(arg["field"])
+    if "static" in arg:
+        return repr(arg["static"])
+    if "fn" in arg:
+        inner = ", ".join(_formula_str(a) for a in (arg.get("args") or []))
+        return f'{arg["fn"]}({inner})'
+    return "?"
+
+
+def set_field_computed(draft: Draft, field_name: str, formula: dict[str, Any]) -> Draft:
+    """Attach a computed-field formula: the FOURTH Expression owner, `Field` (docs/capabilities/
+    config.computed.md, live-captured 2026-08-12, #48) — replaces the old "Kissflow has no
+    formula/computed field type" belief; field events (kfforge.graph.set_field_events) remain a
+    separate, still-valid script-based mechanism. Pure. Idempotent: replaces any existing
+    Field::Expression on the named field (same "delete old, rebuild" idiom as set_field_events).
+
+    `formula` is `{"fn": <function name>, "args": [...], "data_type": <optional, default
+    "String">}` — a small AST, not a raw string. Each entry of `args` is one of:
+    `{"field": <field name>}` (resolved to that field's id — raises if it does not exist),
+    `{"static": <literal>, "data_type": <optional>}`, or a nested `{"fn": ..., "args": [...]}`.
+    The root Function node carries NO `Syntax` key (a prefix call, unlike the infix `=` roots of a
+    branch/goto condition — captured live, see the shape's own note).
+
+    Raises ValueError, draft entirely unmutated on failure (a deep copy is only committed to
+    `draft` at the very end — see below), when `field_name` does not exist, `formula` is
+    malformed, or an arg's `field` reference does not resolve.
+    """
+    new: Draft = copy.deepcopy(draft)
+    model_id = _model_id(new)
+    fld = next((v for v in new.values()
+                if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == field_name), None)
+    if not fld:
+        raise ValueError(f"set_field_computed: field not found: {field_name!r}")
+    fid = fld["Id"]
+
+    for old in fld.get("Field::Expression") or []:
+        old_expr = new.pop(old, None) or {}
+        for root_id in old_expr.get("Expression::Node") or []:
+            stack = [root_id]
+            while stack:
+                nid = stack.pop()
+                node = new.pop(nid, None)
+                if node:
+                    stack.extend(node.get("Node::Node") or [])
+    fld.pop("Field::Expression", None)
+
+    expr_id = _new_id("Expression", fid, 0, field_name)
+    root_id = _computed_fn_node(new, model_id, expr_id, None, 0, field_name, formula)
+    new[expr_id] = {"Id": expr_id, "Kind": "Expression", "Field": fid,
+                    "ExpressionStr": _formula_str(formula), "Expression::Node": [root_id]}
+    fld["Field::Expression"] = [expr_id]
+    return new
+
+
+def set_conditional_visibility(
+    draft: Draft,
+    field_name: str,
+    trigger_field_name: str,
+    operator: str,
+    rhs: str,
+) -> Draft:
+    """Attach form-level conditional visibility: the THIRD Criteria owner family,
+    `ColumnVisibility` (docs/capabilities/config.conditional-visibility.md, live-captured
+    2026-08-12, #48) — distinct from per-step Permission nodes AND from page Container Criteria.
+    Pure. Idempotent: replaces any existing ColumnVisibility::Criteria on the target field.
+
+    The TARGET field's column gets static `IsHidden: true` plus a `ColumnVisibility::Criteria` ->
+    `Criteria{IsOR: false}` -> `Condition{Operator, HasArguments: false, LHSOwnField: <TRIGGER
+    field's column id — not a Field id>, RHSValue: str(rhs)}`. The trigger column gets the
+    bidirectional `LHSOwnField::Condition` back-ref. Raises ValueError, draft entirely unmutated,
+    when either field name does not exist.
+    """
+    new: Draft = copy.deepcopy(draft)
+    model_id = _model_id(new)
+
+    target = next((v for v in new.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == field_name),
+                  None)
+    if not target:
+        raise ValueError(f"set_conditional_visibility: field not found: {field_name!r}")
+    trigger = next((v for v in new.values()
+                    if isinstance(v, dict) and v.get("Kind") == "Field"
+                    and v.get("Name") == trigger_field_name), None)
+    if not trigger:
+        raise ValueError(f"set_conditional_visibility: trigger field not found: {trigger_field_name!r}")
+
+    target_col_id = target.get("Column")
+    trigger_col_id = trigger.get("Column")
+    if not isinstance(target_col_id, str) or target_col_id not in new:
+        raise ValueError(f"set_conditional_visibility: field {field_name!r} has no valid Column")
+    if not isinstance(trigger_col_id, str) or trigger_col_id not in new:
+        raise ValueError(f"set_conditional_visibility: trigger {trigger_field_name!r} has no valid Column")
+    target_col = new[target_col_id]
+    trigger_col = new[trigger_col_id]
+
+    for old_cid in target_col.get("ColumnVisibility::Criteria") or []:
+        old_criteria = new.pop(old_cid, None) or {}
+        for old_condid in old_criteria.get("Criteria::Condition") or []:
+            old_cond = new.pop(old_condid, None) or {}
+            old_trigger_col = old_cond.get("LHSOwnField")
+            if isinstance(old_trigger_col, str) and old_trigger_col in new:
+                remaining = [c for c in (new[old_trigger_col].get("LHSOwnField::Condition") or [])
+                            if c != old_condid]
+                if remaining:
+                    new[old_trigger_col]["LHSOwnField::Condition"] = remaining
+                else:
+                    new[old_trigger_col].pop("LHSOwnField::Condition", None)
+
+    cid = _new_id("Criteria", model_id, 0, f"visibility:{field_name}")
+    cond_id = _new_id("Condition", model_id, 0, f"visibility:{field_name}")
+    new[cond_id] = {"Id": cond_id, "Kind": "Condition", "Operator": operator, "HasArguments": False,
+                    "LHSOwnField": trigger_col_id, "Criteria": cid, "RHSValue": str(rhs)}
+    new[cid] = {"Id": cid, "Kind": "Criteria", "IsOR": False, "ColumnVisibility": target_col_id,
+               "Criteria::Condition": [cond_id]}
+    target_col["IsHidden"] = True
+    target_col["ColumnVisibility::Criteria"] = [cid]
+    if cond_id not in (trigger_col.get("LHSOwnField::Condition") or []):
+        trigger_col.setdefault("LHSOwnField::Condition", []).append(cond_id)
     return new
 
 

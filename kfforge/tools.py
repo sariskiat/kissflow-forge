@@ -18,13 +18,20 @@ def list_field_types() -> list[str]:
 
 
 def _to_spec(d: dict[str, Any]) -> FieldSpec:
+    # `default_value` (#55, forge_apply_fields extension) is a convenience top-level key that
+    # folds into `options["DefaultValue"]` — the SAME wire key `_TYPE_DEFAULTS` already writes for
+    # Number, and the platform's own relative-date keyword ("Today") for Date. Absent when not
+    # given, so every caller that never used it sees byte-identical FieldSpec.options to before.
+    options = dict(d.get("options") or {})
+    if d.get("default_value") is not None:
+        options["DefaultValue"] = d["default_value"]
     return FieldSpec(
         name=d["name"],
         type=FieldType(d["type"]),  # raises on unknown type -> rejected
         required=bool(d.get("required", False)),
         referred_list=d.get("referred_list"),
         field_id=d.get("field_id"),
-        options=d.get("options"),  # opt-in per-type keys (AllowFormatting/CaptureOnly/…)
+        options=options or None,  # opt-in per-type keys (AllowFormatting/CaptureOnly/…)
     )
 
 

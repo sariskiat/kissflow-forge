@@ -1026,6 +1026,136 @@ def test_add_field_validation_raises_on_missing_field() -> None:
         add_field_validation(d, "nope", "CONTAINS", "x")
 
 
+def test_add_field_validation_writes_error_message_when_given() -> None:
+    """#48/#55: ErrorMessage is a real per-Condition key the platform writes — closes the gap
+    docs/capabilities/config.validation.md flags on the engine's own docstring."""
+    from kfforge.graph import add_field_validation, apply_changes
+    from kfforge.types import FieldSpec, FieldType
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    d = apply_changes(bare, [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    got = add_field_validation(d, "Notes", "MAX_LENGTH", "10",
+                               error_message="Maximum length is 10 characters")
+    fld = next(n for n in got.values()
+              if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Name") == "Notes")
+    crit = got[fld["FieldValidation::Criteria"][0]]
+    cond = got[crit["Criteria::Condition"][0]]
+    assert cond["ErrorMessage"] == "Maximum length is 10 characters"
+
+    # omitted -> the key is simply absent, never written as None
+    without = add_field_validation(d, "Notes", "CONTAINS", "x")
+    fld2 = next(n for n in without.values()
+               if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Name") == "Notes")
+    crit2 = without[fld2["FieldValidation::Criteria"][0]]
+    cond2 = next(without[cid] for cid in crit2["Criteria::Condition"]
+                if without[cid]["Operator"] == "CONTAINS")
+    assert "ErrorMessage" not in cond2
+
+
+def test_set_field_computed_builds_function_ast_with_field_and_static_args() -> None:
+    """#48/#55: the FOURTH Expression owner — Field itself — for a computed formula. Root
+    Function node carries NO Syntax key (a prefix call, unlike a branch/goto '=' infix root)."""
+    from kfforge.graph import apply_changes, set_field_computed
+    from kfforge.types import FieldSpec, FieldType
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Process"}}
+    d = apply_changes(bare, [FieldSpec(name="Computed Sample", type=FieldType.TEXT),
+                             FieldSpec(name="Source Number", type=FieldType.NUMBER)])
+    formula = {"fn": "concatenate", "args": [{"static": "BR-"}, {"field": "Source Number"}]}
+    got = set_field_computed(d, "Computed Sample", formula)
+
+    fld = next(n for n in got.values()
+              if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Name") == "Computed Sample")
+    expr_id = fld["Field::Expression"][0]
+    expr = got[expr_id]
+    assert expr["Field"] == fld["Id"]
+    root_id = expr["Expression::Node"][0]
+    root = got[root_id]
+    assert root["Type"] == "Function" and root["Value"] == "concatenate"
+    assert "Syntax" not in root
+    assert root["FieldRefCount"] == 1
+    child_types = {got[c]["Type"] for c in root["Node::Node"]}
+    assert child_types == {"Static", "Field"}
+
+    src = next(n for n in got.values()
+              if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Name") == "Source Number")
+    field_node = next(got[c] for c in root["Node::Node"] if got[c]["Type"] == "Field")
+    assert field_node["Field"] == src["Id"]
+    assert field_node["Id"] in src.get("Field::Node", [])
+
+    # idempotent-ish: a second call REPLACES the expression, never accumulates a second one
+    again = set_field_computed(got, "Computed Sample", formula)
+    fld2 = next(n for n in again.values()
+               if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Name") == "Computed Sample")
+    assert len(fld2["Field::Expression"]) == 1
+
+
+def test_set_field_computed_raises_on_missing_field_refs() -> None:
+    from kfforge.graph import apply_changes, set_field_computed
+    from kfforge.types import FieldSpec, FieldType
+    import pytest
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Process"}}
+    d = apply_changes(bare, [FieldSpec(name="Computed Sample", type=FieldType.TEXT)])
+    with pytest.raises(ValueError, match="no field named"):
+        set_field_computed(d, "Computed Sample",
+                           {"fn": "concatenate", "args": [{"field": "Nope"}]})
+    with pytest.raises(ValueError, match="set_field_computed: field not found"):
+        set_field_computed(d, "Nope", {"fn": "concatenate", "args": [{"static": "x"}]})
+
+
+def test_set_conditional_visibility_builds_columnvisibility_criteria() -> None:
+    """#48/#55: the THIRD Criteria owner family — ColumnVisibility. Target hidden by default;
+    the trigger Column gets the bidirectional LHSOwnField::Condition back-ref."""
+    from kfforge.graph import apply_changes, set_conditional_visibility
+    from kfforge.types import FieldSpec, FieldType
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    d = apply_changes(bare, [FieldSpec(name="Show Details", type=FieldType.BOOLEAN),
+                             FieldSpec(name="Details", type=FieldType.TEXT)])
+    got = set_conditional_visibility(d, "Details", "Show Details", "EQUAL_TO", "true")
+
+    details = next(n for n in got.values()
+                   if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Name") == "Details")
+    target_col = got[details["Column"]]
+    assert target_col["IsHidden"] is True
+    crit_id = target_col["ColumnVisibility::Criteria"][0]
+    crit = got[crit_id]
+    assert crit["IsOR"] is False
+    cond = got[crit["Criteria::Condition"][0]]
+    assert cond["Operator"] == "EQUAL_TO"
+    assert cond["HasArguments"] is False
+    assert cond["RHSValue"] == "true"
+
+    trigger = next(n for n in got.values()
+                  if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Name") == "Show Details")
+    trigger_col = got[trigger["Column"]]
+    assert cond["LHSOwnField"] == trigger_col["Id"]
+    assert cond["Id"] in trigger_col.get("LHSOwnField::Condition", [])
+
+    # idempotent-ish: a second call REPLACES the rule, never duplicates it
+    again = set_conditional_visibility(got, "Details", "Show Details", "EQUAL_TO", "false")
+    details2 = next(n for n in again.values()
+                    if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Name") == "Details")
+    col2 = again[details2["Column"]]
+    assert len(col2["ColumnVisibility::Criteria"]) == 1
+    cond2 = again[again[col2["ColumnVisibility::Criteria"][0]]["Criteria::Condition"][0]]
+    assert cond2["RHSValue"] == "false"
+
+
+def test_set_conditional_visibility_raises_on_missing_fields() -> None:
+    from kfforge.graph import apply_changes, set_conditional_visibility
+    from kfforge.types import FieldSpec, FieldType
+    import pytest
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    d = apply_changes(bare, [FieldSpec(name="Details", type=FieldType.TEXT)])
+    with pytest.raises(ValueError, match="trigger field not found"):
+        set_conditional_visibility(d, "Details", "Nope", "EQUAL_TO", "true")
+    with pytest.raises(ValueError, match="set_conditional_visibility: field not found"):
+        set_conditional_visibility(d, "Nope", "Details", "EQUAL_TO", "true")
+
+
 def test_add_table_after_section_places_host_adjacent_to_banner() -> None:
     """#10: a table host must be INSERTABLE right after its banner section's root row in
     Model::Row — appending it last strands the empty banner and the whole form fails to

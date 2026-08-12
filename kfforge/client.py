@@ -34,6 +34,8 @@ from .graph import (
     ensure_process_def,
     field_names,
     regroup_into_sections,
+    set_conditional_visibility,
+    set_field_computed,
     set_field_events,
     set_section_style,
     set_step_permissions,
@@ -2816,3 +2818,155 @@ def apply_copilot_check(
 
     return CopilotCheckReport(app_id=app_id, conversation_id=conversation_id, reply=reply,
                               scatter=scatter, landed_nodes=landed_nodes)
+
+
+@dataclass(frozen=True)
+class FullFieldsReport:
+    """Output-invariant audit for forge_apply_fields' full extension (#55, ticket #48's field-
+    layer capabilities — validation/computed/conditional-visibility offered alongside the field
+    itself, not as bolt-ons). Every requested field, validation rule, computed formula, and
+    conditional-visibility rule lands in its own verified/missing pair — never silently
+    unaccounted for, same discipline as every other Report in this module."""
+    flow_id: str
+    added: tuple[str, ...]
+    skipped: tuple[str, ...]
+    verified: tuple[str, ...]
+    missing: tuple[str, ...]
+    validations_verified: tuple[str, ...]
+    validations_missing: tuple[str, ...]
+    computed_verified: tuple[str, ...]
+    computed_missing: tuple[str, ...]
+    conditional_verified: tuple[str, ...]
+    conditional_missing: tuple[str, ...]
+    meta_version: str | None
+    published: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "flow_id": self.flow_id, "added": list(self.added), "skipped": list(self.skipped),
+            "verified": list(self.verified), "missing": list(self.missing),
+            "validations_verified": list(self.validations_verified),
+            "validations_missing": list(self.validations_missing),
+            "computed_verified": list(self.computed_verified),
+            "computed_missing": list(self.computed_missing),
+            "conditional_verified": list(self.conditional_verified),
+            "conditional_missing": list(self.conditional_missing),
+            "meta_version": self.meta_version, "published": self.published,
+            "isError": bool(self.missing or self.validations_missing or self.computed_missing
+                            or self.conditional_missing),
+        }
+
+
+def apply_fields_full(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    specs: list[FieldSpec],
+    groups: list[tuple[str, list[str]]] | None = None,
+    validations: dict[str, list[dict[str, str]]] | None = None,
+    computed: dict[str, dict[str, Any]] | None = None,
+    conditional: dict[str, dict[str, str]] | None = None,
+    publish: bool = False,
+) -> FullFieldsReport | Err:
+    """forge_apply_fields' full extension (#55): fields + layout + per-field validation rules +
+    computed formulas + conditional visibility, in ONE guarded read-verify-write — a caller
+    building a form never leaves it half-configured between several separate PUTs (the "offer the
+    whole field" build doctrine: validation + computed + defaults alongside the field itself, not
+    bolted on afterward).
+
+    `validations` maps a field NAME to `[{"operator":..., "rhs":..., "error_message": optional},
+    ...]` (graph.add_field_validation, extended with `ErrorMessage`, #48). `computed` maps a field
+    NAME to a formula AST `{"fn":..., "args":[...]}` (graph.set_field_computed, the Field-owned
+    Expression, #48). `conditional` maps a field NAME to `{"trigger_field":..., "operator":...,
+    "rhs":...}` (graph.set_conditional_visibility, the ColumnVisibility Criteria family, #48).
+    `default_value` has NO separate parameter here — it rides on each FieldSpec's own `options`
+    (`kfforge.tools._to_spec` folds a `default_value` key into `options["DefaultValue"]`), since
+    it is just another per-type Field key, not a new node shape.
+
+    Every one of the four layers is independently read-back verified; `missing` in any of them
+    marks the whole report `isError` (never publishes on a partial landing).
+    """
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+
+    before = field_names(draft)
+    version = draft.get(_META_VERSION)
+    requested = [s.name for s in specs]
+    skipped = tuple(n for n in requested if n in before)
+    validations = validations or {}
+    computed = computed or {}
+    conditional = conditional or {}
+
+    try:
+        new = apply_changes(draft, specs)
+        if groups:
+            new = regroup_into_sections(new, groups)
+        for fname, rules in validations.items():
+            for rule in rules:
+                new = add_field_validation(new, fname, rule["operator"], rule["rhs"],
+                                           error_message=rule.get("error_message"))
+        for fname, formula in computed.items():
+            new = set_field_computed(new, fname, formula)
+        for fname, cond in conditional.items():
+            new = set_conditional_visibility(new, fname, cond["trigger_field"], cond["operator"],
+                                             cond["rhs"])
+    except (ValueError, NotImplementedError, KeyError) as e:
+        return Err("verify", f"offline apply rejected the change set: {e}")
+
+    added = tuple(n for n in requested if n not in before)
+    if added or groups or validations or computed or conditional:
+        written = client.put_draft(kind, flow_id, new, expect_version=version)
+        if isinstance(written, Err):
+            return written
+
+    read_back = client.get_draft(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+    live_names = field_names(read_back)
+    verified = tuple(n for n in requested if n in live_names)
+    missing = tuple(n for n in requested if n not in live_names)
+
+    by_name = {v.get("Name"): v for v in read_back.values()
+              if isinstance(v, dict) and v.get("Kind") == "Field"}
+
+    val_verified: list[str] = []
+    val_missing: list[str] = []
+    for fname, rules in validations.items():
+        fld = by_name.get(fname, {})
+        live_rules: set[tuple[str, str]] = set()
+        for cid in fld.get("FieldValidation::Criteria") or []:
+            for condid in (read_back.get(cid, {}).get("Criteria::Condition") or []):
+                c = read_back.get(condid, {})
+                if isinstance(c.get("Operator"), str):
+                    live_rules.add((c["Operator"], str(c.get("RHSValue"))))
+        for rule in rules:
+            key = f"{fname}:{rule['operator']}:{rule['rhs']}"
+            (val_verified if (rule["operator"], rule["rhs"]) in live_rules else val_missing).append(key)
+
+    computed_verified = tuple(n for n in computed if by_name.get(n, {}).get("Field::Expression"))
+    computed_missing = tuple(n for n in computed if n not in computed_verified)
+
+    cond_verified: list[str] = []
+    cond_missing: list[str] = []
+    for fname in conditional:
+        fld = by_name.get(fname, {})
+        col_id = fld.get("Column")
+        col = read_back.get(col_id, {}) if isinstance(col_id, str) else {}
+        (cond_verified if col.get("ColumnVisibility::Criteria") else cond_missing).append(fname)
+
+    published = False
+    all_ok = not (missing or val_missing or computed_missing or cond_missing)
+    if publish and all_ok:
+        pub = client.publish(kind, flow_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+
+    return FullFieldsReport(
+        flow_id=flow_id, added=added, skipped=skipped, verified=verified, missing=missing,
+        validations_verified=tuple(val_verified), validations_missing=tuple(val_missing),
+        computed_verified=computed_verified, computed_missing=computed_missing,
+        conditional_verified=tuple(cond_verified), conditional_missing=tuple(cond_missing),
+        meta_version=read_back.get(_META_VERSION), published=published,
+    )

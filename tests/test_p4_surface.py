@@ -14,6 +14,7 @@ from kfforge.client import (
     CopilotCheckReport,
     Err,
     FlowCreateReport,
+    FullFieldsReport,
     KfConfig,
     RolePreferenceReport,
     RoleUsersReport,
@@ -22,12 +23,14 @@ from kfforge.client import (
     apply_copilot_ask,
     apply_copilot_check,
     apply_dataset_records,
+    apply_fields_full,
     apply_grant_tier,
     apply_set_role_preference,
     create_flow_any,
     publish_application_verified,
     run_sweep,
 )
+from kfforge.types import FieldSpec, FieldType
 
 
 def _bare_draft(version: str = "v1") -> dict[str, Any]:
@@ -510,3 +513,69 @@ def test_copilot_check_with_no_baseline_treats_everything_as_scatter() -> None:
     rep = apply_copilot_check(c, "App1", "C1")
     assert isinstance(rep, CopilotCheckReport)
     assert rep.scatter.get("process") == ["P1"]
+
+
+# ---- forge_apply_fields extension (#10) ----------------------------------------------------------
+
+
+def test_apply_fields_full_lands_field_validation_computed_and_conditional_together() -> None:
+    c = FakeClient(_bare_draft())
+    specs = [
+        FieldSpec(name="Notes", type=FieldType.TEXT, options={"DefaultValue": "N/A"}),
+        FieldSpec(name="Source Number", type=FieldType.NUMBER),
+        FieldSpec(name="Computed Sample", type=FieldType.TEXT),
+        FieldSpec(name="Show Details", type=FieldType.BOOLEAN),
+        FieldSpec(name="Details", type=FieldType.TEXT),
+    ]
+    rep = apply_fields_full(
+        c, "process", "F1", specs,
+        validations={"Notes": [{"operator": "MAX_LENGTH", "rhs": "10",
+                                "error_message": "Too long"}]},
+        computed={"Computed Sample": {"fn": "concatenate",
+                                      "args": [{"static": "BR-"}, {"field": "Source Number"}]}},
+        conditional={"Details": {"trigger_field": "Show Details", "operator": "EQUAL_TO",
+                                 "rhs": "true"}},
+    )
+    assert isinstance(rep, FullFieldsReport)
+    assert set(rep.verified) == {s.name for s in specs}
+    assert rep.missing == ()
+    assert rep.validations_verified == ("Notes:MAX_LENGTH:10",)
+    assert rep.validations_missing == ()
+    assert rep.computed_verified == ("Computed Sample",)
+    assert rep.computed_missing == ()
+    assert rep.conditional_verified == ("Details",)
+    assert rep.conditional_missing == ()
+    assert rep.as_tool_result()["isError"] is False
+
+    # DefaultValue landed via the field's own options
+    notes = next(v for v in c.draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Notes")
+    assert notes["DefaultValue"] == "N/A"
+
+
+def test_apply_fields_full_offline_rejection_never_reaches_put() -> None:
+    c = FakeClient(_bare_draft())
+    got = apply_fields_full(
+        c, "process", "F1", [FieldSpec(name="Details", type=FieldType.TEXT)],
+        conditional={"Details": {"trigger_field": "Nope", "operator": "EQUAL_TO", "rhs": "true"}},
+    )
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0
+
+
+def test_apply_fields_full_missing_layer_marks_iserror_without_blocking_others() -> None:
+    class Dropping(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            self.puts += 1
+            return new  # accepted, self.draft never updated -> every read-back sees the OLD draft
+
+    c = Dropping(_bare_draft())
+    rep = apply_fields_full(
+        c, "process", "F1", [FieldSpec(name="Notes", type=FieldType.TEXT)],
+        validations={"Notes": [{"operator": "MAX_LENGTH", "rhs": "10"}]},
+    )
+    assert isinstance(rep, FullFieldsReport)
+    assert rep.missing == ("Notes",)
+    assert rep.validations_missing == ("Notes:MAX_LENGTH:10",)
+    assert rep.as_tool_result()["isError"] is True
+    assert rep.published is False

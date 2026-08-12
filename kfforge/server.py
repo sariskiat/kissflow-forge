@@ -71,6 +71,7 @@ from .client import (
     apply_field_validation,
     apply_fields,
     apply_fields_and_layout,
+    apply_fields_full,
     apply_goto_gate,
     apply_grant_tier,
     apply_layout,
@@ -367,22 +368,44 @@ def forge_apply_fields(
     flow_id: str,
     fields: list[dict[str, Any]],
     sections: dict[str, list[str]] | None = None,
+    validation: dict[str, list[dict[str, str]]] | None = None,
+    computed: dict[str, dict[str, Any]] | None = None,
+    conditional_visibility: dict[str, dict[str, str]] | None = None,
     kind: str = "process",
     publish: bool = False,
 ) -> dict[str, Any]:
-    """LIVE write (dev only, KF_APP): add fields to a flow AND lay them out into named sections,
-    in ONE guarded write (graph.apply_changes + graph.regroup_into_sections). `sections` maps a
-    section title to the field names it should hold; fields not named in any section land in a
-    trailing "Other" section — nothing is ever dropped from the layout. Idempotent on the fields
-    (a name that already exists is skipped, never duplicated); the section layout is re-applied
-    every call, even when no field was actually new.
+    """LIVE write (dev only, KF_APP): add fields to a flow AND lay them out into named sections
+    AND (optionally) attach validation/computed/conditional-visibility, in ONE guarded write — the
+    build-doctrine "offer the whole field", not bolted on afterward. `sections` maps a section
+    title to the field names it should hold; fields not named in any section land in a trailing
+    "Other" section — nothing is ever dropped from the layout. Idempotent on the fields (a name
+    that already exists is skipped, never duplicated); the section layout is re-applied every
+    call, even when no field was actually new.
+
+    Each field dict in `fields` also accepts an optional `default_value` (folds into the Field's
+    own `DefaultValue` key — a static literal, or the platform's relative-date keyword `"Today"`
+    on a Date field — never guess the casing, read it).
+
+    `validation` maps a field NAME to `[{"operator": "MAX_LENGTH", "rhs": "10",
+    "error_message": "optional human text"}, ...]` (docs/capabilities/config.validation.md — wire-
+    proven operators: MAX_LENGTH, CONTAINS, GREATER_THAN, AFTER; everything else is Q&A-claimed
+    only, verify live before trusting it). `computed` maps a field NAME to a formula AST
+    `{"fn": "concatenate", "args": [{"static": "BR-"}, {"field": "Source Number"}]}`
+    (docs/capabilities/config.computed.md — the FOURTH Expression owner, Field itself; runtime
+    evaluation is UNVERIFIED, graph landing only). `conditional_visibility` maps a field NAME to
+    `{"trigger_field": <other field name>, "operator": "EQUAL_TO", "rhs": "true"}`
+    (docs/capabilities/config.conditional-visibility.md — the ColumnVisibility Criteria family;
+    runtime toggle behavior is graph-verified only, not walked live). Every layer is independently
+    read-back verified; a `missing` in any of them marks the whole result `isError`.
     """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
     specs = [_to_spec(f) for f in fields]
     groups = list(sections.items()) if sections else None
-    return _result(apply_fields_and_layout(c, kind, flow_id, specs, groups, publish=publish))  # type: ignore[arg-type]
+    return _result(apply_fields_full(c, kind, flow_id, specs, groups,  # type: ignore[arg-type]
+                                     validations=validation, computed=computed,
+                                     conditional=conditional_visibility, publish=publish))
 
 
 @mcp.tool()
