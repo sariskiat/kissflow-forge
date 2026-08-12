@@ -554,6 +554,16 @@ child Field { ..., Model:<table id> }                                          #
     any write; omitted = old append behavior). The banner Section itself stays caller-created
     (`regroup_into_sections` with an empty field list). Still owed elsewhere: the comparator must
     diff root `Model::Row` order INCLUDING the table host, not around it (#16).
+- ⚠️ **A table host and its child columns take NO Permission, and never break the step-visibility
+  coverage check (fix landed 2026-08-12).** A table host (`Column{Type:"Model"}`) sits in its own
+  root Row, outside every Section — legitimately so. `set_step_permissions`'s "every field column
+  must belong to a matrix section" rule used to reject any table-bearing flow as "field columns
+  outside every matrix section", making `forge_set_visibility` and `forge_add_table` mutually
+  exclusive (a live blocker on any process with a table). The coverage rule now excludes the table
+  host AND the table's child columns, and the host emits no Permission (Kissflow shows/hides the
+  WHOLE table, not its host cell). The child-column exclusion is detected two independent ways —
+  the nested Model's `Column` back-ref OR the host column's own `Column::Model` — so a live
+  read-back that drops one signal still resolves the table (`graph._table_model_ids`).
 
 ## Field events
 
@@ -855,6 +865,17 @@ fields   GET  /process/2/{acct}/{flow}/fields                   -> all runtime f
 options  GET  /flow/2/{acct}/list/{list_id}/items               -> bare array of valid option strings
 lists    GET  /flow/2/{acct}/list?page_size=100                 -> inventory of every list in the app
 ```
+
+⚠️ **The raw `fill` PUT is keyed by field ID (`Field_ed539546e3`), never field NAME — a name
+returns `KISSFLOW_ERROR_01003 FieldNotFound`.** But `forge_simulate_case` no longer forces the
+caller to hand-resolve: each step's `values` KEYS may be a field NAME ("Business Unit ID") OR an
+id, mixed freely, and the tool translates names→ids off the flow's live draft
+(`dataplane.field_name_index`) before the fill. Only the KEY is resolved — a Select `value` is
+still the exact option literal, unchanged. An unknown name fails that step loud, listing every
+available field name (a Cowork user with only the MCP surface can't hand-resolve, so the tool must
+and does). Resolution is scoped to ROOT-model fields on purpose: a child-table field can share a
+display name with a root field, and a top-level admin fill only ever addresses root fields — a
+table's rows go through the `Table::<child model id>` key below.
 
 ⚠️ **The `lists` route needs `_application_id` scoping too, the SAME leakage
 class the flow-list route already has (see Members first)** — confirmed live

@@ -14,10 +14,11 @@ from synthetic import OWNERS, synthetic_process_draft
 from kfforge.graph import (
     NO_PERMISSION_NODETYPES,
     add_sequence_number,
+    add_table,
     progressive_matrix,
     set_step_permissions,
 )
-from kfforge.types import Visibility
+from kfforge.types import FieldType, Visibility
 
 Draft = dict[str, Any]
 
@@ -197,3 +198,40 @@ def test_sequence_exclusion_does_not_ride_on_ishidden(seq_draft, matrix):
     applied = set_step_permissions(d, matrix)
     assert [p for p in _nodes(applied, "Permission").values()
             if p["Column"] == _seq_col(applied)] == []
+
+
+# ---- a table host column takes no Permission and never breaks coverage (#table+vis) ----------
+# CLAUDE.md > Tables: a table's HOST column (Type:"Model") sits in its OWN root Row, never a
+# Section, and takes NO Permissions — Kissflow shows/hides the whole table, not its host cell.
+# Before this fix, set_step_permissions and add_table were mutually exclusive: a table-bearing
+# flow was rejected here as "field columns outside every matrix section".
+
+def _table_cols(d: Draft) -> tuple[str, set[str]]:
+    """(host column id, {child column ids}) for the single table in the draft."""
+    host = next(k for k, v in _nodes(d, "Column").items() if v.get("Type") == "Model")
+    children = {v["Column"] for v in _nodes(d, "Field").values()
+                if v.get("Name") in ("SKU", "Qty")}
+    return host, children
+
+
+def test_table_host_and_child_columns_take_no_permission(draft, matrix):
+    d = add_table(draft, "Line Items", [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER)])
+    host, children = _table_cols(d)
+    applied = set_step_permissions(d, progressive_matrix(d, OWNERS))  # no rejection
+    perms = _nodes(applied, "Permission")
+    assert [p for p in perms.values() if p["Column"] == host] == []
+    assert [p for p in perms.values() if p["Column"] in children] == []
+
+
+def test_table_child_columns_excluded_even_when_nested_model_backref_missing(draft, matrix):
+    # A live read-back can drop the nested table Model's `Column` back-ref; the host column's own
+    # `Column::Model` must still let the coverage check resolve (and exclude) the table's columns,
+    # or a table-bearing flow can never get a visibility matrix. This is the real live break.
+    d = add_table(draft, "Line Items", [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER)])
+    tbl = next(k for k, v in _nodes(d, "Model").items() if v.get("Name") == "Line Items")
+    del d[tbl]["Column"]  # simulate the read-back that dropped the back-ref
+    host, children = _table_cols(d)
+    applied = set_step_permissions(d, progressive_matrix(d, OWNERS))  # must NOT raise
+    perms = _nodes(applied, "Permission")
+    assert [p for p in perms.values() if p["Column"] == host] == []
+    assert [p for p in perms.values() if p["Column"] in children] == []

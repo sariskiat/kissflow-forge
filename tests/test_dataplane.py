@@ -20,8 +20,10 @@ from kfforge.dataplane import (
     StepResult,
     WalkReport,
     advance,
+    field_name_index,
     fill_and_verify,
     live_aiid,
+    resolve_value_keys,
     usable_aiid,
     wait_new_aiid,
     walk,
@@ -779,3 +781,77 @@ def test_wait_new_aiid_missing_current_context_is_treated_as_not_ready_yet() -> 
                         tries=8, delay=0, sleep_fn=lambda s: None)
     assert got == "AIID-NEW"
     assert fake.calls == 3
+
+
+# ------------------------------------------------------------------ field-name resolution (#sim)
+# A tiny root-model draft: two root fields (one whose display name has a space, the FieldNotFound
+# war story), plus a child TABLE whose field shares a name with a root field — proving root-scoping.
+_DRAFT_WITH_TABLE: dict[str, Any] = {
+    "Model_root": {"Id": "Model_root", "Kind": "Model", "RootProcessDef": "ProcessDef_1"},
+    "Field_bu": {"Id": "Field_bu", "Kind": "Field", "Name": "Business Unit ID",
+                 "Type": "Text", "Model": "Model_root"},
+    "Field_sev": {"Id": "Field_sev", "Kind": "Field", "Name": "Severity",
+                  "Type": "Select", "Model": "Model_root"},
+    "Model_table": {"Id": "Model_table", "Kind": "Model", "Column": "Column_host"},
+    # a child-table field named identically to a root field — must NOT leak into the root index
+    "Field_tbl_sev": {"Id": "Field_tbl_sev", "Kind": "Field", "Name": "Severity",
+                      "Type": "Text", "Model": "Model_table"},
+}
+
+
+def test_field_name_index_maps_root_fields_and_excludes_table_fields() -> None:
+    idx = field_name_index(_DRAFT_WITH_TABLE)
+    assert idx == {"Business Unit ID": "Field_bu", "Severity": "Field_sev"}
+    # the child-table "Severity" never shadows the root one (root-scoping, documented limit)
+    assert idx["Severity"] == "Field_sev"
+
+
+def test_walk_resolves_field_names_so_fill_put_receives_ids() -> None:
+    fake = FakeClient()
+    idx = field_name_index(_DRAFT_WITH_TABLE)
+    steps = [_plan("step-1", values={"Business Unit ID": "BU-42"})]
+    rep = walk(fake, flow_id=FLOW, steps=steps, field_index=idx)
+    assert rep.ok() is True
+    puts = [args[2] for name, args in fake.calls if name == "put_fields"]
+    assert puts == [{"Field_bu": "BU-42"}]  # NAME resolved to id before the PUT
+
+
+def test_walk_passes_field_ids_through_unchanged() -> None:
+    fake = FakeClient()
+    idx = field_name_index(_DRAFT_WITH_TABLE)
+    steps = [_plan("step-1", values={"Field_bu": "BU-42"})]
+    rep = walk(fake, flow_id=FLOW, steps=steps, field_index=idx)
+    assert rep.ok() is True
+    puts = [args[2] for name, args in fake.calls if name == "put_fields"]
+    assert puts == [{"Field_bu": "BU-42"}]  # already an id — kept verbatim
+
+
+def test_walk_resolves_mixed_names_and_ids_in_one_step() -> None:
+    fake = FakeClient()
+    idx = field_name_index(_DRAFT_WITH_TABLE)
+    steps = [_plan("step-1", values={"Business Unit ID": "BU-42", "Field_sev": "High"})]
+    rep = walk(fake, flow_id=FLOW, steps=steps, field_index=idx)
+    assert rep.ok() is True
+    puts = [args[2] for name, args in fake.calls if name == "put_fields"]
+    assert puts == [{"Field_bu": "BU-42", "Field_sev": "High"}]
+
+
+def test_walk_unknown_field_name_fails_loud_listing_available_names() -> None:
+    fake = FakeClient()
+    idx = field_name_index(_DRAFT_WITH_TABLE)
+    steps = [_plan("step-1", values={"Buisness Unit": "BU-42"})]  # typo'd name
+    rep = walk(fake, flow_id=FLOW, steps=steps, field_index=idx)
+    assert rep.ok() is False
+    assert rep.failed == ("step-1",)
+    assert rep.error is not None
+    assert "Buisness Unit" in rep.error                      # names the unresolved key
+    assert "Business Unit ID" in rep.error and "Severity" in rep.error  # lists the vocabulary
+    # failed BEFORE any fill PUT — never silently dropped
+    assert not any(name == "put_fields" for name, _ in fake.calls)
+
+
+def test_resolve_value_keys_leaves_select_value_literal_untouched() -> None:
+    idx = field_name_index(_DRAFT_WITH_TABLE)
+    resolved = resolve_value_keys({"Severity": "High"}, idx)
+    assert not isinstance(resolved, Err)
+    assert resolved == {"Field_sev": "High"}  # KEY resolved, VALUE ("High" option literal) intact

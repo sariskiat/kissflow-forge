@@ -306,6 +306,66 @@ def wait_new_aiid(
     return last
 
 
+def _root_model_ids(draft: dict[str, Any]) -> set[str]:
+    """Model node ids that are the FORM'S OWN root model, not a child table. A child-table Model
+    carries a host `Column` back-reference (CLAUDE.md > Tables: `Model{..., Column:<host>}`); the
+    root form Model does not. Property-based, so it holds on any app regardless of node ordering.
+    """
+    return {
+        k for k, v in draft.items()
+        if isinstance(v, dict) and v.get("Kind") == "Model" and not v.get("Column")
+    }
+
+
+def field_name_index(draft: dict[str, Any]) -> dict[str, str]:
+    """name -> field id, for every root-model Field in a flow's draft graph.
+
+    Scoped to root-model fields ON PURPOSE (documented limit): a child-table field can share a
+    display name with a root field, and a top-level `/process` admin fill only ever addresses
+    root-model fields — a table's rows go through a different `Table::<child model id>` key
+    (CLAUDE.md > Item data plane). Resolving table-field names here would let a name collide.
+    """
+    roots = _root_model_ids(draft)
+    out: dict[str, str] = {}
+    for key, node in draft.items():
+        if not isinstance(node, dict) or node.get("Kind") != "Field":
+            continue
+        if node.get("Model") not in roots:
+            continue
+        name = node.get("Name")
+        if isinstance(name, str) and name:
+            fid = node.get("Id")
+            out[name] = fid if isinstance(fid, str) and fid else key
+    return out
+
+
+def resolve_value_keys(
+    values: dict[str, object], field_index: dict[str, str],
+) -> dict[str, object] | Err:
+    """Translate a fill dict's KEYS (field name OR field id) to field ids, leaving every VALUE
+    untouched (a Select value stays the option literal — only the key is resolved). A key already
+    shaped like a field id (`Field_...` prefix) or matching a known live field id is kept as-is;
+    any other key is looked up as a field NAME. Mixed names and ids in one dict are fine.
+
+    Fails LOUD on a name that matches no field — naming the unresolved key AND listing every
+    available field name, so a caller with only the MCP tool surface (no code, no source) sees the
+    real vocabulary instead of a bare `FieldNotFound` from the data plane. Never silently drops it.
+    """
+    known_ids = set(field_index.values())
+    resolved: dict[str, object] = {}
+    for key, val in values.items():
+        if key.startswith("Field_") or key in known_ids:
+            resolved[key] = val
+        elif key in field_index:
+            resolved[field_index[key]] = val
+        else:
+            available = ", ".join(sorted(field_index)) or "(none)"
+            return Err("verify",
+                       f"fill key {key!r} matches no field on this flow — not a field id, and no "
+                       f"field is named {key!r}. Available field names: {available}")
+    return resolved
+
+
 @dataclass(frozen=True)
 class StepPlan:
     """One hop of a walk: fields to set (fill_and_verify'd before anything else), then either
@@ -345,6 +405,7 @@ def walk(
     *,
     flow_id: str,
     steps: list[StepPlan],
+    field_index: dict[str, str] | None = None,
     poll_after_transition: bool = False,
     poll_tries: int = 8,
     poll_delay: float = 0.9,
@@ -361,6 +422,14 @@ def walk(
     gets no such fallback (`create_aiid=None`), so a genuinely missing context on a later hop still
     fails loud exactly as before this rule was added — the fallback never masks a real bug past hop
     1, and it never touches the myitems decoy either (this module has no myitems call at all).
+
+    `field_index` (name -> field id, from `field_name_index` on the flow's draft): when supplied,
+    each step's `values` KEYS are resolved from field NAMES to field ids before the fill PUT (a key
+    already shaped like an id is kept as-is; values are never touched — see `resolve_value_keys`).
+    A key that matches no field fails the CURRENT step loud, exactly like a fill that did not
+    verify. Omitted (the default, `None`) skips resolution entirely — every offline test that
+    already speaks in field ids keeps passing unchanged, and it is the caller's job (server.py) to
+    fetch the draft and build the index for a live `forge_simulate_case` run.
 
     `poll_after_transition` (default False — a caller/fake with no such latency, e.g. every OTHER
     test in this file, pays nothing extra): when True, calls `wait_new_aiid` right after each
@@ -391,7 +460,15 @@ def walk(
 
     for i, plan in enumerate(steps):
         hop_create_aiid = create_aiid if i == 0 else None  # two-phase rule: first hop only
-        report = fill_and_verify(cli, flow_id=flow_id, iid=iid, values=plan.values)
+        values = plan.values
+        if field_index is not None:
+            resolved = resolve_value_keys(plan.values, field_index)
+            if isinstance(resolved, Err):
+                return WalkReport(flow_id=flow_id, iid=iid, created=True, planned=planned, filled=filled,
+                                  advanced=advanced, rejected=rejected, failed=(plan.name,),
+                                  error=f"{plan.name}: {resolved.message}")
+            values = resolved
+        report = fill_and_verify(cli, flow_id=flow_id, iid=iid, values=values)
         if isinstance(report, Err):
             return WalkReport(flow_id=flow_id, iid=iid, created=True, planned=planned, filled=filled,
                               advanced=advanced, rejected=rejected, failed=(plan.name,),

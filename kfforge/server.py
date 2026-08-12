@@ -94,7 +94,7 @@ from .client import (
     run_doctor,
     run_sweep,
 )
-from .dataplane import LiveDataPlane, StepPlan, walk
+from .dataplane import LiveDataPlane, StepPlan, field_name_index, walk
 from .design import (
     apply_revisions,
     design_bundle_html,
@@ -922,6 +922,14 @@ def forge_simulate_case(
     including a fill that PUT 200 but did not verify — the exact silent-discard trap this data
     plane exists to catch (CLAUDE.md Item data plane).
 
+    `values` KEYS accept a field NAME ("Business Unit ID") OR a field id ("Field_ed539546e3") —
+    they are auto-resolved to ids against the flow's live draft before the fill, so a caller does
+    not have to hand-resolve name->id first. Mixed names and ids in one step are fine. A name that
+    matches no field fails that step loud, listing every available field name. Only the key is
+    resolved — a Select `value` must still be the exact option literal. Resolution is scoped to the
+    flow's root-model fields (a child-table field is addressed differently), documented in
+    `kfforge.dataplane.field_name_index`.
+
     `poll` (default True — this tool is live-only, there is no fake/offline caller that would pay
     for it needlessly) waits for the step transition to actually show up (`dataplane.wait_new_aiid`)
     after each advance/reject, before moving to the next step — closing the gap that a fresh submit
@@ -936,8 +944,13 @@ def forge_simulate_case(
                  comment=s.get("comment", ""))
         for s in steps
     ]
-    report = walk(LiveDataPlane(c), flow_id=flow_id, steps=plans, poll_after_transition=poll,
-                  poll_tries=poll_tries, poll_delay=poll_delay)
+    # Resolve field NAMES -> ids from the flow's live draft, so a caller may key `values` by either
+    # (a Cowork user with only the MCP surface cannot hand-resolve name->id). A read failure here
+    # is not fatal: fall back to no index (keys passed through verbatim, the old behavior).
+    draft = c.get_draft("process", flow_id)
+    index = field_name_index(draft) if not isinstance(draft, Err) else None
+    report = walk(LiveDataPlane(c), flow_id=flow_id, steps=plans, field_index=index,
+                  poll_after_transition=poll, poll_tries=poll_tries, poll_delay=poll_delay)
     return {
         "flow_id": report.flow_id, "iid": report.iid, "created": report.created,
         "planned": list(report.planned), "filled": list(report.filled),

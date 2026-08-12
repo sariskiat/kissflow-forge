@@ -1472,10 +1472,32 @@ def _no_permission_columns(draft: Draft) -> set[str]:
     return hidden | seq
 
 
+def _table_model_ids(draft: Draft) -> set[str]:
+    """Ids of every NESTED table Model, detected two independent ways so a live read-back that
+    drops one signal still resolves the table: (1) a Model that carries a host `Column` back-ref
+    (CLAUDE.md > Tables: `Model{..., Column:<host>}`), and (2) any Model named in a host column's
+    `Column::Model` list. Either alone is enough — the union survives Kissflow echoing back only
+    one of the two on a live draft, which is exactly how the coverage check used to reject a
+    table-bearing flow (host + child columns read as "outside every section")."""
+    by_backref = {k for k, v in _kind(draft, "Model").items() if v.get("Column")}
+    by_host = {tid for v in _kind(draft, "Column").values()
+               for tid in (v.get("Column::Model") or []) if isinstance(tid, str)}
+    return by_backref | by_host
+
+
+def _table_host_columns(draft: Draft) -> set[str]:
+    """Host columns for a child table. A host is `Type:"Model"` carrying `Column::Model`, sits in
+    its OWN root-level Row (never a Section), and takes NO Permissions — Kissflow shows/hides the
+    whole table, not its host cell (CLAUDE.md > Tables, Visibility). Detected by either signal so a
+    read-back missing one still excludes it from the section-coverage rule."""
+    return {k for k, v in _kind(draft, "Column").items()
+            if v.get("Type") == "Model" or v.get("Column::Model")}
+
+
 def _table_child_columns(draft: Draft) -> set[str]:
     """Columns that live INSIDE a child table. They are `Type:"Field"` but belong to the nested
     Model, not the form, so they are never step-permissioned individually — the table as a whole is."""
-    tables = {k for k, v in _kind(draft, "Model").items() if v.get("Column")}
+    tables = _table_model_ids(draft)
     return {c for f in _kind(draft, "Field").values()
             if f.get("Model") in tables and isinstance(c := f.get("Column"), str)}
 
@@ -1656,14 +1678,20 @@ def set_step_permissions(draft: Draft, matrix: Matrix, field_matrix: Matrix | No
             raise ValueError(f"field_matrix names a field that does not exist: {missing}")
     overridden_cols = set(field_col_of_name.values())
     excluded = _no_permission_columns(new)
+    table_hosts = _table_host_columns(new)  # a table host takes no Permission (CLAUDE.md > Tables)
     banned = [n for n, c in field_col_of_name.items() if c in excluded]
     if banned:
         raise ValueError(f"field_matrix targets columns that take no Permissions "
                          f"(IsHidden or SequenceNumber): {banned}")
 
     covered = {c for name in matrix for c in members.get(sec_id_of_name.get(name, ""), [])}
+    # A table's HOST column (Type:"Model") and the field columns INSIDE the table legitimately live
+    # outside every Section — a table host sits in its own root Row, never a Section, and takes no
+    # Permissions (CLAUDE.md > Tables, Visibility). Excluding them is what lets a flow have BOTH a
+    # table and a step-visibility matrix; without it set_visibility and add_table were mutually
+    # exclusive (a table-bearing flow rejected here as "columns outside every section").
     all_field_cols = ({k for k, v in _kind(new, "Column").items() if v.get("Type") == "Field"}
-                      - _table_child_columns(new) - excluded)
+                      - _table_child_columns(new) - table_hosts - excluded)
     if all_field_cols - covered:
         # a sparse matrix means those fields silently keep their default visibility -> fail loud
         raise ValueError(f"field columns outside every matrix section: {sorted(all_field_cols - covered)}")
@@ -1683,8 +1711,9 @@ def set_step_permissions(draft: Draft, matrix: Matrix, field_matrix: Matrix | No
         if sid is None:
             raise ValueError(f"matrix names a section that does not exist: {name!r}")
         for col_id in members[sid]:
-            if col_id in overridden_cols or col_id in excluded:
-                continue            # own row in field_matrix, or a no-Permission column (#9)
+            if col_id in overridden_cols or col_id in excluded or col_id in table_hosts:
+                continue            # own row in field_matrix, a no-Permission column (#9), or a
+                                    # table host (Kissflow shows/hides the whole table, not its cell)
             _write_row(col_id, row)
     for fname, row in (field_matrix or {}).items():
         _write_row(field_col_of_name[fname], row)
