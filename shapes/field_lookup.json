@@ -1,0 +1,35 @@
+{
+  "kind": "Field",
+  "description": "Lookup field. Pulls values from a record in ANOTHER flow. Captured as Type:\"Reference\" with a Field::QueryDefinition node whose FlowType is \"Process\" (this is the ONLY thing that distinguishes a Lookup from a Remote lookup — see field_remote_lookup.json, FlowType \"Dataset\"). Captured live headless via copilot 2026-08-12 (field sweep #46); ids de-identified.",
+  "source_capture": "copilot field sweep #46 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Reference",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Lookup Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "Field::QueryDefinition": ["QueryDefinition_Sample01"]
+    },
+    "QueryDefinition_Sample01": {
+      "Id": "QueryDefinition_Sample01",
+      "Kind": "QueryDefinition",
+      "Field": "Field_Sample01",
+      "LHSModel": "Process_Sample01",
+      "FlowType": "Process",
+      "LookupField": [
+        {"Id": "Field_SampleA", "Name": "Sample Pulled Field A", "Type": "DateTime"},
+        {"Id": "Field_SampleB", "Name": "Sample Pulled Field B", "Type": "Email"}
+      ]
+    }
+  },
+  "notes": [
+    "Type is \"Reference\" (NOT \"Lookup\"). The lookup behavior lives in the Field::QueryDefinition child node, not the field Type.",
+    "QueryDefinition.LHSModel = the referenced flow's id; FlowType \"Process\" = it references a Process flow. LookupField = the columns pulled across.",
+    "The referenced flow must EXIST before this field is written (build order: master data / the referenced process first).",
+    "Per-field lookup/reverse-lookup runtime routes are a known 500 dead-end (CLAUDE.md Item data plane) — do not probe them."
+  ]
+}

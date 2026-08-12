@@ -1,0 +1,23 @@
+{
+  "kind": "Field",
+  "description": "Aggregation field. Meant to roll up (sum/avg/count) a column of a child table. Captured live as a bare Type:\"Number\" — copilot's claim that it wired 'sum of column X' did NOT land on the field node, so the aggregate function/column binding is NOT captured here (partial). Captured live headless via copilot 2026-08-12 (field sweep #47); ids de-identified.",
+  "source_capture": "copilot field sweep #47 (2026-08-12), de-identified — PARTIAL",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Number",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Aggregation Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "Decimalpoint": "2"
+    }
+  },
+  "notes": [
+    "Aggregation surfaces as Type:\"Number\" with Decimalpoint — the value-holder is a Number.",
+    "The aggregate wiring (which table, which column, which function) did NOT appear on the field node in the capture; copilot reported success but the binding is absent. Where that binding lives (a Property? an Expression? the host column?) is UNCAPTURED — a config-tabs / tables sweep (#48) owes this.",
+    "Do not treat this as a complete Aggregation capture — it is the value-holder only."
+  ]
+}

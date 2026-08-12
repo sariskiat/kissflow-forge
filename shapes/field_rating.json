@@ -1,0 +1,24 @@
+{
+  "kind": "Field",
+  "description": "Rating field. A star rating. Captured as Type:\"StarRating\" (NOT \"Rating\") with DefaultValue and AllowHalf (whether half-stars are allowed). Captured live headless via copilot 2026-08-12 (field sweep #47); ids de-identified.",
+  "source_capture": "copilot field sweep #47 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "StarRating",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Rating Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "DefaultValue": "0",
+      "AllowHalf": false
+    }
+  },
+  "notes": [
+    "Palette label 'Rating' maps to node Type:\"StarRating\" — closes the CLAUDE.md half-state (a captured shape that previously had no confirmed build path).",
+    "DefaultValue is a wire string; AllowHalf is a boolean (half-star ratings, captured false).",
+    "Computed: number-family; source family-inferred onSelect (unverified). Any field can be a computed target."
+  ]
+}

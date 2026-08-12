@@ -1,0 +1,33 @@
+{
+  "kind": "Field",
+  "description": "User field. Picks a Kissflow user. THE KNOWN PUBLISH-BLOCKER whose exact shape CLAUDE.md marked uncaptured — now captured live: Type:\"User\" plus a Field::QueryDefinition child with FlowType:\"User\", LHSModel:\"User\", and an AutoFill flag. Same Reference/QueryDefinition family as Lookup and Remote lookup, differing only in FlowType. Captured live headless via copilot 2026-08-12 (field sweep #46); ids de-identified.",
+  "source_capture": "copilot field sweep #46 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "User",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample User Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "Field::QueryDefinition": ["QueryDefinition_Sample01"]
+    },
+    "QueryDefinition_Sample01": {
+      "Id": "QueryDefinition_Sample01",
+      "Kind": "QueryDefinition",
+      "Field": "Field_Sample01",
+      "FlowType": "User",
+      "LHSModel": "User",
+      "LookupField": [],
+      "AutoFill": false
+    }
+  },
+  "notes": [
+    "CLAUDE.md Write path: 'A User-type field blocks publish outright ... until its exact required shape has been captured off a builder-authored example.' This copilot capture IS that example — the missing piece is the Field::QueryDefinition child with FlowType:\"User\".",
+    "LHSModel:\"User\" and FlowType:\"User\" are literal type markers (not tenant data). LookupField empty, AutoFill boolean (captured false).",
+    "STILL UNVERIFIED: that writing this exact shape lets a flow publish. Captured off copilot, publish-with-User-field not yet proven live end to end — verify before trusting.",
+    "User is a computed SOURCE candidate: trigger_for maps User -> onSelect (family-inferred, CLAUDE.md #12)."
+  ]
+}

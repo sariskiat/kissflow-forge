@@ -1,0 +1,33 @@
+{
+  "kind": "Field",
+  "description": "Remote lookup field. Pulls values from a DATASET (a list flow), as opposed to a Lookup which pulls from a Process. Captured as Type:\"Reference\" with a Field::QueryDefinition whose FlowType is \"Dataset\" — the ONLY difference from a Lookup (field_lookup.json, FlowType \"Process\"). Captured live headless via copilot 2026-08-12 (field sweep #46); ids de-identified.",
+  "source_capture": "copilot field sweep #46 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Reference",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Remote Lookup Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "Field::QueryDefinition": ["QueryDefinition_Sample01"]
+    },
+    "QueryDefinition_Sample01": {
+      "Id": "QueryDefinition_Sample01",
+      "Kind": "QueryDefinition",
+      "Field": "Field_Sample01",
+      "LHSModel": "Dataset_Sample01",
+      "FlowType": "Dataset",
+      "LookupField": [
+        {"Id": "Name", "Name": "Name", "Type": "Text"}
+      ]
+    }
+  },
+  "notes": [
+    "Same Type:\"Reference\" + Field::QueryDefinition family as Lookup and User — the three differ only in QueryDefinition.FlowType (Dataset / Process / User).",
+    "LHSModel = the referenced dataset (list flow) id; FlowType \"Dataset\". The list flow must exist first.",
+    "Per-field lookup routes are a known 500 dead-end at runtime (CLAUDE.md) — do not probe."
+  ]
+}

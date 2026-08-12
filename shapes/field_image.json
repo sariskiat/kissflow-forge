@@ -1,0 +1,22 @@
+{
+  "kind": "Field",
+  "description": "Image field. Holds an image upload. Carries CaptureOnly (like Attachment) — when true the user may only capture from camera, not pick an existing file. Captured live headless via copilot 2026-08-12 (field sweep #46); ids de-identified.",
+  "source_capture": "copilot field sweep #46 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Image",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Image Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "CaptureOnly": false
+    }
+  },
+  "notes": [
+    "CaptureOnly is a boolean (captured false) — the same per-type key Attachment carries (CLAUDE.md Node-graph invariants).",
+    "Image is one of the six event-less types — the builder offers NO Event tab, so it cannot be a computed SOURCE (CLAUDE.md Field events). It can still be a computed target and take validation."
+  ]
+}

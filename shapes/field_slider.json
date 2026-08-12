@@ -1,0 +1,26 @@
+{
+  "kind": "Field",
+  "description": "Slider field. A number chosen on a slider between a min and max, stepped by an interval. Rich per-type config: DefaultValue, MinValue, MaxValue, IntervalSize (all wire strings). Captured live headless via copilot 2026-08-12 (field sweep #47); ids de-identified.",
+  "source_capture": "copilot field sweep #47 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Slider",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Slider Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "DefaultValue": "0",
+      "MinValue": "0",
+      "MaxValue": "100",
+      "IntervalSize": "1"
+    }
+  },
+  "notes": [
+    "DefaultValue / MinValue / MaxValue / IntervalSize are all wire STRINGS holding numbers (captured \"0\"/\"0\"/\"100\"/\"1\"), not JSON numbers.",
+    "The min/max/interval ARE the built-in range validation — a Slider constrains its own value natively, no separate validation rule needed for bounds.",
+    "Computed: Slider is number-family; a source is family-inferred to fire onSelect (unverified). Any field can be a computed target."
+  ]
+}

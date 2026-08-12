@@ -25,7 +25,7 @@ CORE_ID_PREFIXES = (
     "Field", "Column", "Row", "Model", "Activity", "Event", "Permission", "Resource",
     "Expression", "Node", "Property", "Style", "Appearance", "Page", "Container", "Component",
     "Popup", "Tabs", "Tab", "Menu", "Navigation", "Variable", "VariableRef", "EventMapping",
-    "Criteria", "Condition", "StartEvent", "ProcessDef", "Button", "User",
+    "Criteria", "Condition", "StartEvent", "ProcessDef", "Button", "User", "QueryDefinition",
 )
 EXTRA_ID_PREFIXES = ("Breadcrumbs", "BreadcrumbItem", "MasterDetail", "Repeater")
 
