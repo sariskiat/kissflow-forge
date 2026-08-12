@@ -34,6 +34,7 @@ FORGE_TOOLS = {
     "forge_delete_flow",
     "forge_add_role_users", "forge_grant_tier", "forge_create_flow", "forge_publish_app",
     "forge_dataset_records", "forge_set_role_preference", "forge_sweep",
+    "forge_copilot_ask", "forge_copilot_check",
 }
 
 KF_ENV_VARS = (
@@ -72,6 +73,8 @@ DUMMY_ARGS: dict[str, dict[str, Any]] = {
     "forge_dataset_records": {"flow_id": "x", "op": "list"},
     "forge_set_role_preference": {"role_id": "x", "default_page": "Default"},
     "forge_sweep": {"scope": "apps"},
+    "forge_copilot_ask": {"app_id": "x", "message": "hi"},
+    "forge_copilot_check": {"app_id": "x", "conversation_id": "c1"},
 }
 
 

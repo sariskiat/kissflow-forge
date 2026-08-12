@@ -377,6 +377,32 @@ class KfClient:
         return self._json("POST", f"{c.base}/flow/2/{c.account}/list/{list_id}/items",
                           {"ListItems": items})
 
+    def copilot_send(self, app_id: str, message: str) -> Any | Err:
+        """Send a message to the in-builder AI copilot. Proven HEADLESS 2026-08-12 (the engine's
+        own API token works, no browser/cookie/csrf needed):
+        `POST /metadata/2/{acct}/ai/application/{app}/copilot/send?_application_id={app}` body
+        `{"UserMessage": "..."}` -> `{status:success}` — an ACK, proves nothing about whether
+        anything actually landed (THE RULE: never trust the reply, only a graph read-back)."""
+        c = self._cfg
+        return self._json(
+            "POST",
+            f"{c.base}/metadata/2/{c.account}/ai/application/{app_id}/copilot/send"
+            f"?_application_id={app_id}",
+            {"UserMessage": message},
+        )
+
+    def copilot_conversations(self, app_id: str) -> list[dict[str, Any]] | Err:
+        """Read the copilot thread for `app_id`. Proven live 2026-08-12:
+        `GET /metadata/2/{acct}/ai/application/{app}/copilot/conversations?_application_id={app}`
+        -> newest-first array; pair `UserMessage`<->`SystemMessage` by `ConversationId`. Threads
+        are server-side per-app and memory is FUZZY (a send occasionally fails to register)."""
+        c = self._cfg
+        return self._json(
+            "GET",
+            f"{c.base}/metadata/2/{c.account}/ai/application/{app_id}/copilot/conversations"
+            f"?_application_id={app_id}",
+        )
+
     def create_dataset(self, name: str) -> dict[str, Any] | Err:
         """Create a dataform (flowtype `dataset`). Proven live 2026-08-12 (#50):
         `POST /flow/2/{acct}/dataset?_application_id={app}` body `{"Name": ...}` -> born LIVE,
@@ -2649,3 +2675,144 @@ def run_sweep(client: KfClient, scope: str, app_id: str | None = None) -> dict[s
         results[s] = bucket
 
     return {"scope": scope, "app_id": effective_app, "results": results, "isError": any_error}
+
+
+@dataclass(frozen=True)
+class CopilotAskReport:
+    """A copilot SEND ack + whatever the immediate follow-up read happens to show. The reply text
+    is NEVER proof of anything landing (memory note "REPLY LAGS THE GRAPH", proven live
+    2026-08-12: the thread can still show an old clarifying question as newest while the graph
+    already has the field) — `forge_copilot_check`, called after a real delay, is the only
+    oracle."""
+    app_id: str
+    message: str
+    conversation_id: str | None
+    immediate_reply: str | None
+    expect: tuple[str, ...]
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "app_id": self.app_id, "message": self.message,
+            "conversation_id": self.conversation_id, "immediate_reply": self.immediate_reply,
+            "expect": list(self.expect), "reply_is_proof": False,
+            "note": "reply text is NEVER proof of success — structural builds land ~70s later, "
+                   "not immediately; call forge_copilot_check after a real delay and diff the "
+                   "actual graph before trusting anything landed (THE RULE)",
+            "isError": False,
+        }
+
+
+def apply_copilot_ask(
+    client: KfClient,
+    app_id: str,
+    message: str,
+    expect: list[str] | None = None,
+) -> CopilotAskReport | Err:
+    """SEND one message to the app's copilot thread, then ONE immediate read of the
+    conversation list — deliberately NOT a long poll (an MCP tool call has a budget; a
+    structural build lands ~70s later per the live capture, far past any reasonable single-call
+    wait). Returns whatever `ConversationId`/`SystemMessage` the immediate read happens to show,
+    paired to `message` by exact `UserMessage` match — call `forge_copilot_check` later, after a
+    real delay, for the actual verdict.
+
+    `expect` is an OPTIONAL hint (node kinds the caller expects this ask to produce, e.g.
+    `["Field"]`) — echoed back verbatim for the caller's own bookkeeping; this function does not
+    itself verify it (that is `forge_copilot_check`'s job, against a real graph read-back).
+    """
+    sent = client.copilot_send(app_id, message)
+    if isinstance(sent, Err):
+        return sent
+
+    convs = client.copilot_conversations(app_id)
+    conversation_id: str | None = None
+    reply: str | None = None
+    if not isinstance(convs, Err):
+        for c in convs:
+            if isinstance(c, dict) and c.get("UserMessage") == message:
+                conversation_id = c.get("ConversationId")
+                reply = c.get("SystemMessage")
+                break
+
+    return CopilotAskReport(app_id=app_id, message=message, conversation_id=conversation_id,
+                            immediate_reply=reply, expect=tuple(expect or ()))
+
+
+def _flow_id_inventory(client: KfClient) -> dict[str, list[str]] | Err:
+    """`{flow kind: [flow id, ...]}` across every kind this engine can create — the SAME
+    app-scoped inventory `run_sweep`'s "flows" bucket reads, factored out so
+    `apply_copilot_check` can diff against it without duplicating the leakage-safe scoping."""
+    out: dict[str, list[str]] = {}
+    for kind in _SWEEP_FLOW_KINDS:
+        got = client.list_flows(kind)  # type: ignore[arg-type]
+        if isinstance(got, Err):
+            return got
+        out[kind] = [f["_id"] for f in got if isinstance(f, dict) and isinstance(f.get("_id"), str)]
+    return out
+
+
+@dataclass(frozen=True)
+class CopilotCheckReport:
+    """The real verdict for a copilot ask: the thread's reply (NEVER trusted on its own) plus
+    `scatter` — every flow id that exists now but did not appear in `baseline_inventory` (memory
+    note "SCATTER CAVEAT": copilot is APP-scoped, not flow-scoped, and has been observed silently
+    building into a different flow than the one asked about). `landed_nodes` is a CHEAP top-level
+    node-count per newly-scattered flow (ponytail: not a deep semantic diff — a caller who needs
+    to know exactly WHAT landed should follow up with kf_get_flow_schema/forge_compare_to_spec on
+    the flagged flow id; this function's job is to prove SOMETHING changed and WHERE, not to
+    replay the full graph diff inline)."""
+    app_id: str
+    conversation_id: str
+    reply: str | None
+    scatter: dict[str, list[str]]
+    landed_nodes: dict[str, dict[str, int]]
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "app_id": self.app_id, "conversation_id": self.conversation_id, "reply": self.reply,
+            "reply_is_proof": False, "scatter": self.scatter, "landed_nodes": self.landed_nodes,
+            "note": "scatter = flow ids present now but absent from baseline_inventory; "
+                   "landed_nodes is a cheap top-level-key COUNT per new flow, not a semantic "
+                   "diff — never trust `reply` alone (THE RULE)",
+            "isError": False,
+        }
+
+
+def apply_copilot_check(
+    client: KfClient,
+    app_id: str,
+    conversation_id: str,
+    baseline_inventory: dict[str, list[str]] | None = None,
+) -> CopilotCheckReport | Err:
+    """Read the copilot thread for `conversation_id`, and diff the app's CURRENT flow inventory
+    against `baseline_inventory` (the shape `run_sweep(scope="flows")` returns per kind — a
+    caller should snapshot it via forge_sweep BEFORE calling forge_copilot_ask). Every flow id
+    that showed up since is `scatter`; each scattered flow's draft is read once for a cheap
+    top-level node COUNT (`landed_nodes`), never a full semantic diff.
+    """
+    convs = client.copilot_conversations(app_id)
+    if isinstance(convs, Err):
+        return convs
+    thread = [c for c in convs if isinstance(c, dict) and c.get("ConversationId") == conversation_id]
+    reply = next((c.get("SystemMessage") for c in thread if c.get("SystemMessage")), None)
+
+    current = _flow_id_inventory(client)
+    if isinstance(current, Err):
+        return current
+
+    baseline = baseline_inventory or {}
+    scatter: dict[str, list[str]] = {}
+    landed_nodes: dict[str, dict[str, int]] = {}
+    for kind, ids in current.items():
+        base_ids = set(baseline.get(kind) or [])
+        new_ids = [fid for fid in ids if fid not in base_ids]
+        if not new_ids:
+            continue
+        scatter[kind] = new_ids
+        counts: dict[str, int] = {}
+        for fid in new_ids:
+            draft = client.get_draft(kind, fid)  # type: ignore[arg-type]
+            counts[fid] = len(draft) if isinstance(draft, dict) else -1  # -1 = read failed
+        landed_nodes[kind] = counts
+
+    return CopilotCheckReport(app_id=app_id, conversation_id=conversation_id, reply=reply,
+                              scatter=scatter, landed_nodes=landed_nodes)

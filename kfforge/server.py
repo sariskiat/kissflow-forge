@@ -64,6 +64,8 @@ from .client import (
     KfConfig,
     apply_add_role_users,
     apply_branch_conditions,
+    apply_copilot_ask,
+    apply_copilot_check,
     apply_dataset_records,
     apply_field_events,
     apply_field_validation,
@@ -1083,6 +1085,55 @@ def forge_capabilities(query: str = "") -> dict[str, Any]:
     call instead of a dangling file reference.
     """
     return search_capabilities(query)
+
+
+@mcp.tool()
+def forge_copilot_ask(
+    app_id: str,
+    message: str,
+    expect: list[str] | None = None,
+) -> dict[str, Any]:
+    """LIVE (dev only): send one message to the app's in-builder AI copilot thread and do ONE
+    immediate read-back — deliberately NOT a long poll (an MCP call has a budget; a structural
+    build lands ~70s later per the live capture, far past any single-call wait). Returns the
+    `conversation_id` to pass into `forge_copilot_check` after a real delay.
+
+    ⚠️ THE RULE, harder here than anywhere else: the reply text is NEVER proof anything landed —
+    the thread can still show an OLD clarifying question as newest while the real graph already
+    has the change (memory note "REPLY LAGS THE GRAPH", proven live 2026-08-12). `expect`
+    (optional: the node kinds this ask should produce, e.g. `["Field"]`) is echoed back for the
+    caller's own bookkeeping — verification happens in forge_copilot_check, against a real graph
+    read-back, never here.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_copilot_ask(c, app_id, message, expect=expect))
+
+
+@mcp.tool()
+def forge_copilot_check(
+    app_id: str,
+    conversation_id: str,
+    baseline_inventory: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    """LIVE, read-only (dev only): the REAL verdict for a prior forge_copilot_ask call — read the
+    thread's reply (never trusted alone) AND diff the app's current flow inventory against
+    `baseline_inventory` (pass the `results.flows` dict from a `forge_sweep(scope="flows")` call
+    made BEFORE the ask).
+
+    Copilot is APP-scoped, not flow-scoped, and has been observed silently building into a
+    DIFFERENT flow than the one asked about (memory note "SCATTER CAVEAT", field sweeps
+    #45-47) — `scatter` names every flow id that showed up since the baseline, across every kind,
+    so a caller never mistakes "nothing in MY target flow" for "copilot did nothing at all".
+    `landed_nodes` is a cheap top-level node-count per scattered flow, not a full semantic diff —
+    follow up with kf_get_flow_schema/forge_compare_to_spec on a flagged flow id for that.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_copilot_check(c, app_id, conversation_id,
+                                       baseline_inventory=baseline_inventory))
 
 
 # =====================================================================================

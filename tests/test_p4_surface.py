@@ -10,6 +10,8 @@ from typing import Any
 from test_client import DEV, FakeClient, _bare_process_draft
 
 from kfforge.client import (
+    CopilotAskReport,
+    CopilotCheckReport,
     Err,
     FlowCreateReport,
     KfConfig,
@@ -17,6 +19,8 @@ from kfforge.client import (
     RoleUsersReport,
     TierReport,
     apply_add_role_users,
+    apply_copilot_ask,
+    apply_copilot_check,
     apply_dataset_records,
     apply_grant_tier,
     apply_set_role_preference,
@@ -429,3 +433,80 @@ def test_sweep_error_propagates_as_error_bucket_never_swallowed() -> None:
     assert out["isError"] is True
     assert out["results"]["apps"]["status"] == "error"
     assert "boom" in out["results"]["apps"]["error"]
+
+
+# ---- forge_copilot_ask / forge_copilot_check (#9) -----------------------------------------------
+
+
+class CopilotClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__(_bare_draft())
+        self.sent: list[tuple[str, str]] = []
+        self.conversations: list[dict[str, Any]] = []
+
+    def copilot_send(self, app_id, message):  # type: ignore[override]
+        self.sent.append((app_id, message))
+        return {"status": "success"}
+
+    def copilot_conversations(self, app_id):  # type: ignore[override]
+        return list(self.conversations)
+
+
+def test_copilot_ask_sends_and_reads_back_the_paired_reply() -> None:
+    c = CopilotClient()
+    c.conversations = [{"ConversationId": "C1", "UserMessage": "add a field",
+                        "SystemMessage": "which step?"}]
+    rep = apply_copilot_ask(c, "App1", "add a field")
+    assert isinstance(rep, CopilotAskReport)
+    assert rep.conversation_id == "C1" and rep.immediate_reply == "which step?"
+    assert rep.as_tool_result()["reply_is_proof"] is False
+    assert c.sent == [("App1", "add a field")]
+
+
+def test_copilot_ask_no_match_yet_is_not_an_error() -> None:
+    c = CopilotClient()
+    c.conversations = []  # reply hasn't landed yet
+    rep = apply_copilot_ask(c, "App1", "add a field")
+    assert isinstance(rep, CopilotAskReport)
+    assert rep.conversation_id is None and rep.immediate_reply is None
+    assert rep.as_tool_result()["isError"] is False
+
+
+def test_copilot_ask_echoes_expect_hint() -> None:
+    c = CopilotClient()
+    rep = apply_copilot_ask(c, "App1", "add a currency field", expect=["Field"])
+    assert isinstance(rep, CopilotAskReport)
+    assert rep.expect == ("Field",)
+
+
+def test_copilot_check_reads_reply_and_reports_no_scatter_when_nothing_new() -> None:
+    c = CopilotClient()
+    c.conversations = [{"ConversationId": "C1", "SystemMessage": "done"}]
+    c.flows = {"process": [{"_id": "P1"}]}
+    baseline = {"process": ["P1"], "form": [], "case": [], "list": [], "dataset": []}
+    rep = apply_copilot_check(c, "App1", "C1", baseline_inventory=baseline)
+    assert isinstance(rep, CopilotCheckReport)
+    assert rep.reply == "done"
+    assert rep.scatter == {}
+    assert rep.as_tool_result()["reply_is_proof"] is False
+
+
+def test_copilot_check_detects_scatter_into_a_new_flow() -> None:
+    c = CopilotClient()
+    c.conversations = [{"ConversationId": "C1", "SystemMessage": "built a list for you"}]
+    c.flows = {"process": [{"_id": "P1"}], "list": [{"_id": "L_scratch"}]}
+    c.draft = {"Root": "M1", "M1": {"Id": "M1"}, "X": {"Id": "X"}}  # 3 top-level keys
+    baseline = {"process": ["P1"], "form": [], "case": [], "list": [], "dataset": []}
+    rep = apply_copilot_check(c, "App1", "C1", baseline_inventory=baseline)
+    assert isinstance(rep, CopilotCheckReport)
+    assert rep.scatter == {"list": ["L_scratch"]}
+    assert rep.landed_nodes["list"]["L_scratch"] == 3
+
+
+def test_copilot_check_with_no_baseline_treats_everything_as_scatter() -> None:
+    c = CopilotClient()
+    c.conversations = []
+    c.flows = {"process": [{"_id": "P1"}]}
+    rep = apply_copilot_check(c, "App1", "C1")
+    assert isinstance(rep, CopilotCheckReport)
+    assert rep.scatter.get("process") == ["P1"]
