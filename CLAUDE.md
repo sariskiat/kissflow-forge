@@ -1034,13 +1034,21 @@ FieldMappings without registering the template's VariableRefs produces a
 repeater that visibly repeats N times but shows no per-row data — that is the
 template-binding step missing, not a broken repeater.
 
-Known gaps, worth knowing before you spend time chasing them: rich-text
-component content does not reliably render however it's written (its real
-serialization format has not been captured from a builder-authored example);
-a custom component needs an actual installed component bundle, which has no
-API-driven install path at all; card- and pivot-type report widgets need a
+Known gaps, worth knowing before you spend time chasing them: ⚠️ rich-text
+serialization is now CAPTURED (2026-08-12, #51 — replacing the old "not
+captured" note): the `value` Property holds a PLAIN HTML STRING (`<h2>`,
+`<p><strong>`, `<ul><li>`), no wrapper, survives publish byte-identical;
+builder-UI pixel render still unchecked. A custom component needs an actual
+installed component bundle, which has no API-driven install path at all
+(re-confirmed #51: 4 route families 404, `/marketplace/2/{acct}/component`
+503s — backend exists, nothing installed; manage surface is UI-only under
+Developer > Custom Components); card- and pivot-type report widgets need a
 matching report of that exact type to already exist; and a progress-bar
-widget has been seen configured correctly yet render blank, cause unresolved.
+widget has been seen configured correctly yet render blank, cause unresolved
+(a fresh #51 capture landed one cleanly — render check queued). Navigation
+role-scoping: prefer `Menu.VisibleTo:[<role ids>]` on a shared Navigation
+(no key = visible to all) over duplicating Menus per role — see
+shapes/menu_navigation.json.
 
 - **`Page::Component` registration is NOT load-bearing (#24, proven live
   2026-08-11).** `kfforge/pages.py` never writes `Page::Component`, so a
@@ -1050,17 +1058,20 @@ widget has been seen configured correctly yet render blank, cause unresolved.
   unregistered Component still renders; `add_widget` needs no registration step.
   A page's earlier partial registration (30 of 34) is therefore cosmetic, not
   a render gate. Recorded so nobody chases it again.
-- **A freely-bound single live value on a page is a Known Exclusion (#23,
-  proven live 2026-08-11).** No shape reaches it through this engine + API:
-  every live page on the tenant has ZERO `VariableRef` nodes (re-confirmed
-  live), and the only `VariableRef` builder (`_bind_repeater_row_label`) binds
-  repeater ROW LABELS, never a standalone value; a `general/card`'s `count` is
-  a static int; and a report widget only renders a PRE-EXISTING report's type,
-  which this engine has no route to create. The one genuine live-number path
-  is the native `metrics`/`stepmetrics` widget (flow id only) — but it renders
-  a fixed per-step analytics TABLE, not an arbitrary bound number. So a KPI
-  tile showing e.g. a live "open cases" count is refused at compile, not faked;
-  the metrics table is the buildable substitute where a per-step breakdown fits.
+- **A freely-bound single live value on a page: the #23 Known Exclusion is
+  NARROWED (2026-08-12, #51), not gone.** The old absolute ("no shape reaches
+  it") fell to a live capture: a `VariableRef{Type:"PageVariable",
+  Variable:"<pageVar>.<field>"}` bound into a label's text Property IS a
+  real, reachable freely-bound live value — the working master-detail
+  composition (repeater + `on_click` `setVariable("selectedItem", ...)` +
+  Json-typed page `Variable` + one PageVariable ref per detail label, see
+  shapes/variable_ref.json). What remains excluded: a live AGGREGATE number
+  (an "open cases" count) with no user click feeding the Variable — the
+  engine still has no route to a report of the right type, a `general/card`
+  `count` is still a static int, and `metrics`/`stepmetrics` still renders a
+  fixed per-step analytics TABLE only. So KPI tiles bound to a clicked
+  record: buildable now; KPI tiles bound to a query aggregate: still refused
+  at compile, metrics table is the substitute.
 
 A few operational gotchas:
 

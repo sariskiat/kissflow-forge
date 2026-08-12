@@ -63,7 +63,7 @@
     }
   },
   "notes": [
-    "PARKED UNSOLVED upstream: this widget's Value was set with both plain text and full HTML in earlier probes and never rendered either way — the real serialization is still uncaptured. This shape is only the bare, unconfigured node graph (which does publish and exist on the page); do not treat the `value` Property's content format as settled.",
+    "RESOLVED 2026-08-12 (#51, replacing the old PARKED-UNSOLVED note): the `value` FieldMapping's Property.Value is a PLAIN HTML STRING — standard tags (<h2>, <p>, <strong>, <ul><li>), no wrapper object, no markdown. Captured off a copilot-built widget, survived a publish cycle byte-identical. Builder-UI pixel render still unchecked (write/publish/read-back chain only — THE RULE); that is the one remaining step, queued for the browser round.",
     "Real ids typically use the manifest_id prefix only on a fresh single-widget add (e.g. `Button_<10-char-rand>`, `Metrics_<10-char-rand>`) — the scenario this template mints for — while built-up production pages (`all_pages_draft_20260806.json`) mostly carry the generic `Component_<rand>` id instead, and Repeater/Tab/MasterDetail/Breadcrumbs were never observed prefixed at all."
   ]
 }
