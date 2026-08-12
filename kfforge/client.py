@@ -2250,3 +2250,99 @@ def apply_add_role_users(
         role_id=role_id, added=added, already_present=already,
         not_found=tuple(not_found) + unverified, user_count=read_back.get("UserCount"),
     )
+
+
+# Tier -> (Role, Permission[]) wire map, FLOW-TYPE-DEPENDENT (shapes/app_role_grant.json note 0,
+# browser-proven 2026-08-12). `None` means "No access" — a real removal route
+# (`delete_member`), not a member/batch grant with an empty Permission (which is itself a
+# genuine tier, "Initiate" on a process — CLAUDE.md's own war story about `Permission: []`
+# 200ing while the initiator still can't submit is about a DIFFERENT gap, "InitiateItems"
+# missing, not the SAME thing as "No access").
+_TIER_MAP: dict[FlowKind, dict[str, tuple[str, tuple[str, ...]] | None]] = {
+    "process": {
+        "No access": None,
+        "Initiate": ("Member", ()),
+        "Manage": ("DataAdmin", ("InitiateItems",)),
+    },
+    "case": {
+        "No access": None,
+        "Read-only": ("Viewer", ()),
+        "Initiate": ("Initiator", ()),
+        "Edit": ("Member", ()),
+        "Manage": ("Admin", ()),
+    },
+}
+
+
+@dataclass(frozen=True)
+class TierReport:
+    flow_id: str
+    kind: str
+    role_id: str
+    tier: str
+    verified: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "flow_id": self.flow_id, "kind": self.kind, "role_id": self.role_id,
+            "tier": self.tier, "verified": self.verified, "isError": not self.verified,
+        }
+
+
+def apply_grant_tier(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    role_id: str,
+    tier: str,
+) -> TierReport | Err:
+    """Grant an AppRole a named permission TIER on a flow (shapes/app_role_grant.json note 0):
+    "No access" (a real removal — `DELETE .../member/{role_id}`, not a Permission:[] grant) up
+    through "Manage", the FLOW-TYPE-DEPENDENT tier ladder (process: No access|Initiate|Manage;
+    case adds Read-only|Edit). Unknown `(kind, tier)` combinations are refused loudly, naming the
+    valid set, rather than guessing the nearest tier or role string.
+
+    "No access" is verified by the role's ABSENCE from `get_members`'s read-back; every other
+    tier is verified by the exact (Role, Permission[]) pair landing there.
+    """
+    by_tier = _TIER_MAP.get(kind)
+    if by_tier is None:
+        return Err("verify", f"forge_grant_tier: unknown kind {kind!r} — valid: {sorted(_TIER_MAP)}")
+    if tier not in by_tier:
+        return Err("verify", f"forge_grant_tier: unknown tier {tier!r} for kind {kind!r} — "
+                             f"valid: {sorted(by_tier)}")
+
+    mapped = by_tier[tier]
+    if mapped is None:
+        removed = client.delete_member(kind, flow_id, role_id)
+        if isinstance(removed, Err):
+            return removed
+        read_back = client.get_members(kind, flow_id)
+        if isinstance(read_back, Err):
+            return read_back
+        verified = not any(isinstance(m, dict) and str(m.get("_id")) == role_id for m in read_back)
+        return TierReport(flow_id=flow_id, kind=kind, role_id=role_id, tier=tier, verified=verified)
+
+    role_name, permission = mapped
+    role_detail = client.get_app_role(role_id)
+    if isinstance(role_detail, Err):
+        return role_detail
+    name = role_detail.get("Name")
+    if not isinstance(name, str):
+        return Err("verify", f"apply_grant_tier: role {role_id!r} has no resolvable Name")
+
+    member = {"_id": role_id, "Name": name, "Kind": "AppRole", "Role": role_name,
+             "Permission": list(permission)}
+    posted = client.post_member_batch(kind, flow_id, [member])
+    if isinstance(posted, Err):
+        return posted
+
+    read_back = client.get_members(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+    verified = any(
+        isinstance(m, dict) and str(m.get("_id")) == role_id and m.get("Role") == role_name
+        and sorted(m.get("Permission") or []) == sorted(permission)
+        for m in read_back
+    )
+    return TierReport(flow_id=flow_id, kind=kind, role_id=role_id, tier=tier, verified=verified)

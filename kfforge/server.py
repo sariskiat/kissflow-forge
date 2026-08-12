@@ -68,6 +68,7 @@ from .client import (
     apply_fields,
     apply_fields_and_layout,
     apply_goto_gate,
+    apply_grant_tier,
     apply_layout,
     apply_member_batch,
     apply_member_roles,
@@ -962,6 +963,21 @@ def forge_add_role_users(
         return c.as_tool_result()
     return _result(apply_add_role_users(c, role_id, user_query=user_query, user_ids=user_ids,
                                         app_id=app_id))
+
+
+@mcp.tool()
+def forge_grant_tier(kind: str, flow_id: str, role_id: str, tier: str) -> dict[str, Any]:
+    """LIVE write (dev only, KF_APP): grant an AppRole a named permission TIER on a flow
+    (shapes/app_role_grant.json note 0, browser-proven 2026-08-12). `kind` is "process" (tiers:
+    "No access" | "Initiate" | "Manage") or "case" (adds "Read-only" | "Edit"). "No access" is a
+    REAL removal (`DELETE .../member/{role_id}`), never a Permission:[] grant — that shape is
+    itself the "Initiate" tier on a process. An unknown `(kind, tier)` pair is refused loudly,
+    naming the valid set for that kind, rather than guessing the nearest tier.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_grant_tier(c, kind, flow_id, role_id, tier))  # type: ignore[arg-type]
 
 
 # =====================================================================================

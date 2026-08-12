@@ -9,7 +9,7 @@ from typing import Any
 
 from test_client import DEV, FakeClient, _bare_process_draft
 
-from kfforge.client import Err, RoleUsersReport, apply_add_role_users
+from kfforge.client import Err, RoleUsersReport, TierReport, apply_add_role_users, apply_grant_tier
 
 
 def _bare_draft(version: str = "v1") -> dict[str, Any]:
@@ -91,3 +91,68 @@ def test_add_role_users_existing_members_carried_over_never_dropped() -> None:
     assert rep.added == ("U1",)
     live_ids = {m["_id"] for m in c.app_roles[0]["Members"]}
     assert live_ids == {"U0", "U1"}, "granting a new user must never drop an existing member"
+
+
+# ---- forge_grant_tier (#2) --------------------------------------------------------------------
+
+
+class TierClient(FakeClient):
+    def __init__(self, app_roles: list[dict[str, Any]]) -> None:
+        super().__init__(_bare_draft())
+        self.app_roles = app_roles
+        self.deleted_members: list[tuple[str, str, str]] = []
+
+    def delete_member(self, kind, flow_id, role_id):  # type: ignore[override]
+        self.deleted_members.append((kind, flow_id, role_id))
+        self.members[(kind, flow_id)] = [
+            m for m in self.members.get((kind, flow_id), []) if m.get("_id") != role_id
+        ]
+        return {"status": "success"}
+
+
+def test_grant_tier_process_manage_grants_dataadmin_initiateitems() -> None:
+    c = TierClient([{"_id": "R1", "Name": "Reviewer"}])
+    rep = apply_grant_tier(c, "process", "F1", "R1", "Manage")
+    assert isinstance(rep, TierReport)
+    assert rep.verified is True and rep.as_tool_result()["isError"] is False
+    kind, flow_id, members = c.member_batches[0]
+    assert members[0]["Role"] == "DataAdmin" and members[0]["Permission"] == ["InitiateItems"]
+
+
+def test_grant_tier_process_initiate_is_member_with_empty_permission() -> None:
+    c = TierClient([{"_id": "R1", "Name": "Reviewer"}])
+    rep = apply_grant_tier(c, "process", "F1", "R1", "Initiate")
+    assert isinstance(rep, TierReport) and rep.verified is True
+    members = c.member_batches[0][2]
+    assert members[0]["Role"] == "Member" and members[0]["Permission"] == []
+
+
+def test_grant_tier_no_access_deletes_the_member_route() -> None:
+    c = TierClient([{"_id": "R1", "Name": "Reviewer"}])
+    c.members[("process", "F1")] = [{"_id": "R1", "Role": "DataAdmin", "Permission": ["InitiateItems"]}]
+    rep = apply_grant_tier(c, "process", "F1", "R1", "No access")
+    assert isinstance(rep, TierReport) and rep.verified is True
+    assert c.deleted_members == [("process", "F1", "R1")]
+    assert c.member_batches == [], "No access must never go through member/batch"
+
+
+def test_grant_tier_case_adds_read_only_and_edit_tiers() -> None:
+    c = TierClient([{"_id": "R1", "Name": "Reviewer"}])
+    rep = apply_grant_tier(c, "case", "F1", "R1", "Read-only")
+    assert isinstance(rep, TierReport) and rep.verified is True
+    assert c.member_batches[0][2][0]["Role"] == "Viewer"
+
+
+def test_grant_tier_unknown_kind_rejected_before_any_write() -> None:
+    c = TierClient([{"_id": "R1", "Name": "Reviewer"}])
+    got = apply_grant_tier(c, "form", "F1", "R1", "Manage")  # type: ignore[arg-type]
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.member_batches == [] and c.deleted_members == []
+
+
+def test_grant_tier_unknown_tier_rejected_before_any_write() -> None:
+    c = TierClient([{"_id": "R1", "Name": "Reviewer"}])
+    got = apply_grant_tier(c, "process", "F1", "R1", "Superuser")
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "Superuser" in got.message
+    assert c.member_batches == []
