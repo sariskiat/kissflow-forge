@@ -173,6 +173,11 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
 **13. Simulate — `forge_simulate_case`.** Walk a real item to completion. Two-item divergence
    (different deciding-field values landing on different steps) is the ONLY proof a split works.
    A loop-stays walk (Boolean unticked → item stays put) is the only proof a gate works.
+   ⚠️ The fill `values` map is keyed by field **IDs, not names** — a name yields
+   `KISSFLOW_ERROR_01003 FieldNotFound` (live Cowork finding). Read the flow
+   first (`kf_get_flow_schema`) and resolve each Field node's `Name`→`Id`, then fill by id.
+   (Owed engine fix: `forge_simulate_case` should translate names→ids itself off the live draft,
+   as the eval build_driver already does — until it lands, do the resolve step yourself.)
 
 ## Intent → tool map
 
