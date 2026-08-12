@@ -223,6 +223,26 @@ def test_table_host_and_child_columns_take_no_permission(draft, matrix):
     assert [p for p in perms.values() if p["Column"] in children] == []
 
 
+def test_section_owner_name_binds_section_not_same_named_table_host(draft):
+    # A banner Section and a table can share a Name (the golden "FDE Log": a banner caption above a
+    # same-named table). The section-owner name must bind the SECTION node, never the empty
+    # table-host Model column. Before the fix, a last-wins name map bound the host, left the real
+    # section's field column covered by nothing, and set_step_permissions hard-rejected the flow.
+    collide = "Intake"  # an existing Section that OWNS field columns in the synthetic draft
+    section_cols = _section_cols(draft)[collide]
+    assert section_cols, "precondition: the colliding section must hold at least one field"
+    d = add_table(draft, collide, [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER)])
+    host, children = _table_cols(d)
+    applied = set_step_permissions(d, progressive_matrix(d, OWNERS))  # must NOT raise
+    perms = _nodes(applied, "Permission")
+    # the banner section's own field columns ARE covered (permissions emitted for them)...
+    for cid in section_cols:
+        assert [p for p in perms.values() if p["Column"] == cid], cid
+    # ...and the same-named table host emits no Permission at all.
+    assert [p for p in perms.values() if p["Column"] == host] == []
+    assert [p for p in perms.values() if p["Column"] in children] == []
+
+
 def test_table_child_columns_excluded_even_when_nested_model_backref_missing(draft, matrix):
     # A live read-back can drop the nested table Model's `Column` back-ref; the host column's own
     # `Column::Model` must still let the coverage check resolve (and exclude) the table's columns,

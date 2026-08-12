@@ -1659,8 +1659,21 @@ def set_step_permissions(draft: Draft, matrix: Matrix, field_matrix: Matrix | No
     _sweep_dangling(new)
 
     members = _section_members(new)
-    sec_id_of_name = {v["Name"]: k for k, v in _kind(new, "Column").items()
-                      if v.get("Type") in ("Section", "Model") and v.get("Name")}
+    # A section-owner name resolves ONLY to its Section node. A table-host Model column can carry
+    # the SAME Name (a banner Section sitting above a same-named table, e.g. "FDE Log"); a plain
+    # last-wins name map would bind the empty Model host instead, leaving the real Section's field
+    # column covered by nothing -> a hard, wrong reject. Section always wins regardless of iteration
+    # order; a Model name is kept only as a fallback when no Section owns it, so non-colliding
+    # table names still resolve exactly as before.
+    sec_id_of_name: dict[str, str] = {}
+    for k, v in _kind(new, "Column").items():
+        name = v.get("Name")
+        if not name:
+            continue
+        if v.get("Type") == "Section":
+            sec_id_of_name[name] = k
+        elif v.get("Type") == "Model" and name not in sec_id_of_name:
+            sec_id_of_name[name] = k
 
     # field-level overrides: field NAME -> the single field column id they govern (a Field node's
     # Column; field columns themselves carry Name=None, so resolve through the Field node).
