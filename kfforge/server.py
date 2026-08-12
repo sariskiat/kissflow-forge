@@ -58,6 +58,7 @@ from fastmcp import FastMCP
 
 from . import tools
 from .capabilities import search_capabilities
+from .playbook import load_playbook
 from .client import (
     Err,
     KfClient,
@@ -1117,6 +1118,18 @@ def forge_capabilities(query: str = "") -> dict[str, Any]:
     call instead of a dangling file reference.
     """
     return search_capabilities(query)
+
+
+@mcp.tool()
+def forge_playbook() -> dict[str, Any]:
+    """OFFLINE, read-only: return the full builder PLAYBOOK — the doctrine a fresh Claude needs to
+    drive this engine correctly (THE RULE that a 200/publish proves nothing, the proven numbered
+    build order, the intent->tool map, the refuse-loudly table, the copilot fallback). Call this
+    FIRST when you have the forge_* tools but no local kissflow-forge-builder skill loaded — it is
+    the brain that ships with the MCP so it travels even to a remote user with no local files. Deep
+    wire shapes it references live in `forge_capabilities(<id>)`.
+    """
+    return load_playbook()
 
 
 @mcp.tool()

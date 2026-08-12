@@ -1225,6 +1225,15 @@ read.
 
 ## Agent skills
 
+### Builder playbook
+
+The fresh-context builder brain (THE RULE, the numbered build order, the intent→tool map, the
+refuse-loudly table, the copilot fallback) is vendored at `skills/kissflow-forge-builder/SKILL.md`
+so it version-controls with the codebase and ships with the MCP — `~/.claude/skills` is local-dev
+only and does NOT deploy. It is served over the wire by the `forge_playbook` tool
+(`kfforge/playbook.py`), so a remote user's Claude fetches the doctrine at runtime with no local
+file; deep wire shapes it references live in `forge_capabilities(<id>)`.
+
 ### Issue tracker
 
 GitHub Issues via the `gh` CLI, inferred from this repo's `origin` remote
