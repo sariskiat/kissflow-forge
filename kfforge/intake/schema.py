@@ -142,14 +142,43 @@ START_STAGE: str = "Start"
 
 
 class EventTrigger(StrEnum):
-    """The field-event trigger string (CLAUDE.md Field events). Only `ON_CHANGE` has actually
-    been captured live off a real builder-authored event; the other two are named per Kissflow's
-    OWN documentation of which trigger family a field TYPE uses, never captured, and must be
-    treated as a guess at the wire string's exact casing until someone captures one for real.
+    """The field-event trigger string (CLAUDE.md Field events). All three wire strings are now
+    LIVE-OBSERVED on a published flow (2026-08-10 eval-case-1 read, issue #12 — replacing the
+    earlier "per-docs guess" belief outright): a Select source fires `onClick`, Date and Number
+    sources fire `onSelect`, Text/Textarea sources fire `onChange`. The trigger is a FUNCTION of
+    the SOURCE field's type — derive it with `trigger_for`, never pick it by hand: a wrong
+    trigger writes fine, publishes fine, and simply never fires.
     """
-    ON_CHANGE = "onChange"  # CONFIRMED live capture
-    ON_SELECT = "onSelect"  # UNVERIFIED — per-docs guess (Date/Number/User/Currency/.../Slider)
-    ON_CLICK = "onClick"    # UNVERIFIED — per-docs guess (Button/Dropdown/Yes-No)
+    ON_CHANGE = "onChange"  # live: Text, Textarea
+    ON_SELECT = "onSelect"  # live: Date, Number · family-inferred, unverified: User
+    ON_CLICK = "onClick"    # live: Select        · family-inferred, unverified: Boolean
+
+
+# The (source type -> trigger) pairs actually observed on a live published flow. A derivation for
+# a type OUTSIDE this set still compiles, but the plan flags it UNVERIFIED so the uncertainty
+# travels with the op instead of getting silently smoothed over.
+TRIGGER_LIVE_CONFIRMED: frozenset[FieldType] = frozenset({
+    FieldType.TEXT, FieldType.TEXTAREA, FieldType.DATE, FieldType.NUMBER, FieldType.SELECT,
+})
+
+
+def trigger_for(t: FieldType) -> EventTrigger:
+    """The event trigger a SOURCE field of type `t` actually fires (issue #12: defaulting every
+    event to `onChange` gave Select/Date/Number sources a trigger that never fires, with no error
+    anywhere). Attachment takes no events at all (CLAUDE.md Field events) — refused loudly here,
+    never downgraded."""
+    match t:
+        case FieldType.TEXT | FieldType.TEXTAREA:
+            return EventTrigger.ON_CHANGE
+        case FieldType.DATE | FieldType.NUMBER | FieldType.USER:
+            return EventTrigger.ON_SELECT
+        case FieldType.SELECT | FieldType.BOOLEAN:
+            return EventTrigger.ON_CLICK
+        case FieldType.ATTACHMENT:
+            raise ValueError(
+                "Attachment fields take no events at all (CLAUDE.md Field events) — an event "
+                "cannot be wired onto an Attachment source"
+            )
 
 
 # ---- 1. problem / goal -------------------------------------------------------------------------
@@ -328,10 +357,16 @@ class ComputedReq:
     is exactly the bug this check exists to catch. `formula_intent` is prose, not a formula
     language, on purpose: this dimension exists to be turned into real JS by whatever builds the
     event, not to invent yet another expression syntax here.
+
+    `trigger` (#12): leave it `None` — the compiler derives the right trigger PER SOURCE FIELD
+    from that field's real type via `trigger_for`, because the trigger is a function of the
+    source's type, not a free choice (a wrong one writes fine and simply never fires). An
+    explicit value is validated against the derived trigger for EVERY source and refused on any
+    mismatch — so mixed-trigger-family sources require `None`.
     """
     target_field: str
     source_fields: tuple[str, ...]
-    trigger: EventTrigger
+    trigger: EventTrigger | None
     formula_intent: str
 
 

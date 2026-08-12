@@ -127,7 +127,7 @@ def _full_spec(*, approved: bool = True) -> AppSpec:
                 ), max_rows=20),
             ),
             computed=(
-                ComputedReq("Total Parts Cost", ("Quantity", "Unit Cost"), EventTrigger.ON_CHANGE,
+                ComputedReq("Total Parts Cost", ("Quantity", "Unit Cost"), None,
                             "quantity times unit cost, summed across every row"),
             ),
             # two DISTINCT sections at the SAME stage — the exact shape a forced
@@ -850,20 +850,70 @@ def test_computed_source_resolves_against_table_columns() -> None:
 
 
 def test_set_events_flags_unverified_trigger() -> None:
+    """A Boolean source derives onClick by FAMILY inference, never captured live — the op's why
+    must carry UNVERIFIED naming that source (#12)."""
     full = _full_spec()
     bad_computed = tuple(
-        dataclasses.replace(c, trigger=EventTrigger.ON_SELECT) for c in full.data_model.computed
+        dataclasses.replace(c, trigger=None, source_fields=("Quality Passed",))
+        for c in full.data_model.computed
     )
     spec = _replace_data_model(full, computed=bad_computed)
     plan = compile_spec(spec)
     event_op = next(op for op in plan.ops if op.kind == "set_events")
     assert "UNVERIFIED" in event_op.why
+    assert "Quality Passed" in event_op.why
 
 
-def test_set_events_confirms_on_change_trigger() -> None:
+def test_set_events_confirms_live_observed_trigger() -> None:
+    """Number sources -> onSelect is a live-observed pair; the op's why says CONFIRMED and the
+    derived per-source triggers land in args (#12)."""
     plan = compile_spec(_full_spec())
     event_op = next(op for op in plan.ops if op.kind == "set_events")
     assert "CONFIRMED" in event_op.why
+    assert event_op.args["triggers"] == {"Quantity": "onSelect", "Unit Cost": "onSelect"}
+
+
+def test_trigger_derived_per_source_family() -> None:
+    """#12: one source per trigger family — Select->onClick, Number->onSelect, Text->onChange —
+    derived from the source field's own type, never defaulted to onChange."""
+    full = _full_spec()
+    spec = _replace_data_model(full, computed=(
+        ComputedReq("Total Parts Cost", ("Urgency", "Quantity", "Unit Name"),
+                    None, "derived-trigger fan-out"),
+    ))
+    plan = compile_spec(spec)
+    event_op = next(op for op in plan.ops if op.kind == "set_events")
+    assert event_op.args["triggers"] == {
+        "Urgency": "onClick",     # Select — live-observed (was wrongly onChange before #12)
+        "Quantity": "onSelect",   # Number — live-observed (Date shares the family)
+        "Unit Name": "onChange",  # Text — live-observed
+    }
+
+
+def test_trigger_explicit_mismatch_refused() -> None:
+    """An explicit trigger that the source's type can never fire is refused at compile with the
+    derived trigger named — not written and discovered never (#12)."""
+    full = _full_spec()
+    spec = _replace_data_model(full, computed=(
+        ComputedReq("Total Parts Cost", ("Quantity",), EventTrigger.ON_CHANGE, "x"),
+    ))
+    with pytest.raises(ValueError, match="onSelect"):
+        compile_spec(spec)
+
+
+def test_trigger_attachment_source_refused() -> None:
+    """An Attachment source takes no events at all (CLAUDE.md Field events) — refused loudly,
+    never downgraded to some trigger that cannot exist."""
+    full = _full_spec()
+    spec = _replace_data_model(
+        full,
+        fields=full.data_model.fields + (
+            FieldReq("Damage Photos", FieldType.ATTACHMENT, False, "Intake"),
+        ),
+        computed=(ComputedReq("Total Parts Cost", ("Damage Photos",), None, "x"),),
+    )
+    with pytest.raises(ValueError, match="no events"):
+        compile_spec(spec)
 
 
 # ---- M11: test cases validated for real; per-stage-visit fills, not a flat dict ---------------

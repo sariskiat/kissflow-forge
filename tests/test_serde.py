@@ -18,7 +18,7 @@ from test_intake import (  # tests/ is on sys.path, see conftest.py
     _linear_spec,
 )
 
-from kfforge.intake.schema import AppSpec, DataModel, FieldReq, ProblemGoal
+from kfforge.intake.schema import AppSpec, DataModel, EventTrigger, FieldReq, ProblemGoal
 from kfforge.intake.serde import spec_from_dict, spec_to_dict, to_wire
 from kfforge.types import FieldType, Visibility
 
@@ -85,7 +85,19 @@ def test_enums_survive_the_round_trip_as_real_enum_members() -> None:
     vis_entry = got.visibility.entries[0]
     assert isinstance(vis_entry.permission, Visibility)
     computed = got.data_model.computed[0]
-    assert computed.trigger.value == "onChange"
+    assert computed.trigger is None  # the derive-per-source default survives as a real None
+    # an EXPLICIT trigger still round-trips as the real enum member (matching the Number
+    # sources' own derived onSelect — anything else is refused at compile, #12)
+    explicit = dataclasses.replace(
+        spec,
+        data_model=dataclasses.replace(
+            spec.data_model,
+            computed=tuple(dataclasses.replace(c, trigger=EventTrigger.ON_SELECT)
+                           for c in spec.data_model.computed),
+        ),
+    )
+    got2 = spec_from_dict(spec_to_dict(explicit))
+    assert got2.data_model.computed[0].trigger is EventTrigger.ON_SELECT
 
 
 def test_enum_wire_value_is_the_plain_string_not_an_enum_repr() -> None:

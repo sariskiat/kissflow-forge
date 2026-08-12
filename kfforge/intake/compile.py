@@ -32,6 +32,7 @@ from ..pages import WIDGET_REQUIRED_CONFIG, WIDGET_SLUGS
 from ..types import FieldType, Visibility
 from .schema import (
     START_STAGE,
+    TRIGGER_LIVE_CONFIRMED,
     AppSpec,
     ClickActionKind,
     EventTrigger,
@@ -41,6 +42,7 @@ from .schema import (
     PopupIntent,
     TableReq,
     WidgetIntent,
+    trigger_for,
 )
 
 # The proven build order (CLAUDE.md "Build order"), most foundational first. This is the ONE
@@ -205,28 +207,47 @@ def _check_tables(spec: AppSpec) -> None:
                 )
 
 
+def _computed_type_of(spec: AppSpec) -> dict[str, FieldType]:
+    """Field/table-column name -> its real FieldType, the source of truth a trigger derives from."""
+    type_of = {f.name: f.type for f in spec.data_model.fields}
+    for t in spec.data_model.tables:
+        type_of.update({c.name: c.type for c in t.columns})
+    return type_of
+
+
 def _check_computed_fields(spec: AppSpec) -> None:
     """A computed field's target or source naming something that isn't a real field OR table
-    column, or a `trigger` that isn't a real EventTrigger member."""
-    known = {f.name for f in spec.data_model.fields}
-    for t in spec.data_model.tables:
-        known |= {c.name for c in t.columns}
+    column; a `trigger` that isn't an EventTrigger member or None; a source whose type takes no
+    events at all (Attachment); or an EXPLICIT trigger that disagrees with the one the source's
+    own type derives (#12 — a mismatched trigger writes fine and never fires, so it is refused
+    here instead of discovered never)."""
+    type_of = _computed_type_of(spec)
     for c in spec.data_model.computed:
-        if not isinstance(c.trigger, EventTrigger):
+        if c.trigger is not None and not isinstance(c.trigger, EventTrigger):
             raise ValueError(  # noqa: TRY004 — see _check_fields for why ValueError here
                 f"computed field {c.target_field!r} has trigger {c.trigger!r}, not an "
-                f"EventTrigger enum member"
+                f"EventTrigger enum member or None"
             )
-        if c.target_field not in known:
+        if c.target_field not in type_of:
             raise ValueError(
                 f"computed field target {c.target_field!r} is not a known field or table "
-                f"column ({sorted(known)})"
+                f"column ({sorted(type_of)})"
             )
         for src in c.source_fields:
-            if src not in known:
+            if src not in type_of:
                 raise ValueError(
                     f"computed field {c.target_field!r} source {src!r} is not a known field or "
-                    f"table column ({sorted(known)})"
+                    f"table column ({sorted(type_of)})"
+                )
+            try:
+                derived = trigger_for(type_of[src])
+            except ValueError as e:  # Attachment: no event exists for this source at all
+                raise ValueError(f"computed field {c.target_field!r} source {src!r}: {e}") from e
+            if c.trigger is not None and c.trigger is not derived:
+                raise ValueError(
+                    f"computed field {c.target_field!r}: explicit trigger {c.trigger.value!r} "
+                    f"never fires on source {src!r} ({type_of[src].value}) — its type derives "
+                    f"{derived.value!r}; leave trigger None to derive per source"
                 )
 
 
@@ -1161,22 +1182,27 @@ def _op_set_visibility(spec: AppSpec) -> tuple[Op, ...]:
 
 
 def _op_set_events(spec: AppSpec) -> tuple[Op, ...]:
-    """One op per computed field (dimension 6). `why` flags whether the trigger string is
-    CONFIRMED (`onChange`) or UNVERIFIED (`onSelect`/`onClick` — never captured live, see
-    `schema.EventTrigger`), so that uncertainty travels with the plan instead of getting
+    """One op per computed field (dimension 6). Triggers are DERIVED per source field from that
+    field's real type via `trigger_for` (#12 — the trigger is a function of the source's type; a
+    hand-picked wrong one writes fine and never fires). `why` flags whether every derived
+    (source type -> trigger) pair is live-observed (`TRIGGER_LIVE_CONFIRMED`) or family-inferred
+    (User/Boolean — UNVERIFIED), so the uncertainty travels with the plan instead of getting
     silently smoothed over."""
+    type_of = _computed_type_of(spec)
     ops = []
     for c in spec.data_model.computed:
-        confirmed = c.trigger is EventTrigger.ON_CHANGE
+        triggers = {s: trigger_for(type_of[s]).value for s in c.source_fields}
+        unverified = sorted(s for s in c.source_fields
+                            if type_of[s] not in TRIGGER_LIVE_CONFIRMED)
         ops.append(Op(
             kind="set_events",
             args={"target_field": c.target_field, "source_fields": c.source_fields,
-                  "trigger": c.trigger.value, "formula_intent": c.formula_intent},
+                  "triggers": triggers, "formula_intent": c.formula_intent},
             why=(f"computed {c.target_field!r} via an event on its source field(s), never the "
-                 f"target (Field events); trigger {c.trigger.value!r} is "
-                 + ("CONFIRMED live" if confirmed else
-                    "UNVERIFIED — capture off a real builder-authored event before relying on "
-                    "this wire string")),
+                 f"target (Field events); per-source triggers derived from source type — "
+                 + (f"UNVERIFIED for {unverified} (family-inferred trigger, never captured "
+                    f"live; capture off a real builder-authored event before relying on it)"
+                    if unverified else "every (source type -> trigger) pair CONFIRMED live")),
         ))
     return tuple(ops)
 

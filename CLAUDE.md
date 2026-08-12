@@ -552,12 +552,14 @@ Field { ..., "Field::Event": ["Event_Sample01"] }        # back-reference, bidir
 Event { Id, Kind:"Event", Field:<field id>, Trigger:"onChange", Script:"<raw JS>" }
 ```
 
-`onChange` is the confirmed trigger string. The trigger name likely varies by
-the *source* field's type in other cases (a select-style field may use an
-"on select" style trigger, a click-style widget an "on click" style trigger)
-but only `onChange` has actually been captured live — treat any other trigger
-string as unverified until you've captured it the same way, off a real
-builder-authored event.
+**The trigger is a FUNCTION of the SOURCE field's type**, and all three wire
+strings are now LIVE-OBSERVED on a published flow (2026-08-10 eval-case read,
+issue #12 — replacing the earlier belief that only `onChange` was captured):
+a Select source fires `onClick`, Date and Number sources fire `onSelect`,
+Text/Textarea sources fire `onChange`. A hand-picked wrong trigger writes
+fine, publishes fine, and simply never fires — derive it from the source
+type (`kfforge.intake.schema.trigger_for`), never guess it. User→`onSelect`
+and Boolean→`onClick` are family-inferred, still unverified live.
 
 Six field types never get an event at all — the builder offers no Event tab
 for any of them, so there's no trigger string to find no matter how hard you
