@@ -2525,3 +2525,68 @@ def apply_dataset_records(
                "records": rows, "isError": False}
 
     return Err("verify", f"apply_dataset_records: unknown op {op!r} — valid: create, list")
+
+
+@dataclass(frozen=True)
+class RolePreferenceReport:
+    role_id: str
+    default_page: str | None
+    default_navigation: str | None
+    verified: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "role_id": self.role_id, "default_page": self.default_page,
+            "default_navigation": self.default_navigation, "verified": self.verified,
+            "isError": not self.verified,
+        }
+
+
+def apply_set_role_preference(
+    client: KfClient,
+    role_id: str,
+    default_page: str | None = None,
+    default_navigation: str | None = None,
+    app_id: str | None = None,
+) -> RolePreferenceReport | Err:
+    """Set an AppRole's own default page/navigation (shapes/app_role_grant.json note 0, write
+    route proven live 2026-08-12): `PUT /app_role/2/{acct}/{role_id}?_application_id={app}` body
+    `{"Preference": {"DefaultPage": <page id or "Default">, "DefaultNavigation": <Navigation
+    node's own Id, e.g. "Navigation001", or "Default">}}` — the sentinel string `"Default"` is
+    valid for either key, meaning "use the platform default".
+
+    Reuses the SAME `put_app_role` write route `apply_add_role_users` uses, and the same
+    `_role_write_body` helper (`Members`->`Users` passthrough), so setting only a preference never
+    accidentally drops existing membership. At least one of `default_page`/`default_navigation`
+    must be given. Verified by re-reading the role's own `Preference` block.
+    """
+    if default_page is None and default_navigation is None:
+        return Err("verify", "apply_set_role_preference: give default_page or default_navigation")
+
+    detail = client.get_app_role(role_id)
+    if isinstance(detail, Err):
+        return detail
+
+    body = _role_write_body(detail)
+    pref = dict(body.get("Preference") or {})
+    if default_page is not None:
+        pref["DefaultPage"] = default_page
+    if default_navigation is not None:
+        pref["DefaultNavigation"] = default_navigation
+    body["Preference"] = pref
+
+    written = client.put_app_role(role_id, body, app_id)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_app_role(role_id)
+    if isinstance(read_back, Err):
+        return read_back
+    live_pref = read_back.get("Preference") or {}
+    verified = all(
+        live_pref.get(k) == v for k, v in
+        (("DefaultPage", default_page), ("DefaultNavigation", default_navigation))
+        if v is not None
+    )
+    return RolePreferenceReport(role_id=role_id, default_page=default_page,
+                                default_navigation=default_navigation, verified=verified)

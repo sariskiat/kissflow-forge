@@ -12,11 +12,13 @@ from test_client import DEV, FakeClient, _bare_process_draft
 from kfforge.client import (
     Err,
     FlowCreateReport,
+    RolePreferenceReport,
     RoleUsersReport,
     TierReport,
     apply_add_role_users,
     apply_dataset_records,
     apply_grant_tier,
+    apply_set_role_preference,
     create_flow_any,
     publish_application_verified,
 )
@@ -333,4 +335,37 @@ def test_dataset_records_list_returns_columns_and_rows() -> None:
 def test_dataset_records_unknown_op_rejected() -> None:
     c = DatasetRecordClient()
     got = apply_dataset_records(c, "F1", "update", record={"Name": "x"})
+    assert isinstance(got, Err) and got.kind == "verify"
+
+
+# ---- forge_set_role_preference (#6) -------------------------------------------------------------
+
+
+def test_set_role_preference_writes_default_page_and_navigation() -> None:
+    c = RoleUsersClient([{"_id": "R1", "Name": "Reviewer", "Members": [], "UserCount": 0}])
+    rep = apply_set_role_preference(c, "R1", default_page="Page_123",
+                                    default_navigation="Navigation001")
+    assert isinstance(rep, RolePreferenceReport)
+    assert rep.verified is True
+    live = c.app_roles[0]["Preference"]
+    assert live == {"DefaultPage": "Page_123", "DefaultNavigation": "Navigation001"}
+
+
+def test_set_role_preference_default_sentinel_is_accepted() -> None:
+    c = RoleUsersClient([{"_id": "R1", "Name": "Reviewer", "Members": [], "UserCount": 0}])
+    rep = apply_set_role_preference(c, "R1", default_page="Default")
+    assert isinstance(rep, RolePreferenceReport) and rep.verified is True
+    assert c.app_roles[0]["Preference"]["DefaultPage"] == "Default"
+
+
+def test_set_role_preference_never_drops_existing_members() -> None:
+    c = RoleUsersClient([{"_id": "R1", "Name": "Reviewer",
+                          "Members": [{"_id": "U0", "Kind": "User", "Name": "Old"}], "UserCount": 1}])
+    apply_set_role_preference(c, "R1", default_page="Page_1")
+    assert c.app_roles[0]["Members"] == [{"_id": "U0", "Kind": "User", "Name": "Old"}]
+
+
+def test_set_role_preference_requires_at_least_one_key() -> None:
+    c = RoleUsersClient([{"_id": "R1", "Name": "Reviewer", "Members": [], "UserCount": 0}])
+    got = apply_set_role_preference(c, "R1")
     assert isinstance(got, Err) and got.kind == "verify"

@@ -76,6 +76,7 @@ from .client import (
     apply_report_members,
     apply_section_style,
     apply_sequence_number,
+    apply_set_role_preference,
     apply_step_permissions,
     apply_table,
     apply_word_list,
@@ -1029,6 +1030,28 @@ def forge_dataset_records(
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_dataset_records(c, flow_id, op, record))
+
+
+@mcp.tool()
+def forge_set_role_preference(
+    role_id: str,
+    default_page: str | None = None,
+    default_navigation: str | None = None,
+    app_id: str | None = None,
+) -> dict[str, Any]:
+    """LIVE write (dev only): set an AppRole's own default page/navigation
+    (`PUT /app_role/2/{acct}/{role_id}?_application_id={app}` body
+    `{"Preference": {"DefaultPage": ..., "DefaultNavigation": ...}}`). The sentinel string
+    `"Default"` is valid for either key ("use the platform default"). At least one of
+    `default_page`/`default_navigation` is required. Reuses the SAME write route as
+    forge_add_role_users, so existing membership is never dropped by this call. Verified by
+    re-reading the role's own `Preference` block.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_set_role_preference(c, role_id, default_page=default_page,
+                                             default_navigation=default_navigation, app_id=app_id))
 
 
 # =====================================================================================
