@@ -162,6 +162,24 @@ def test_goto_gate_on_optional_select_flagged(clean_draft: Draft) -> None:
     assert any("optional Select" in p for p in report.problems)
 
 
+# ---- 5. sparse matrix must ignore a table host column ------------------------
+
+def test_table_host_column_is_not_counted_sparse(clean_draft: Draft) -> None:
+    # A table HOST column (Type:"Model") takes NO Permission — Kissflow shows/hides the whole
+    # table, not its host cell (CLAUDE.md > Tables). set_step_permissions skips hosts by design,
+    # so the sparse-matrix rule must NOT demand a Permission per step for the host, or a
+    # table-bearing flow with an otherwise-complete matrix reads as "sparse" (host x every step).
+    from kfforge.graph import add_table
+    from kfforge.types import FieldType
+
+    d = add_table(synthetic_process_draft(), "Line Items",
+                  [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER)])
+    owners = {**OWNERS, "Other": ["Wrap-up report"]}
+    d = set_step_permissions(d, progressive_matrix(d, owners))
+    report = doctor(d)
+    assert not any("sparse" in p for p in report.problems), report.problems
+
+
 # ---- 3. dangling :: references -------------------------------------------------
 
 def test_dangling_list_ref_flagged(clean_draft: Draft) -> None:

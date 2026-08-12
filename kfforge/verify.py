@@ -259,10 +259,13 @@ def doctor(
 
     # 5. sparse permission matrix  <- fields silently keep a default visibility
     # A hidden or SequenceNumber column has no per-step visibility to set — the builder writes
-    # zero Permissions for a system-filled column, which is never shown on a form (#9).
+    # zero Permissions for a system-filled column, which is never shown on a form (#9). A table
+    # HOST column (Type:"Model") likewise takes NO Permission — Kissflow shows/hides the whole
+    # table, not its host cell (CLAUDE.md > Tables, Visibility). `set_step_permissions` skips hosts
+    # by design, so counting them here made a table-bearing flow's matrix read "sparse" by exactly
+    # one host-column x every step, even when every real field was covered — must exclude them too.
     units = ({k for k, v in N.items() if v.get("Kind") == "Column" and v.get("Type") == "Field"}
              - _table_child_columns(draft) - _no_permission_columns(draft))
-    units |= {k for k, v in N.items() if v.get("Type") == "Model"}
     acts = [k for k, v in N.items() if v.get("Kind") == "Activity"
             and v.get("NodeType") not in ROUTING_NODE_TYPES]
     have = {(p["Column"], p["Activity"]) for p in N.values() if p.get("Kind") == "Permission"}
