@@ -1580,10 +1580,10 @@ def test_check_api_impossible_widget_inside_popup_raises_naming_row() -> None:
     full = _full_spec()
     v = full.personas.views[0]
     p = dataclasses.replace(v.pages[0],
-                            popups=(PopupIntent("Detail", (WidgetIntent("general/rich_text"),)),))
+                            popups=(PopupIntent("Detail", (WidgetIntent("custom"),)),))
     bad = dataclasses.replace(
         full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
-    with pytest.raises(ValueError, match="rich-text-content"):
+    with pytest.raises(ValueError, match="custom-component"):
         compile_spec(bad)
 
 

@@ -70,7 +70,7 @@ REQUIRED_KEYS = frozenset({
     "duplicate-branch-step",      # S3 (#34): same step name in two branches
     "word-list-dropdown", "section-styling", "report-widget",
     # absorbed #7 API-impossible set
-    "report-creation", "rich-text-content", "custom-component", "role-scoped-visibility",
+    "report-creation", "custom-component", "role-scoped-visibility",
 })
 
 # The only refuses-loudly rows that legitimately carry NO ticket — permanent Known
@@ -81,7 +81,7 @@ KNOWN_EXCLUSION_KEYS = frozenset({
     "cross-branch-jump", "auto-step", "unclaimed-value", "nested-split", "duplicate-branch-step",
     # B2 (#36): the API-impossible set, flipped from pending #36 to permanent Known Exclusions —
     # each is now wired to a compile refusal (ADR-0004), no capability ticket left to wait on.
-    "rich-text-content", "custom-component", "report-creation",
+    "custom-component", "report-creation",
     # #20 page layer: permanent Known Exclusions (a written reason, no ticket). The two live-value
     # tiles (#23, proven live 2026-08-11), the native-rendered status pill, and the multi-pane
     # tabbed interface (D6: no silent downgrade, no composition builder, no build ticket scoped yet).
@@ -394,7 +394,7 @@ def test_sequential_splits_row_wired_to_a_real_build() -> None:
 # not re-implemented at compile here.
 
 API_IMPOSSIBLE_COMPILE_KEYS = frozenset({
-    "rich-text-content", "custom-component", "report-creation",
+    "custom-component", "report-creation",
 })
 
 # The refuse-rows that legitimately remain pending after B2 closes the contract: three future BUILD
@@ -446,13 +446,13 @@ def test_pending_refuse_rows_are_exactly_the_allowlist() -> None:
     )
 
 
-def test_rich_text_content_row_is_wired_to_a_real_refusal() -> None:
-    """AC2/AC3 (B2): a page carrying a rich-text widget is refused at compile, naming the
-    `rich-text-content` row — ADR-0004, never built as best-effort plain text."""
-    spec = _spec_with_widget(WidgetIntent("general/rich_text"))
-    with pytest.raises(ValueError, match="rich-text-content"):
-        compile_spec(spec)
-    assert get("rich-text-content").bucket is Bucket.REFUSES_LOUDLY
+def test_rich_text_content_row_is_captured_and_requires_value() -> None:
+    """#51/#58: rich-text serialization is CAPTURED (plain HTML string in the value Property) —
+    the row flipped to CAPTURED_LIVE; a rich-text widget WITH content compiles clean, and the
+    required-config check makes a content-less one fail loud (pages.WIDGET_REQUIRED_CONFIG)."""
+    ok = _spec_with_widget(WidgetIntent("general/rich_text", config=(("value", "<h2>Hi</h2>"),)))
+    compile_spec(ok)  # must not raise
+    assert get("rich-text-content").bucket is Bucket.CAPTURED_LIVE
 
 
 def test_custom_component_row_is_wired_to_a_real_refusal() -> None:
@@ -631,7 +631,6 @@ def test_api_impossible_widget_inside_popup_is_wired_to_a_real_refusal() -> None
     only top-level — the widget cross-check walks popup widgets too (#40 AC4). `report/chart` config
     is deliberately VALID so the refusal fires on the slug, not a missing-config error."""
     cases = {
-        "rich-text-content": WidgetIntent("general/rich_text"),
         "custom-component": WidgetIntent("custom"),
         "report-creation": WidgetIntent(
             "report/chart",

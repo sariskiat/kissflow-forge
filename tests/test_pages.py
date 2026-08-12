@@ -496,10 +496,9 @@ def test_add_widget_no_binding_widgets_need_no_config() -> None:
 
 
 def test_widget_required_config_covers_exactly_the_15_binding_widgets() -> None:
-    """CLAUDE.md count check: 8 view/* + 4 report/* + metrics + masterdetail + repeater == 15 of
-    the 28 widgets ship a flow/report binding; the other 13 (general/* minus masterdetail, custom)
-    need none."""
-    assert len(WIDGET_REQUIRED_CONFIG) == 15
+    """Count check: 8 view/* + 4 report/* + metrics + masterdetail + repeater ship a flow/report
+    binding, plus rich_text requires its value content (#58) == 16 config-gated widgets."""
+    assert len(WIDGET_REQUIRED_CONFIG) == 16  # +1: general/rich_text requires value (#58)
     assert set(WIDGET_REQUIRED_CONFIG) <= set(WIDGET_SLUGS)
 
 

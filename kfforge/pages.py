@@ -89,6 +89,10 @@ WIDGET_REQUIRED_CONFIG: dict[str, tuple[str, ...]] = {
     # guessed). This explicit entry overrides the view/* comprehension above (later key wins). Every
     # OTHER view/* slug keeps view_id required until a live example proves otherwise (ticket #21).
     "view/form": ("flow_type", "flow_id"),
+    # rich text renders ONLY what the value Property holds (plain HTML string, #51/#58); an
+    # add with no value used to write a Property with NO Value key at all and publish an
+    # empty block — require it so the miss is loud at build time, not silent at render.
+    "general/rich_text": ("value",),
     # report/* binds via the SAME flow_type/flow_id/report_id trio as view/* binds flow_type/
     # flow_id/view_id (widget_report_*.json's own note) -- report_id alone is not enough: every
     # report shape's flow_id FieldMapping is ALSO Sample-shaped ("Flow_Sample01"), so a build that

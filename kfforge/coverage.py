@@ -123,9 +123,7 @@ ROWS: tuple[CoverageRow, ...] = (
     ),
     CoverageRow(
         "rich-text-content", "rich-text component content",
-        Bucket.REFUSES_LOUDLY,
-        reason="rich-text serialization is uncaptured (Pages known gaps); refused at compile per "
-               "ADR-0004, never built as best-effort plain text.",
+        Bucket.CAPTURED_LIVE,
     ),
     CoverageRow(
         "custom-component", "custom component",

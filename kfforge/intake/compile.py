@@ -662,7 +662,9 @@ def _check_persona_roles(spec: AppSpec) -> None:
 # still pending). Role-scoped visibility is the FOURTH API-impossible capability but is the doctor's
 # refusal, not compile's (ADR-0003, #6), so it is not here.
 _API_IMPOSSIBLE_WIDGET_ROWS: dict[str, str] = {
-    "general/rich_text": "rich-text-content",
+    # rich_text was removed 2026-08-12 (#58): #51 proved the value Property is a plain HTML
+    # string that publishes clean; pages.py now requires the value config so a content-less
+    # add fails loud instead of writing an empty Property.
     "custom": "custom-component",
 }
 
