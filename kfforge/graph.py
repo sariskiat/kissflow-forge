@@ -10,10 +10,14 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
+import os
+import pathlib
 import re
 from datetime import UTC, datetime
 from typing import Any
 
+from .pages import _instantiate
 from .types import FieldSpec, FieldType, ParsedField, Visibility
 
 Draft = dict[str, Any]
@@ -161,6 +165,79 @@ def ensure_process_def(
         btn = _new_id("Row", model_id, 99, "button")
         new[btn] = {"Id": btn, "Kind": "Row", "Button": model_id}
         model["Button::Row"] = [btn]
+    return new
+
+
+_SHAPES_DIR = pathlib.Path(__file__).parent.parent / "shapes"
+_DEFAULT_TEMPLATE_PATH = _SHAPES_DIR / "process_template_identity_shell.json"
+_TEMPLATE_ROOT_KEY = "Model_Sample01"
+_TEMPLATE_ROOT_LIST_KEYS = (
+    "Model::Row", "Model::Field", "Model::ProcessDef", "Model::Component", "Model::Appearance",
+    "Button::Row",
+)
+
+
+def _resolve_template_path(template_path: str | None) -> pathlib.Path:
+    """template_path arg > KF_PROCESS_TEMPLATE env var > the shipped default shape.
+
+    Kept as a plain file path (not a shapes/<name> lookup) so a tenant-specific override can live
+    anywhere outside this repo — issue #59's own point is that a real tenant's template stays out
+    of the engine, only the de-identified default ships here.
+    """
+    if template_path:
+        return pathlib.Path(template_path)
+    env = os.environ.get("KF_PROCESS_TEMPLATE")
+    if env:
+        return pathlib.Path(env)
+    return _DEFAULT_TEMPLATE_PATH
+
+
+def clone_template_shell(draft: Draft, template_path: str | None = None) -> Draft:
+    """Graft the process-template identity shell onto a freshly created process draft, in place
+    of the bare ensure_process_def scaffold — issue #59's "every process starts from a
+    structure-clone" decision.
+
+    Loads shapes/process_template_identity_shell.json (or KF_PROCESS_TEMPLATE / `template_path`),
+    a de-identified capture of a real production template: the identity/initiate field block,
+    section/row/column layout, the mandatory Model::Appearance/Style chain, a "Manager Approve"
+    UserTask, and Button::Row. Every node is freshly re-minted (kfforge.pages._instantiate — the
+    SAME clone-with-fresh-ids machinery nav.py already reuses from pages.py) so two processes
+    built from_template=True never collide. Callers add their own fields/workflow on top.
+
+    Pure: returns a NEW draft, never mutates `draft`. No-op (returns a deep copy, unchanged) if the
+    draft already has a RootProcessDef — same idempotency contract as ensure_process_def.
+    """
+    new: Draft = copy.deepcopy(draft)
+    model_id = _model_id(new)
+    model = new[model_id]
+    if model.get("RootProcessDef"):
+        return new
+
+    path = _resolve_template_path(template_path)
+    if not path.is_file():
+        raise ValueError(f"process template not found: {path} "
+                         f"(from template_path arg, KF_PROCESS_TEMPLATE, or the shipped default)")
+    shape = json.loads(path.read_text(encoding="utf-8"))
+    template = shape.get("template")
+    if not isinstance(template, dict) or not template:
+        raise ValueError(f"{path}: not a valid shapes/*.json shape (no non-empty 'template')")
+    root_node = template.get(_TEMPLATE_ROOT_KEY)
+    if not isinstance(root_node, dict) or root_node.get("Kind") != "Model":
+        raise ValueError(f"{path}: template has no root Model node keyed {_TEMPLATE_ROOT_KEY!r}")
+
+    subset = {k: v for k, v in template.items() if k != _TEMPLATE_ROOT_KEY}
+    external = {_TEMPLATE_ROOT_KEY: model_id}
+    cloned, idmap = _instantiate(subset, external=external)
+    new.update(cloned)
+
+    def _remap(v: str) -> str:
+        return idmap.get(v, external.get(v, v))
+
+    for key in _TEMPLATE_ROOT_LIST_KEYS:
+        if key in root_node:
+            model[key] = [_remap(v) for v in root_node[key]]
+    if "RootProcessDef" in root_node:
+        model["RootProcessDef"] = _remap(root_node["RootProcessDef"])
     return new
 
 

@@ -199,17 +199,21 @@ def kf_create_process(
     steps: list[str],
     fields: list[dict[str, Any]],
     publish: bool = False,
+    from_template: bool = True,
 ) -> dict[str, Any]:
     """LIVE (dev only): create a NEW process from zero — workflow steps + fields — and verify it.
 
-    `steps` are the UserTask names in order; Start and Completed are added automatically. A failed
-    run cleans up after itself and leaves no half-built process behind.
+    `from_template=True` (default, issue #59) scaffolds by cloning the process-template identity
+    shell (shapes/process_template_identity_shell.json) instead of a bare `steps`-driven scaffold —
+    `steps` is then ignored; rebuild the real workflow with forge_build_workflow afterward. Pass
+    `from_template=False` for the old behavior: Start, one UserTask per `steps` entry, Completed.
+    A failed run cleans up after itself and leaves no half-built process behind.
     """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
     specs = [_to_spec(f) for f in fields]
-    report = create_process(c, name, tuple(steps), specs, publish=publish)
+    report = create_process(c, name, tuple(steps), specs, publish=publish, from_template=from_template)
     return report.as_tool_result()
 
 
@@ -264,17 +268,22 @@ def kf_publish(flow_kind: str, flow_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def forge_create_process(name: str, publish: bool = False) -> dict[str, Any]:
-    """LIVE (dev only, KF_APP): create a new PROCESS shell — a scaffolded, publishable draft with
-    no fields and no real workflow yet (a single placeholder step, replaced wholesale by
-    forge_build_workflow later). Follow with forge_member_batch, forge_apply_fields,
-    forge_add_table, forge_build_workflow, etc. A failed run cleans up after itself (create_process
-    archives+deletes the half-built shell rather than leaving it behind).
+def forge_create_process(name: str, publish: bool = False, from_template: bool = True) -> dict[str, Any]:
+    """LIVE (dev only, KF_APP): create a new PROCESS shell — a scaffolded, publishable draft.
+
+    `from_template=True` (default, issue #59 — "every process starts from a structure-clone")
+    clones the process-template identity shell (shapes/process_template_identity_shell.json): the
+    identity/initiate field block, layout, style chain, and a single "Manager Approve" step —
+    replaced wholesale by forge_build_workflow once the real workflow is designed. Pass
+    `from_template=False` for the old bare single-placeholder-step scaffold. Follow with
+    forge_member_batch, forge_apply_fields, forge_add_table, forge_build_workflow, etc. A failed
+    run cleans up after itself (create_process archives+deletes the half-built shell rather than
+    leaving it behind).
     """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(create_process(c, name, ("Draft",), [], publish=publish))
+    return _result(create_process(c, name, ("Draft",), [], publish=publish, from_template=from_template))
 
 
 @mcp.tool()

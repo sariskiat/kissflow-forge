@@ -1138,7 +1138,15 @@ A few operational gotchas:
 
 The proven end-to-end sequence, most foundational first:
 
-1. **Create the flow** (process, form, or list as needed).
+1. **Create the flow** (process, form, or list as needed). **A process now
+   seeds the identity shell by default (issue #59)**: `create_process` /
+   `create_flow_any(kind="process")` clone the process-template identity/
+   initiate shell (`shapes/process_template_identity_shell.json`,
+   `from_template=True` by default) instead of the bare single-step scaffold
+   — the identity/initiate field block, layout, mandatory style chain, and a
+   "Manager Approve" step arrive pre-built; callers add their own
+   fields/workflow on top. Pass `from_template=False` for the old bare
+   scaffold. See docs/capabilities/process-template.md.
 2. **Members** — before anything else gets built on top, or every later
    publish involving assignees fails (see Members first).
 3. **Fields and sections** — the node-graph invariants apply from the first

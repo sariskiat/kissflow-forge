@@ -31,6 +31,7 @@ from .graph import (
     apply_changes,
     apply_exact_layout,
     build_workflow,
+    clone_template_shell,
     ensure_process_def,
     field_names,
     regroup_into_sections,
@@ -570,12 +571,23 @@ def create_process(
     steps: tuple[str, ...],
     specs: list[FieldSpec],
     publish: bool = False,
+    from_template: bool = True,
+    template_path: str | None = None,
 ) -> ApplyReport | Err:
-    """Create a PROCESS from zero: shell -> ProcessDef scaffold -> fields -> verify -> publish.
+    """Create a PROCESS from zero: shell -> scaffold -> fields -> verify -> publish.
 
-    The scaffold is mandatory, not decoration: a bare process draft is rejected with HTTP 500 until
-    it has a ProcessDef (FINDINGS.md). On any failure after the shell exists, the half-built process
-    is archived+deleted so a failed run leaves no junk behind in the tenant.
+    `from_template=True` (the default, issue #59 — "every process starts from a structure-clone")
+    scaffolds by CLONING the process-template identity shell (clone_template_shell:
+    shapes/process_template_identity_shell.json, or KF_PROCESS_TEMPLATE / `template_path`) instead
+    of the bare ensure_process_def skeleton — the identity/initiate field block, section/row/column
+    layout, style chain, a "Manager Approve" UserTask, and Button::Row, all pre-built. `steps` is
+    ignored in this path: the shell defines its own single step; rebuild the real workflow with
+    build_workflow afterward if a different step set is needed. `from_template=False` falls back to
+    the original bare scaffold, honoring `steps` as before.
+
+    Either way the scaffold is mandatory, not decoration: a bare process draft is rejected with
+    HTTP 500 until it has a ProcessDef (FINDINGS.md). On any failure after the shell exists, the
+    half-built process is archived+deleted so a failed run leaves no junk behind in the tenant.
     """
     flow_id = client.create_flow("process", name)
     if isinstance(flow_id, Err):
@@ -590,7 +602,10 @@ def create_process(
         return _abandon(draft)
 
     try:
-        scaffolded = ensure_process_def(draft, steps)
+        if from_template:
+            scaffolded = clone_template_shell(draft, template_path)
+        else:
+            scaffolded = ensure_process_def(draft, steps)
     except ValueError as e:
         return _abandon(Err("verify", str(e)))
 
@@ -2456,8 +2471,11 @@ def create_flow_any(
         # A bare process draft is rejected 500 on the very next write until it carries a
         # ProcessDef (create_process's own docstring / FINDINGS.md). The unified create must
         # seed that scaffold too, or forge_apply_fields immediately 500s (bug found by the
-        # Mode-A proof run 2026-08-12). Default single step; callers rebuild the real workflow
-        # with build_workflow afterward. On any post-shell failure, abandon the junk flow.
+        # Mode-A proof run 2026-08-12). `extra["from_template"]` (default True, issue #59) clones
+        # the process-template identity shell instead of the bare single-step scaffold — same
+        # from_template/template_path contract as create_process, see clone_template_shell's own
+        # docstring. `extra["steps"]` is only consulted when from_template is False. On any
+        # post-shell failure, abandon the junk flow.
         fid = client.create_flow("process", name)
         if isinstance(fid, Err):
             return fid
@@ -2466,7 +2484,10 @@ def create_flow_any(
             client.delete_flow("process", fid)
             return draft
         try:
-            scaffolded = ensure_process_def(draft, extra.get("steps") or ("Review",))
+            if extra.get("from_template", True):
+                scaffolded = clone_template_shell(draft, extra.get("template_path"))
+            else:
+                scaffolded = ensure_process_def(draft, extra.get("steps") or ("Review",))
         except ValueError as e:
             client.delete_flow("process", fid)
             return Err("verify", str(e))

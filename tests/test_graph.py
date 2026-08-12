@@ -142,6 +142,105 @@ def test_scaffolded_process_has_appearance_and_button_row() -> None:
     assert m["Model::Appearance"] and m["Button::Row"], "the builder UI needs both to render"
 
 
+# ---- clone_template_shell (issue #59 — process-template identity/initiate shell) -------------
+
+def _bare_process() -> dict:
+    return {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"}}
+
+
+def test_clone_template_shell_grafts_identity_fields_and_manager_approve() -> None:
+    from kfforge.graph import clone_template_shell
+
+    got = clone_template_shell(_bare_process())
+    m = got["M1"]
+
+    assert m["RootProcessDef"], "clone must scaffold a real ProcessDef, same contract as ensure_process_def"
+    field_ids = m.get("Model::Field", [])
+    assert len(field_ids) == 28, "the identity/initiate shell carries 28 fields"
+    names = {got[fid]["Name"] for fid in field_ids}
+    assert "Manager Display Name" in names and "Branch" not in names  # Branch got a TODO suffix, not a bare name
+    assert any(n.startswith("Branch") for n in names)
+
+    pd = got[m["RootProcessDef"]]
+    acts = [got[a] for a in pd["ProcessDef::Activity"]]
+    assert [a["NodeType"] for a in acts] == ["StartEvent", "UserTask", "EndEvent"]
+    assert acts[1]["Name"] == "Manager Approve"
+
+
+def test_clone_template_shell_has_a_complete_style_chain() -> None:
+    from kfforge.graph import clone_template_shell
+
+    got = clone_template_shell(_bare_process())
+    m = got["M1"]
+    app_ids = m["Model::Appearance"]
+    assert len(app_ids) == 1
+    appearance = got[app_ids[0]]
+    assert appearance["Kind"] == "Appearance" and appearance["Model"] == "M1"
+    style_ids = appearance["Appearance::Style"]
+    assert len(style_ids) == 1, "an EMPTY Appearance::Style breaks render just as badly as a missing chain"
+    style = got[style_ids[0]]
+    assert style["Kind"] == "Style" and style["Appearance"] == app_ids[0]
+    assert m["Button::Row"], "the builder UI needs Button::Row too"
+
+
+def test_clone_template_shell_is_idempotent() -> None:
+    from kfforge.graph import clone_template_shell
+
+    once = clone_template_shell(_bare_process())
+    twice = clone_template_shell(once)
+    assert twice == once, "re-cloning onto an already-scaffolded process must change nothing"
+
+
+def test_clone_template_shell_does_not_mutate_input() -> None:
+    from kfforge.graph import clone_template_shell
+
+    bare = _bare_process()
+    _ = clone_template_shell(bare)
+    assert bare == {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"}}
+
+
+def test_two_independent_clones_never_collide_ids() -> None:
+    from kfforge.graph import clone_template_shell
+
+    a = clone_template_shell(_bare_process())
+    b = clone_template_shell(_bare_process())
+    overlap = (set(a) & set(b)) - {"Root", "M1"}
+    assert not overlap, f"two from_template clones minted colliding ids: {overlap}"
+
+
+def test_clone_template_shell_missing_template_file_raises() -> None:
+    from kfforge.graph import clone_template_shell
+
+    with pytest.raises(ValueError):
+        clone_template_shell(_bare_process(), template_path="/no/such/file.json")
+
+
+def test_clone_template_shell_env_var_override(monkeypatch, tmp_path) -> None:
+    from kfforge.graph import clone_template_shell
+
+    custom = tmp_path / "tiny_template.json"
+    custom.write_text(json.dumps({
+        "kind": "Model", "description": "d", "source_capture": "x.json", "notes": [],
+        "template": {
+            "Model_Sample01": {"Id": "Model_Sample01", "Kind": "Model", "Model::Row": [],
+                               "Model::Field": ["Field_Sample01"], "Model::ProcessDef": ["ProcessDef_Sample01"],
+                               "RootProcessDef": "ProcessDef_Sample01", "Button::Row": []},
+            "Field_Sample01": {"Id": "Field_Sample01", "Kind": "Field", "Type": "Text",
+                               "Model": "Model_Sample01", "Name": "Tiny Field"},
+            "ProcessDef_Sample01": {"Id": "ProcessDef_Sample01", "Kind": "ProcessDef",
+                                    "WorkflowType": "Sequence", "Model": "Model_Sample01",
+                                    "ProcessDef::Activity": ["Activity_Sample01"]},
+            "Activity_Sample01": {"Id": "Activity_Sample01", "Kind": "Activity", "NodeType": "StartEvent",
+                                  "Name": "Start", "ProcessDef": "ProcessDef_Sample01"},
+        },
+    }))
+    monkeypatch.setenv("KF_PROCESS_TEMPLATE", str(custom))
+    got = clone_template_shell(_bare_process())
+    m = got["M1"]
+    assert len(m["Model::Field"]) == 1
+    assert got[m["Model::Field"][0]]["Name"] == "Tiny Field"
+
+
 def test_existing_appearance_is_not_duplicated() -> None:
     from kfforge.graph import apply_changes
     from kfforge.types import FieldSpec, FieldType

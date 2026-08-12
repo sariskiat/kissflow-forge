@@ -29,6 +29,8 @@ from kfforge.client import (
     apply_table,
     apply_workflow,
     create_application_verified,
+    create_flow_any,
+    create_process,
     delete_anything,
     discover_member_source,
     run_doctor,
@@ -1144,3 +1146,62 @@ def test_apply_section_style_root_chain_verified() -> None:
     style = c.draft[app["Appearance::Style"][0]]
     assert app["HintTextPosition"] == "Icon"
     assert style["Value"]["Form.Field.Color"] == {"ref": "Color.Primary.500"}
+
+
+# ---- create_process / create_flow_any — from_template (issue #59) -----------------------------
+
+class _CreateProcessClient(FakeClient):
+    """FakeClient with create_flow stubbed — create_process/create_flow_any both call it before
+    touching the draft at all. A single fixed draft (like FakeClient's own get_draft) is enough
+    since these tests only ever create one flow per client instance."""
+
+    def __init__(self) -> None:
+        super().__init__(_bare_process_draft())
+
+    def create_flow(self, kind, name):  # type: ignore[override]
+        return "F1"
+
+
+def test_create_process_from_template_default_seeds_the_identity_shell() -> None:
+    c = _CreateProcessClient()
+    rep = create_process(c, "Expense Approval", ("Draft",), [])
+    assert isinstance(rep, ApplyReport)
+    assert rep.as_tool_result()["isError"] is False
+
+    m = c.draft["M1"]
+    assert len(m.get("Model::Field", [])) == 28, "identity shell fields must be on the draft"
+    pd = c.draft[m["RootProcessDef"]]
+    acts = [c.draft[a] for a in pd["ProcessDef::Activity"]]
+    assert [a["NodeType"] for a in acts] == ["StartEvent", "UserTask", "EndEvent"]
+    assert acts[1]["Name"] == "Manager Approve"
+
+
+def test_create_process_from_template_false_yields_the_bare_scaffold() -> None:
+    c = _CreateProcessClient()
+    rep = create_process(c, "Expense Approval", ("Review",), [], from_template=False)
+    assert isinstance(rep, ApplyReport)
+
+    m = c.draft["M1"]
+    assert m.get("Model::Field", []) == [], "the bare scaffold carries no fields"
+    pd = c.draft[m["RootProcessDef"]]
+    acts = [c.draft[a] for a in pd["ProcessDef::Activity"]]
+    assert [a["Name"] for a in acts] == ["Start", "Review", "Completed"]
+
+
+def test_create_flow_any_process_from_template_default() -> None:
+    c = _CreateProcessClient()
+    rep = create_flow_any(c, "process", "Expense Approval")
+    assert rep.flow_id == "F1"
+    m = c.draft["M1"]
+    assert len(m.get("Model::Field", [])) == 28
+
+
+def test_create_flow_any_process_from_template_false() -> None:
+    c = _CreateProcessClient()
+    rep = create_flow_any(c, "process", "Expense Approval", extra={"from_template": False, "steps": ("Review",)})
+    assert rep.flow_id == "F1"
+    m = c.draft["M1"]
+    assert m.get("Model::Field", []) == []
+    pd = c.draft[m["RootProcessDef"]]
+    acts = [c.draft[a] for a in pd["ProcessDef::Activity"]]
+    assert [a["Name"] for a in acts] == ["Start", "Review", "Completed"]

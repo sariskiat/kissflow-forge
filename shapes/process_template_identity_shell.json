@@ -1,0 +1,1121 @@
+{
+  "kind": "Model",
+  "description": "Structure-only process-template identity/initiate shell, de-identified from a real production process template (280 nodes, captured live off a real prod tenant, issue #59): field types, section/row/column layout, the mandatory Model::Appearance/Style chain, a single \"Manager Approve\" UserTask, and Button::Row. Every process this engine creates with from_template=True (kfforge.graph.clone_template_shell) starts by cloning this shell (fresh minted ids) instead of the bare ensure_process_def scaffold; callers add their own fields on top. See docs/capabilities/process-template.md and CLAUDE.md Build order.",
+  "source_capture": "template_cj_pi_raw.json",
+  "template": {
+    "Model_Sample01": {
+      "Id": "Model_Sample01",
+      "Name": "Sample Process Template",
+      "Kind": "Model",
+      "FlowType": "Process",
+      "Model::Row": [
+        "Row_Sample28",
+        "Row_Sample11",
+        "Row_Sample05",
+        "Row_Sample24",
+        "Row_Sample27"
+      ],
+      "Model::Field": [
+        "Field_Sample04",
+        "Field_Sample12",
+        "Field_Sample07",
+        "Field_Sample15",
+        "Field_Sample16",
+        "Field_Sample17",
+        "Field_Sample14",
+        "Field_Sample11",
+        "Field_Sample18",
+        "Field_Sample10",
+        "Field_Sample08",
+        "Field_Sample26",
+        "Field_Sample19",
+        "Field_Sample20",
+        "Field_Sample06",
+        "Field_Sample27",
+        "Field_Sample13",
+        "Field_Sample28",
+        "Field_Sample22",
+        "Field_Sample09",
+        "Field_Sample05",
+        "Field_Sample02",
+        "Field_Sample24",
+        "Field_Sample25",
+        "Field_Sample23",
+        "Field_Sample21",
+        "Field_Sample01",
+        "Field_Sample03"
+      ],
+      "Model::ProcessDef": [
+        "ProcessDef_Sample01"
+      ],
+      "RootProcessDef": "ProcessDef_Sample01",
+      "Button::Row": [
+        "Row_Sample10"
+      ],
+      "Description": "Sample process template — identity/initiate shell (structure-only, de-identified).",
+      "Model::Appearance": [
+        "Appearance_Sample05"
+      ]
+    },
+    "Row_Sample28": {
+      "Id": "Row_Sample28",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample03"
+      ]
+    },
+    "Column_Sample03": {
+      "Id": "Column_Sample03",
+      "Kind": "Column",
+      "Type": "Section",
+      "Name": "In-Kissflow Template",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample28",
+      "Column::Row": [
+        "Row_Sample08",
+        "Row_Sample23",
+        "Row_Sample25"
+      ]
+    },
+    "ProcessDef_Sample01": {
+      "Id": "ProcessDef_Sample01",
+      "Kind": "ProcessDef",
+      "WorkflowType": "Sequence",
+      "Model": "Model_Sample01",
+      "ProcessDef::Activity": [
+        "Activity_Sample02",
+        "Activity_Sample03",
+        "Activity_Sample01"
+      ]
+    },
+    "Activity_Sample02": {
+      "Id": "Activity_Sample02",
+      "Kind": "Activity",
+      "NodeType": "StartEvent",
+      "Name": "Start",
+      "ProcessDef": "ProcessDef_Sample01"
+    },
+    "Activity_Sample01": {
+      "Id": "Activity_Sample01",
+      "Kind": "Activity",
+      "NodeType": "EndEvent",
+      "Name": "Completed",
+      "ProcessDef": "ProcessDef_Sample01"
+    },
+    "Row_Sample10": {
+      "Id": "Row_Sample10",
+      "Kind": "Row",
+      "Button": "Model_Sample01",
+      "Initiator::Column": [
+        "Column_Sample08"
+      ]
+    },
+    "Column_Sample25": {
+      "Id": "Column_Sample25",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample09",
+      "Column::Field": [
+        "Field_Sample04"
+      ]
+    },
+    "Field_Sample04": {
+      "Id": "Field_Sample04",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-07-08T11:46:36.483Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample25",
+      "Name": "Manager Display Name",
+      "Required": true
+    },
+    "Row_Sample11": {
+      "Id": "Row_Sample11",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample12"
+      ]
+    },
+    "Column_Sample12": {
+      "Id": "Column_Sample12",
+      "Kind": "Column",
+      "Type": "Section",
+      "Start": 0,
+      "End": 6,
+      "Name": "Public Form Template",
+      "Row": "Row_Sample11",
+      "Column::Row": [
+        "Row_Sample21",
+        "Row_Sample02",
+        "Row_Sample15"
+      ],
+      "IsHidden": true
+    },
+    "Column_Sample28": {
+      "Id": "Column_Sample28",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample14",
+      "Column::Field": [
+        "Field_Sample12"
+      ]
+    },
+    "Field_Sample12": {
+      "Id": "Field_Sample12",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-10T14:39:50.140Z",
+      "Model": "Model_Sample01",
+      "Name": "Is Public Form",
+      "Column": "Column_Sample28"
+    },
+    "Row_Sample24": {
+      "Id": "Row_Sample24",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample27"
+      ]
+    },
+    "Column_Sample27": {
+      "Id": "Column_Sample27",
+      "Kind": "Column",
+      "Type": "Section",
+      "Start": 0,
+      "End": 6,
+      "Name": "System",
+      "Row": "Row_Sample24",
+      "Column::Row": [
+        "Row_Sample14"
+      ],
+      "IsHidden": true
+    },
+    "Row_Sample05": {
+      "Id": "Row_Sample05",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample15"
+      ]
+    },
+    "Column_Sample15": {
+      "Id": "Column_Sample15",
+      "Kind": "Column",
+      "Type": "Section",
+      "Start": 0,
+      "End": 6,
+      "Name": "Request Info",
+      "Row": "Row_Sample05",
+      "Column::Row": [
+        "Row_Sample17",
+        "Row_Sample16"
+      ]
+    },
+    "Column_Sample33": {
+      "Id": "Column_Sample33",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample07",
+      "Column::Field": [
+        "Field_Sample07"
+      ]
+    },
+    "Column_Sample36": {
+      "Id": "Column_Sample36",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample21",
+      "Column::Field": [
+        "Field_Sample15"
+      ]
+    },
+    "Field_Sample15": {
+      "Id": "Field_Sample15",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:01:23.208Z",
+      "Model": "Model_Sample01",
+      "Name": "Prefill Requestor Email",
+      "Column": "Column_Sample36"
+    },
+    "Column_Sample10": {
+      "Id": "Column_Sample10",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample20",
+      "Column::Field": [
+        "Field_Sample16"
+      ]
+    },
+    "Field_Sample16": {
+      "Id": "Field_Sample16",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:02:41.478Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample10",
+      "Name": "Prefill Requestor First Name"
+    },
+    "Column_Sample02": {
+      "Id": "Column_Sample02",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample20",
+      "Column::Field": [
+        "Field_Sample17"
+      ]
+    },
+    "Field_Sample17": {
+      "Id": "Field_Sample17",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:02:54.632Z",
+      "Model": "Model_Sample01",
+      "Name": "Prefill Requestor Last Name",
+      "Column": "Column_Sample02"
+    },
+    "Column_Sample30": {
+      "Id": "Column_Sample30",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample19",
+      "Column::Field": [
+        "Field_Sample14"
+      ]
+    },
+    "Field_Sample14": {
+      "Id": "Field_Sample14",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:33:38.009Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample30",
+      "Name": "Business Unit Lookup (TODO: was a Reference field — QueryDefinition stripped, needs a dev-tenant list; see docs/capabilities/process-template.md)"
+    },
+    "Row_Sample14": {
+      "Id": "Row_Sample14",
+      "Kind": "Row",
+      "Column": "Column_Sample27",
+      "Row::Column": [
+        "Column_Sample28",
+        "Column_Sample07"
+      ]
+    },
+    "Field_Sample07": {
+      "Id": "Field_Sample07",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:01:02.295Z",
+      "Model": "Model_Sample01",
+      "Name": "Requestor Email",
+      "Column": "Column_Sample33"
+    },
+    "Column_Sample16": {
+      "Id": "Column_Sample16",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample04",
+      "Column::Field": [
+        "Field_Sample11"
+      ]
+    },
+    "Field_Sample11": {
+      "Id": "Field_Sample11",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:39:16.612Z",
+      "Model": "Model_Sample01",
+      "Name": "Requestor Full Name",
+      "Column": "Column_Sample16"
+    },
+    "Column_Sample35": {
+      "Id": "Column_Sample35",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 4,
+      "End": 5,
+      "Row": "Row_Sample20",
+      "Column::Field": [
+        "Field_Sample18"
+      ]
+    },
+    "Field_Sample18": {
+      "Id": "Field_Sample18",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:42:11.810Z",
+      "Model": "Model_Sample01",
+      "Name": "Prefill Requestor Nickname",
+      "Column": "Column_Sample35"
+    },
+    "Column_Sample11": {
+      "Id": "Column_Sample11",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample04",
+      "Column::Field": [
+        "Field_Sample10"
+      ]
+    },
+    "Field_Sample10": {
+      "Id": "Field_Sample10",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:42:30.080Z",
+      "Model": "Model_Sample01",
+      "Name": "Requestor Nickname",
+      "Column": "Column_Sample11"
+    },
+    "Column_Sample38": {
+      "Id": "Column_Sample38",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample07",
+      "Column::Field": [
+        "Field_Sample08"
+      ]
+    },
+    "Field_Sample08": {
+      "Id": "Field_Sample08",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T09:58:39.783Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample38",
+      "Name": "Requestor Employee Id"
+    },
+    "Column_Sample06": {
+      "Id": "Column_Sample06",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample09",
+      "Column::Field": [
+        "Field_Sample26"
+      ]
+    },
+    "Field_Sample26": {
+      "Id": "Field_Sample26",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-12T04:52:55.514Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample06",
+      "Name": "Requestor Employee Id Alt",
+      "Required": true
+    },
+    "Column_Sample37": {
+      "Id": "Column_Sample37",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 5,
+      "End": 6,
+      "Row": "Row_Sample20",
+      "Column::Field": [
+        "Field_Sample19"
+      ]
+    },
+    "Field_Sample19": {
+      "Id": "Field_Sample19",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-12T04:57:25.282Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample37",
+      "Name": "Prefill Requestor Employee Id"
+    },
+    "Column_Sample07": {
+      "Id": "Column_Sample07",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample14",
+      "Column::Field": [
+        "Field_Sample20"
+      ]
+    },
+    "Field_Sample20": {
+      "Id": "Field_Sample20",
+      "Kind": "Field",
+      "Type": "Number",
+      "CreatedAt": "2025-12-12T05:13:15.572Z",
+      "Model": "Model_Sample01",
+      "Name": "Prefill Submit Flag",
+      "Column": "Column_Sample07"
+    },
+    "Column_Sample01": {
+      "Id": "Column_Sample01",
+      "Kind": "Column",
+      "Type": "Grid",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample02",
+      "Column::Row": [
+        "Row_Sample20",
+        "Row_Sample26"
+      ]
+    },
+    "Row_Sample20": {
+      "Id": "Row_Sample20",
+      "Kind": "Row",
+      "Column": "Column_Sample01",
+      "Row::Column": [
+        "Column_Sample10",
+        "Column_Sample02",
+        "Column_Sample35",
+        "Column_Sample37"
+      ]
+    },
+    "Column_Sample08": {
+      "Id": "Column_Sample08",
+      "Kind": "Column",
+      "Type": "Button",
+      "Name": "Submit",
+      "Label": "Submit",
+      "Start": 2,
+      "End": 3,
+      "Initiator": "Row_Sample10"
+    },
+    "Row_Sample26": {
+      "Id": "Row_Sample26",
+      "Kind": "Row",
+      "Column": "Column_Sample01"
+    },
+    "Column_Sample04": {
+      "Id": "Column_Sample04",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample13",
+      "Column::Field": [
+        "Field_Sample06"
+      ],
+      "IsHidden": true
+    },
+    "Field_Sample06": {
+      "Id": "Field_Sample06",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-12T10:30:09.825Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample04",
+      "Name": "Department Name"
+    },
+    "Column_Sample18": {
+      "Id": "Column_Sample18",
+      "Kind": "Column",
+      "Type": "Grid",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample16",
+      "Column::Row": [
+        "Row_Sample04",
+        "Row_Sample07",
+        "Row_Sample22"
+      ]
+    },
+    "Row_Sample04": {
+      "Id": "Row_Sample04",
+      "Kind": "Row",
+      "Column": "Column_Sample18",
+      "Row::Column": [
+        "Column_Sample16",
+        "Column_Sample11"
+      ]
+    },
+    "Row_Sample07": {
+      "Id": "Row_Sample07",
+      "Kind": "Row",
+      "Column": "Column_Sample18",
+      "Row::Column": [
+        "Column_Sample38",
+        "Column_Sample33"
+      ]
+    },
+    "Column_Sample39": {
+      "Id": "Column_Sample39",
+      "Kind": "Column",
+      "Type": "Grid",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample15",
+      "Column::Row": [
+        "Row_Sample19",
+        "Row_Sample13"
+      ]
+    },
+    "Row_Sample19": {
+      "Id": "Row_Sample19",
+      "Kind": "Row",
+      "Column": "Column_Sample39",
+      "Row::Column": [
+        "Column_Sample30"
+      ]
+    },
+    "Row_Sample13": {
+      "Id": "Row_Sample13",
+      "Kind": "Row",
+      "Column": "Column_Sample39",
+      "Row::Column": [
+        "Column_Sample04",
+        "Column_Sample20"
+      ]
+    },
+    "Activity_Sample03": {
+      "Id": "Activity_Sample03",
+      "Kind": "Activity",
+      "Name": "Manager Approve",
+      "NodeType": "UserTask",
+      "ProcessDef": "ProcessDef_Sample01"
+    },
+    "Column_Sample34": {
+      "Id": "Column_Sample34",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 4,
+      "End": 6,
+      "Row": "Row_Sample09",
+      "Column::Field": [
+        "Field_Sample27"
+      ],
+      "IsHidden": true
+    },
+    "Field_Sample27": {
+      "Id": "Field_Sample27",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-13T04:45:36.158Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample34",
+      "Name": "Requestor Manager Email"
+    },
+    "Row_Sample22": {
+      "Id": "Row_Sample22",
+      "Kind": "Row",
+      "Column": "Column_Sample18",
+      "Row::Column": [
+        "Column_Sample26",
+        "Column_Sample31"
+      ]
+    },
+    "Column_Sample26": {
+      "Id": "Column_Sample26",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample22",
+      "Column::Field": [
+        "Field_Sample13"
+      ]
+    },
+    "Field_Sample13": {
+      "Id": "Field_Sample13",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-13T06:44:17.854Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample26",
+      "Name": "Manager User (TODO: was a User field — see shapes/field_user_reference.json for the proven QueryDefinition shape; needs a dev user/_employee source, unverified on dev)"
+    },
+    "Row_Sample23": {
+      "Id": "Row_Sample23",
+      "Kind": "Row",
+      "Column": "Column_Sample03",
+      "Row::Column": [
+        "Column_Sample21"
+      ]
+    },
+    "Column_Sample21": {
+      "Id": "Column_Sample21",
+      "Kind": "Column",
+      "Type": "Grid",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample23",
+      "Column::Row": [
+        "Row_Sample18"
+      ],
+      "IsHidden": true
+    },
+    "Row_Sample08": {
+      "Id": "Row_Sample08",
+      "Kind": "Row",
+      "Column": "Column_Sample03",
+      "Row::Column": [
+        "Column_Sample05"
+      ]
+    },
+    "Column_Sample05": {
+      "Id": "Column_Sample05",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample08",
+      "Column::Field": [
+        "Field_Sample28"
+      ],
+      "Column::Appearance": [
+        "Appearance_Sample02"
+      ]
+    },
+    "Field_Sample28": {
+      "Id": "Field_Sample28",
+      "Kind": "Field",
+      "Type": "Boolean",
+      "CreatedAt": "2026-01-13T07:40:28.028Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample05",
+      "Name": "Self Or Representative Flag",
+      "DefaultValue": "true"
+    },
+    "Row_Sample25": {
+      "Id": "Row_Sample25",
+      "Kind": "Row",
+      "Column": "Column_Sample03",
+      "Row::Column": [
+        "Column_Sample19"
+      ]
+    },
+    "Column_Sample19": {
+      "Id": "Column_Sample19",
+      "Kind": "Column",
+      "Type": "Grid",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample25",
+      "Column::Row": [
+        "Row_Sample12",
+        "Row_Sample09",
+        "Row_Sample01"
+      ]
+    },
+    "Column_Sample32": {
+      "Id": "Column_Sample32",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample18",
+      "Column::Field": [
+        "Field_Sample22"
+      ],
+      "Column::Appearance": [
+        "Appearance_Sample01"
+      ]
+    },
+    "Field_Sample22": {
+      "Id": "Field_Sample22",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-13T07:54:04.427Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample32",
+      "Name": "Representative Requestor Email"
+    },
+    "Column_Sample31": {
+      "Id": "Column_Sample31",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample22",
+      "Column::Field": [
+        "Field_Sample09"
+      ]
+    },
+    "Field_Sample09": {
+      "Id": "Field_Sample09",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-13T08:25:20.953Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample31",
+      "Name": "Manager Email"
+    },
+    "Column_Sample20": {
+      "Id": "Column_Sample20",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample13",
+      "Column::Field": [
+        "Field_Sample05"
+      ],
+      "IsHidden": true
+    },
+    "Field_Sample05": {
+      "Id": "Field_Sample05",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-13T08:27:17.821Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample20",
+      "Name": "Department Head Email"
+    },
+    "Row_Sample12": {
+      "Id": "Row_Sample12",
+      "Kind": "Row",
+      "Column": "Column_Sample19",
+      "Row::Column": [
+        "Column_Sample29",
+        "Column_Sample24"
+      ]
+    },
+    "Row_Sample21": {
+      "Id": "Row_Sample21",
+      "Kind": "Row",
+      "Column": "Column_Sample12",
+      "Row::Column": [
+        "Column_Sample36"
+      ]
+    },
+    "Row_Sample02": {
+      "Id": "Row_Sample02",
+      "Kind": "Row",
+      "Column": "Column_Sample12",
+      "Row::Column": [
+        "Column_Sample01"
+      ]
+    },
+    "Row_Sample15": {
+      "Id": "Row_Sample15",
+      "Kind": "Row",
+      "Column": "Column_Sample12",
+      "Row::Column": [
+        "Column_Sample39"
+      ]
+    },
+    "Column_Sample22": {
+      "Id": "Column_Sample22",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample01",
+      "Column::Field": [
+        "Field_Sample02"
+      ]
+    },
+    "Field_Sample02": {
+      "Id": "Field_Sample02",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-14T07:30:00.606Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample22",
+      "Name": "Department",
+      "Required": true
+    },
+    "Column_Sample29": {
+      "Id": "Column_Sample29",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample12",
+      "Column::Field": [
+        "Field_Sample24"
+      ]
+    },
+    "Row_Sample09": {
+      "Id": "Row_Sample09",
+      "Kind": "Row",
+      "Column": "Column_Sample19",
+      "Row::Column": [
+        "Column_Sample06",
+        "Column_Sample25",
+        "Column_Sample34"
+      ]
+    },
+    "Row_Sample01": {
+      "Id": "Row_Sample01",
+      "Kind": "Row",
+      "Column": "Column_Sample19",
+      "Row::Column": [
+        "Column_Sample22"
+      ]
+    },
+    "Appearance_Sample01": {
+      "Id": "Appearance_Sample01",
+      "Kind": "Appearance",
+      "Column": "Column_Sample32",
+      "Appearance::Style": [
+        "Style_Sample05"
+      ]
+    },
+    "Style_Sample05": {
+      "Id": "Style_Sample05",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample01"
+    },
+    "Column_Sample24": {
+      "Id": "Column_Sample24",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample12",
+      "Column::Field": [
+        "Field_Sample25"
+      ],
+      "Column::Appearance": [
+        "Appearance_Sample03"
+      ]
+    },
+    "Field_Sample25": {
+      "Id": "Field_Sample25",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-26T08:06:07.707Z",
+      "Model": "Model_Sample01",
+      "Name": "Requestor Email Raw",
+      "Column": "Column_Sample24"
+    },
+    "Field_Sample24": {
+      "Id": "Field_Sample24",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-26T08:03:03.668Z",
+      "Model": "Model_Sample01",
+      "Name": "Requestor User (TODO: was a User field — see shapes/field_user_reference.json for the proven QueryDefinition shape; needs a dev user/_employee source, unverified on dev)",
+      "Column": "Column_Sample29"
+    },
+    "Row_Sample17": {
+      "Id": "Row_Sample17",
+      "Kind": "Row",
+      "Column": "Column_Sample15",
+      "Row::Column": [
+        "Column_Sample13"
+      ]
+    },
+    "Row_Sample16": {
+      "Id": "Row_Sample16",
+      "Kind": "Row",
+      "Column": "Column_Sample15",
+      "Row::Column": [
+        "Column_Sample18"
+      ]
+    },
+    "Column_Sample13": {
+      "Id": "Column_Sample13",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample17",
+      "Column::Field": [
+        "Field_Sample23"
+      ]
+    },
+    "Field_Sample23": {
+      "Id": "Field_Sample23",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-26T10:31:41.701Z",
+      "Model": "Model_Sample01",
+      "Name": "Request Number",
+      "Column": "Column_Sample13"
+    },
+    "Row_Sample18": {
+      "Id": "Row_Sample18",
+      "Kind": "Row",
+      "Column": "Column_Sample21",
+      "Row::Column": [
+        "Column_Sample23",
+        "Column_Sample32"
+      ]
+    },
+    "Column_Sample23": {
+      "Id": "Column_Sample23",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample18",
+      "Column::Field": [
+        "Field_Sample21"
+      ],
+      "Column::Appearance": [
+        "Appearance_Sample04"
+      ]
+    },
+    "Field_Sample21": {
+      "Id": "Field_Sample21",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-04-28T11:35:54.444Z",
+      "Model": "Model_Sample01",
+      "Name": "Representative Requestor User (TODO: was a User field — see shapes/field_user_reference.json for the proven QueryDefinition shape; needs a dev user/_employee source, unverified on dev)",
+      "Column": "Column_Sample23"
+    },
+    "Appearance_Sample04": {
+      "Id": "Appearance_Sample04",
+      "Kind": "Appearance",
+      "Column": "Column_Sample23",
+      "Appearance::Style": [
+        "Style_Sample02"
+      ]
+    },
+    "Style_Sample02": {
+      "Id": "Style_Sample02",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample04"
+    },
+    "Appearance_Sample03": {
+      "Id": "Appearance_Sample03",
+      "Kind": "Appearance",
+      "Column": "Column_Sample24",
+      "Appearance::Style": [
+        "Style_Sample03"
+      ]
+    },
+    "Style_Sample03": {
+      "Id": "Style_Sample03",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample03"
+    },
+    "Appearance_Sample02": {
+      "Id": "Appearance_Sample02",
+      "Kind": "Appearance",
+      "Column": "Column_Sample05",
+      "Appearance::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample02"
+    },
+    "Row_Sample27": {
+      "Id": "Row_Sample27",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample17"
+      ]
+    },
+    "Column_Sample17": {
+      "Id": "Column_Sample17",
+      "Kind": "Column",
+      "Type": "Section",
+      "Start": 0,
+      "End": 6,
+      "Name": "Request Info",
+      "Row": "Row_Sample27",
+      "Column::Row": [
+        "Row_Sample03",
+        "Row_Sample06"
+      ]
+    },
+    "Row_Sample03": {
+      "Id": "Row_Sample03",
+      "Kind": "Row",
+      "Column": "Column_Sample17",
+      "Row::Column": [
+        "Column_Sample09"
+      ]
+    },
+    "Column_Sample09": {
+      "Id": "Column_Sample09",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample03",
+      "Column::Field": [
+        "Field_Sample01"
+      ]
+    },
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-08-07T04:29:03.724Z",
+      "Model": "Model_Sample01",
+      "Name": "Branch (TODO: was a Reference field — QueryDefinition stripped, needs a dev-tenant list; see docs/capabilities/process-template.md)",
+      "Column": "Column_Sample09",
+      "Required": true
+    },
+    "Row_Sample06": {
+      "Id": "Row_Sample06",
+      "Kind": "Row",
+      "Column": "Column_Sample17",
+      "Row::Column": [
+        "Column_Sample14"
+      ]
+    },
+    "Column_Sample14": {
+      "Id": "Column_Sample14",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample06",
+      "Column::Field": [
+        "Field_Sample03"
+      ]
+    },
+    "Field_Sample03": {
+      "Id": "Field_Sample03",
+      "Kind": "Field",
+      "Type": "Textarea",
+      "CreatedAt": "2026-08-07T04:30:30.092Z",
+      "Model": "Model_Sample01",
+      "Name": "Description",
+      "Column": "Column_Sample14",
+      "Required": true
+    },
+    "Appearance_Sample05": {
+      "Id": "Appearance_Sample05",
+      "Kind": "Appearance",
+      "Model": "Model_Sample01",
+      "Appearance::Style": [
+        "Style_Sample04"
+      ]
+    },
+    "Style_Sample04": {
+      "Id": "Style_Sample04",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample05"
+    }
+  },
+  "notes": [
+    "De-identified by kissflow-forge-eval/spikes/deidentify_template.py (that repo -- REAL tenant content, never committed here) from a real production process template. 5 QueryDefinition nodes were stripped (they carried prod-tenant-specific list/user dataset ids); the 2 Reference fields and 3 User fields they belonged to are converted to plain Text here, each Name flagged with a TODO pointing at shapes/field_user_reference.json (the proven User-field shape) and docs/capabilities/process-template.md.",
+    "Permission/Resource/Component/Property/Criteria/Condition/Expression/Node were all dropped outright -- in-flight state, branch/validation AST, and a Reference-field UI widget config, none of it part of an identity SHELL structure. Re-add them per this repo's own CLAUDE.md Build order (members -> assignees -> visibility -> events) on TOP of a from_template clone, never by assuming this shape already carries them.",
+    "A minimal 3-activity Start/UserTask(\"Manager Approve\")/End scaffold -- same shape family as shapes/process_skeleton.json, but pre-loaded with the real identity/initiate field block instead of a bare single placeholder step. The source template's suspended duplicate \"Manager Approve\" Activity and its SendBackToInitiator sibling are both dropped.",
+    "Every Field's real display Name (mostly non-English in the source capture) is replaced with a generic English placeholder -- the \"template identity block\" this ticket asks for. A lone RichText info-banner column (real non-English text embedding a real prod URL) and its now-empty hosting Row were dropped explicitly during de-identification, never copied here.",
+    "The source capture's own root Model had NO Model::Appearance key at all -- only 4 Column-level Appearance/Style pairs (the OPTIONAL per-section colour chain). A 5th, Model-level pair is synthesized here (Appearance_Sample05/Style_Sample04) to satisfy this repo's own proven Node-graph invariant that every flow needs the MANDATORY chain or the builder fails to render -- not copied from the source, which plausibly never had this gap caught because nobody opens a \"Duplicate me\" utility template directly.",
+    "Ids are minted <Kind>_SampleNN, numbered per-kind -- kfforge.graph.clone_template_shell re-mints ALL of them again at clone time (kfforge.pages._instantiate, the same machinery nav.py already reuses from pages.py) so two from_template=True processes never collide.",
+    "KF_PROCESS_TEMPLATE (env var) or an explicit template_path argument overrides which shapes/*.json file clone_template_shell loads -- this shipped shell is only the DEFAULT; a tenant-specific template belongs in tenant config, never hardcoded into the engine."
+  ]
+}
