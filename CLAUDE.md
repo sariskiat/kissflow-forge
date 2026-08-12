@@ -956,9 +956,18 @@ publishes cleanly but never confers runtime submit permission —
 `_current_context[0]` still lacks `_context_activity_instance_id` and submit
 still returns `403 KISSFLOW_ERROR_050302`, even with that user granted via
 `member/batch` (⚠️ `Permission` must be a **list**, e.g. `["Editable"]` — a
-bare string 400s `KISSFLOW_ERROR_04231 UnsupportedPermissionError`). There is
-still no API route that creates an AppRole or adds a user to one — both are
-builder-UI-only. The workaround: grant membership at the PROCESS level
+bare string 400s `KISSFLOW_ERROR_04231 UnsupportedPermissionError`).
+⚠️ A CORRECTED BELIEF (2026-08-12, network capture by the user + live API
+proof): adding a USER to an AppRole HAS an API route after all —
+`PUT /app_role/2/{acct}/{role_id}?_application_id={app}` with the role
+detail's keys plus **`"Users": [<assignee object>]`** — the WRITE key is
+`Users`, the READ key is `Members` (asymmetric; a `Members` write 200s and is
+silently ignored, which is what fooled every earlier probe). The assignee
+object comes verbatim from `GET /user/2/{acct}/assignee?q=<name>` (`{_id,
+Kind:"User", Email, Name}`); read back `Members`/`UserCount` to verify. An
+API-created role has `Members: []` and its creator is NOT auto-added — a
+step whose assignee role has no user members is what produces the 050302
+submit-403. The workaround: grant membership at the PROCESS level
 instead of the application level (`Role:"DataAdmin"`, `Permission:
 ["InitiateItems"]` — see Members first), and wire the assignee as
 `ValueType:"AppRole"`, not `"User"`. Proven live end to end — a real item

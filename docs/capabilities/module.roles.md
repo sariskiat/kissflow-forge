@@ -80,11 +80,14 @@ helpers, and now the `Preference` PUT.
   Manage-tier asks as `Role:"Admin", Permission:[]`.
 - The tier → wire mapping is now WIRE-PROVEN (browser round 2026-08-12) —
   see What above. Submit permission still ALSO requires the acting user to
-  be a member of the assignee AppRole (`AppRole.Members`) — the creator is
-  NOT auto-added, `PUT /app_role` silently ignores a Members write, every
-  member-add route guess 404s: user→role assignment remains UI/account-console
-  only, and its absence is THE reproducible submit-403
-  (KISSFLOW_ERROR_050302).
+  be a member of the assignee AppRole — the creator is NOT auto-added, and
+  its absence is THE reproducible submit-403 (KISSFLOW_ERROR_050302).
+  RESOLVED (same day, user network capture + live proof): the add-user
+  write is `PUT /app_role/2/{acct}/{role_id}?_application_id={app}` with
+  `"Users": [<assignee object from GET /user/2/{acct}/assignee?q=...>]` —
+  WRITE key `Users`, READ key `Members` (a `Members` write is silently
+  ignored; that asymmetry defeated every earlier probe). Verify by reading
+  back `Members`/`UserCount`.
 - Remember replace semantics: build the full Permission array per grant;
   never POST a delta expecting a merge.
 
