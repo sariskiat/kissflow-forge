@@ -1,0 +1,59 @@
+{
+  "kind": "Model",
+  "description": "Board = flowtype 'case'. Fresh-case draft scaffold + the status-column pattern. Created via POST /flow/2/{acct}/case?_application_id={app} with {Name, ItemType:'Board'|'Case', Prefix} — born Live, no publish step. Captured live 2026-08-12 (#49).",
+  "source_capture": "live-probe-2026-08-12-issue-49",
+  "template": {
+    "Model_Sample01": {
+      "Id": "Model_Sample01",
+      "Kind": "Model",
+      "FlowType": "Case",
+      "Name": "Sample Board",
+      "Model::Field": ["Field_Sample01", "Field_Sample02", "Field_Sample03"],
+      "Model::Row": ["Row_Sample01"],
+      "Button::Row": ["Row_Sample02"]
+    },
+    "Field_Sample01": { "Id": "Field_Sample01", "Kind": "Field", "Type": "Text", "Name": "Summary", "Required": true, "Model": "Model_Sample01" },
+    "Field_Sample02": { "Id": "Field_Sample02", "Kind": "Field", "Type": "Textarea", "Name": "Description", "Model": "Model_Sample01" },
+    "Field_Sample03": { "Id": "Field_Sample03", "Kind": "Field", "Type": "Attachment", "Name": "Attachment", "Model": "Model_Sample01" },
+    "Row_Sample01": { "Id": "Row_Sample01", "Kind": "Row", "Model": "Model_Sample01", "Row::Column": ["Column_Sample01"] },
+    "Column_Sample01": {
+      "Id": "Column_Sample01",
+      "Kind": "Column",
+      "Type": "Section",
+      "Name": "Add details",
+      "Row": "Row_Sample01",
+      "Column::Row": ["Row_Sample03"]
+    },
+    "Row_Sample03": { "Id": "Row_Sample03", "Kind": "Row", "Column": "Column_Sample01", "Row::Column": ["Column_Sample02"] },
+    "Column_Sample02": {
+      "Id": "Column_Sample02",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample03",
+      "Column::Field": ["Field_Sample04"]
+    },
+    "Field_Sample04": {
+      "Id": "Field_Sample04",
+      "Kind": "Field",
+      "Type": "Select",
+      "Name": "Status",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample02",
+      "Required": true,
+      "ReferredList": "List_Sample01"
+    },
+    "Row_Sample02": { "Id": "Row_Sample02", "Kind": "Row", "Button": "Model_Sample01" }
+  },
+  "notes": [
+    "Create body: {\"Name\":..., \"ItemType\":\"Board\"|\"Case\", \"Prefix\":\"PB\"} — ItemType and Prefix are MANDATORY (400 MissingRequiredFieldError without them). Both ItemType values produce byte-identical graphs; it echoes verbatim on flow-detail, looks cosmetic. Response: {_id, Type:\"Case\", Status:\"Live\"} — born Live, same as a list flow.",
+    "The platform-scaffolded nodes on a REAL fresh case use FLAT ids (Summary, Description, Attachment, Column001, Row001Column001) — NOT the Field_/Column_/Row_ prefix convention. Nodes added afterward DO use the prefix convention; both coexist in one graph. This template mints Sample ids for the blindness/shape contract — the flat-id reality is the finding, remember it before running graph.py helpers that assume prefixed ids against a case draft.",
+    "NO style chain (Model::Appearance -> Appearance -> Appearance::Style -> Style) exists on a fresh case, unlike process/form where an incomplete chain breaks render. Whether the builder needs one on a case is UNVERIFIED (no UI open in the capture).",
+    "NO ProcessDef anywhere in the case draft. Flow-detail instead carries: built-in Priority enum (Critical/High/Medium/Low, Low Default:true), _disabled_category:[\"Done\",\"ReOpened\"] (implies a platform-native Open/InProgress/Done/ReOpened lifecycle), _default_workflow_id:<case_id>_flow (a satellite object that 403s on every draft route even for the creating key — board workflow is UNCAPTURED, not proven absent), _field_permission_mapping:<case_id>_permission (unexplored), CaseView:[] and PinnedViews:[] (board-view config surface).",
+    "There is NO 'Grid' field type on this write path — a board status column is an ordinary Select + ReferredList (Field_Sample04 here; copilot silently substitutes exactly this and the referenced list flow is created + filled with the option strings). The 6-unit row packing rule applies on a case identically to process/form.",
+    "Member surface: same member/batch route shape, but Role enum = Admin | Member (DataAdmin/User/etc. rejected with RoleDoesNotExistError). Every guessed Permission literal 400s UnsupportedPermissionError; only Permission:[] returns 200 — presumptively the same silent no-op trap as process. The real case Permission vocabulary is UNCAPTURED — harvest from the builder UI network tab.",
+    "Copilot FABRICATED a success on this module: claimed a Kanban view with a concrete-sounding view id while CaseView stayed [] and zero graph keys changed. Not reply-lag — a false claim. Diff the graph AND flow-detail CaseView/Report arrays after every claimed board change.",
+    "Application archive CASCADES to every child flow/page/system report in one call; delete then succeeds. Verify via the inventory route, never the delete response."
+  ]
+}
