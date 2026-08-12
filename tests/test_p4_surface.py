@@ -12,6 +12,7 @@ from test_client import DEV, FakeClient, _bare_process_draft
 from kfforge.client import (
     Err,
     FlowCreateReport,
+    KfConfig,
     RolePreferenceReport,
     RoleUsersReport,
     TierReport,
@@ -21,6 +22,7 @@ from kfforge.client import (
     apply_set_role_preference,
     create_flow_any,
     publish_application_verified,
+    run_sweep,
 )
 
 
@@ -369,3 +371,61 @@ def test_set_role_preference_requires_at_least_one_key() -> None:
     c = RoleUsersClient([{"_id": "R1", "Name": "Reviewer", "Members": [], "UserCount": 0}])
     got = apply_set_role_preference(c, "R1")
     assert isinstance(got, Err) and got.kind == "verify"
+
+
+# ---- forge_sweep (#7) ---------------------------------------------------------------------------
+
+
+def test_sweep_apps_reads_the_application_inventory() -> None:
+    c = FakeClient(_bare_draft())
+    c.applications = {"App_1": {"_id": "App_1", "Name": "Demo"}}
+    out = run_sweep(c, "apps")
+    assert out["isError"] is False
+    assert out["results"]["apps"] == {"status": "read", "count": 1,
+                                      "items": [{"_id": "App_1", "Name": "Demo"}], "error": None}
+
+
+def test_sweep_flows_covers_every_kind_and_stays_scoped() -> None:
+    c = FakeClient(_bare_draft())
+    c.flows = {"process": [{"_id": "P1"}], "case": [{"_id": "C1"}, {"_id": "C2"}]}
+    out = run_sweep(c, "flows")
+    assert out["isError"] is False
+    assert out["results"]["flows"]["process"]["count"] == 1
+    assert out["results"]["flows"]["case"]["count"] == 2
+    assert out["results"]["flows"]["form"]["count"] == 0  # never in `c.flows` -> still "read", empty
+
+
+def test_sweep_pages_skipped_when_no_app_id_anywhere() -> None:
+    c = FakeClient(_bare_draft())
+    c._cfg = KfConfig(key_id="k", key_secret="s", account="Acc", domain="dev-x.example.com", app_id="")
+    out = run_sweep(c, "pages")
+    assert out["results"]["pages"]["status"] == "skipped"
+    assert out["isError"] is False  # skipped is not an error
+
+
+def test_sweep_roles_and_lists() -> None:
+    c = FakeClient(_bare_draft())
+    c.app_roles = [{"_id": "R1", "Name": "Reviewer",
+                    "Applications": [{"_id": "App", "Type": "Application"}]}]
+    c.word_lists = {"Priority": "List_1"}
+    out = run_sweep(c, "all", app_id="App")
+    assert out["results"]["roles"]["count"] == 1
+    assert out["results"]["lists"]["count"] == 1
+
+
+def test_sweep_unknown_scope_rejected() -> None:
+    c = FakeClient(_bare_draft())
+    out = run_sweep(c, "everything")
+    assert out["isError"] is True
+
+
+def test_sweep_error_propagates_as_error_bucket_never_swallowed() -> None:
+    class Failing(FakeClient):
+        def list_applications(self):  # type: ignore[override]
+            return Err("http", "boom", 500)
+
+    c = Failing(_bare_draft())
+    out = run_sweep(c, "apps")
+    assert out["isError"] is True
+    assert out["results"]["apps"]["status"] == "error"
+    assert "boom" in out["results"]["apps"]["error"]

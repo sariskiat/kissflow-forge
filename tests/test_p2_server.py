@@ -33,7 +33,7 @@ FORGE_TOOLS = {
     "forge_set_navigation", "forge_share_report", "forge_simulate_case", "forge_create_app",
     "forge_delete_flow",
     "forge_add_role_users", "forge_grant_tier", "forge_create_flow", "forge_publish_app",
-    "forge_dataset_records", "forge_set_role_preference",
+    "forge_dataset_records", "forge_set_role_preference", "forge_sweep",
 }
 
 KF_ENV_VARS = (
@@ -71,6 +71,7 @@ DUMMY_ARGS: dict[str, dict[str, Any]] = {
     "forge_publish_app": {"app_id": "x"},
     "forge_dataset_records": {"flow_id": "x", "op": "list"},
     "forge_set_role_preference": {"role_id": "x", "default_page": "Default"},
+    "forge_sweep": {"scope": "apps"},
 }
 
 

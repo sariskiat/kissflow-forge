@@ -87,6 +87,7 @@ from .client import (
     delete_anything,
     publish_application_verified,
     run_doctor,
+    run_sweep,
 )
 from .dataplane import LiveDataPlane, StepPlan, walk
 from .design import (
@@ -1052,6 +1053,22 @@ def forge_set_role_preference(
         return c.as_tool_result()
     return _result(apply_set_role_preference(c, role_id, default_page=default_page,
                                              default_navigation=default_navigation, app_id=app_id))
+
+
+@mcp.tool()
+def forge_sweep(scope: str, app_id: str | None = None) -> dict[str, Any]:
+    """READ-ONLY (dev only): full-inventory discovery sweep. `scope` is one of
+    "apps"|"flows"|"pages"|"roles"|"lists"|"all". `app_id` defaults to the configured `KF_APP`.
+    Every leakage-prone route (CLAUDE.md: `list_flows`/`list_lists` return the WHOLE ACCOUNT
+    without `_application_id`) is already scoped inside the client this sweep uses. Each
+    requested sub-scope lands in exactly one bucket per the result's own `status`: `read` (with
+    its item count + inventory), `error` (never swallowed), or `skipped` ("pages" only, when no
+    app_id is available at all).
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return run_sweep(c, scope, app_id=app_id)
 
 
 # =====================================================================================

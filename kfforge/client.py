@@ -2590,3 +2590,62 @@ def apply_set_role_preference(
     )
     return RolePreferenceReport(role_id=role_id, default_page=default_page,
                                 default_navigation=default_navigation, verified=verified)
+
+
+_SWEEP_SCOPES = ("apps", "flows", "pages", "roles", "lists")
+_SWEEP_FLOW_KINDS = ("process", "form", "case", "list", "dataset")
+
+
+def _sweep_bucket(got: list[Any] | Err) -> dict[str, Any]:
+    if isinstance(got, Err):
+        return {"status": "error", "count": 0, "items": [], "error": got.message}
+    return {"status": "read", "count": len(got), "items": got, "error": None}
+
+
+def run_sweep(client: KfClient, scope: str, app_id: str | None = None) -> dict[str, Any]:
+    """Read-only full-inventory discovery, `_application_id`-scoped everywhere it matters — the
+    TWO known leakage routes (CLAUDE.md: `list_flows`/`list_lists` return the WHOLE ACCOUNT's
+    flows/lists without it) are already scoped inside `KfClient` itself, so this sweep inherits
+    the safety, not just the convenience.
+
+    `scope` is one of "apps"|"flows"|"pages"|"roles"|"lists"|"all". `app_id` defaults to the
+    client's own configured `KF_APP`. Every requested sub-scope lands in exactly one bucket —
+    `read` (with its item count + inventory), `error` (the Err message, never swallowed), or
+    `skipped` (only "pages", when no `app_id` is available at all — pages are app-scoped by
+    construction) — the output-invariant audit this whole engine insists on.
+    """
+    valid = (*_SWEEP_SCOPES, "all")
+    if scope not in valid:
+        return {"scope": scope, "isError": True,
+                "error": f"forge_sweep: unknown scope {scope!r} — valid: {sorted(valid)}"}
+
+    effective_app = app_id if app_id is not None else client._cfg.app_id
+    wanted = _SWEEP_SCOPES if scope == "all" else (scope,)
+
+    results: dict[str, Any] = {}
+    any_error = False
+    for s in wanted:
+        if s == "apps":
+            bucket = _sweep_bucket(client.list_applications())
+        elif s == "flows":
+            by_kind = {kind: _sweep_bucket(client.list_flows(kind))  # type: ignore[arg-type]
+                      for kind in _SWEEP_FLOW_KINDS}
+            any_error = any_error or any(v["status"] == "error" for v in by_kind.values())
+            results[s] = by_kind
+            continue
+        elif s == "pages":
+            if not effective_app:
+                bucket = {"status": "skipped", "count": 0, "items": [],
+                         "error": "no app_id given or configured — pages are app-scoped"}
+            else:
+                bucket = _sweep_bucket(client.list_pages(effective_app))
+        elif s == "roles":
+            bucket = _sweep_bucket(client.list_app_roles(effective_app))
+        else:  # "lists"
+            got = client.list_lists()
+            rows = got.get("Data", got) if isinstance(got, dict) else got
+            bucket = _sweep_bucket(rows if not isinstance(got, Err) else got)
+        any_error = any_error or bucket["status"] == "error"
+        results[s] = bucket
+
+    return {"scope": scope, "app_id": effective_app, "results": results, "isError": any_error}
