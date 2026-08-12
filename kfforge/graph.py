@@ -527,6 +527,7 @@ def add_table(
     columns: list[tuple[str, FieldType | str]] | list[tuple[str, FieldType | str, dict[str, Any] | None]],
     max_rows: int | None = None,
     allow_import: bool = False,
+    after_section: str | None = None,
 ) -> Draft:
     """Add a child table. Pure. No-op if a table of that name already exists.
 
@@ -540,6 +541,11 @@ def add_table(
     `max_rows` writes `MaxRow`, which is Kissflow's NATIVE row cap — the MAX 2 / MAX 5 containment
     rule needs no client-side enforcement. Child columns carry Start=0/End=0: the 6-unit grid does
     not apply inside a table.
+
+    `after_section` (#10) names a Section whose root row the host row must land directly AFTER in
+    root `Model::Row`. An empty banner Section renders ONLY as a caption right above its table —
+    appending the host last strands the banner and the whole form fails to render (CLAUDE.md >
+    Tables). Unknown name raises before any write. Default None keeps the append behavior.
     """
     new: Draft = copy.deepcopy(draft)
     model_id = _model_id(new)
@@ -589,7 +595,16 @@ def add_table(
                      "Model::Row": [schema_row], "Model::Field": child_fields}
 
     root.setdefault("Model::Model", []).append(table_id)
-    root.setdefault("Model::Row", []).append(host_row)
+    rows = root.setdefault("Model::Row", [])
+    if after_section is None:
+        rows.append(host_row)
+    else:
+        anchor = next((v.get("Row") for v in new.values()
+                       if isinstance(v, dict) and v.get("Kind") == "Column"
+                       and v.get("Type") == "Section" and v.get("Name") == after_section), None)
+        if anchor not in rows:
+            raise ValueError(f"after_section {after_section!r}: no Section of that name has a root row")
+        rows.insert(rows.index(anchor) + 1, host_row)
     return new
 
 

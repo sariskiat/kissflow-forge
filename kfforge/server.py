@@ -409,20 +409,23 @@ def forge_add_table(
     allow_import: bool = False,
     kind: str = "process",
     publish: bool = False,
+    after_section: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): add a child table (a nested Model hosted by a Column, per
     CLAUDE.md "A TABLE is a nested Model, not a field type"). `columns` is `[[name, type], ...]` or
     `[[name, type, options], ...]` where `options` is an opt-in per-column dict written verbatim onto
     the Field node (e.g. `{"Decimalpoint": 0}` for an integer-only Number). `max_rows` writes
     Kissflow's NATIVE row cap (no client-side enforcement needed). Idempotent — a table already named
-    `name` is a no-op (no second PUT).
+    `name` is a no-op (no second PUT). `after_section` places the host row directly after that
+    Section's root row — REQUIRED when the table has a banner section, or the stranded banner breaks
+    the whole form's render (CLAUDE.md > Tables).
     """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
     col_pairs = [(c[0], c[1], c[2] if len(c) > 2 else None) for c in columns]
     return _result(apply_table(c, kind, flow_id, name, col_pairs, max_rows=max_rows,  # type: ignore[arg-type]
-                               allow_import=allow_import, publish=publish))
+                               allow_import=allow_import, publish=publish, after_section=after_section))
 
 
 @mcp.tool()

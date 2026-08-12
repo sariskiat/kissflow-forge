@@ -762,10 +762,14 @@ def apply_table(
     max_rows: int | None = None,
     allow_import: bool = False,
     publish: bool = False,
+    after_section: str | None = None,
 ) -> TableReport | Err:
     """GET draft -> graph.add_table offline (idempotent: no-op if a table named `name` already
     exists) -> guarded PUT (skipped on the idempotent no-op path) -> read-back verify every child
     column NAME actually landed under that table -> optional publish.
+
+    `after_section` (#10) places the host row directly after that Section's root row in
+    `Model::Row` — a banner section stranded away from its table breaks the whole form's render.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
@@ -776,7 +780,8 @@ def apply_table(
     already = any(isinstance(v, dict) and v.get("Type") == "Model" and v.get("Name") == name
                  for v in draft.values())
     try:
-        new = add_table(draft, name, columns, max_rows=max_rows, allow_import=allow_import)
+        new = add_table(draft, name, columns, max_rows=max_rows, allow_import=allow_import,
+                        after_section=after_section)
     except ValueError as e:
         return Err("verify", f"offline add_table rejected the spec: {e}")
 

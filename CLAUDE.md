@@ -128,10 +128,17 @@ requires.
   - `Textarea` needs `AllowFormatting` (boolean).
   - `Number` needs `DefaultValue` and `Decimalpoint`.
   - `Attachment` needs `CaptureOnly` (boolean).
-- **The style chain must exist on every flow**: `Model::Appearance` →
-  `Appearance` → `Appearance::Style` → `Style`. If this chain is missing
-  entirely (not just empty), the page fails to render, not just fails to look
-  styled.
+- **The style chain must exist COMPLETE on every flow**: `Model::Appearance` →
+  `Appearance` → `Appearance::Style` → `Style`. A missing chain fails to
+  render the page — and an INCOMPLETE one is exactly as fatal (proven live
+  2026-08-12, replacing an earlier belief that only a wholly-absent chain
+  breaks render): an `Appearance` whose `Appearance::Style` is EMPTY (zero
+  `Style` children) throws the builder's "There was an error / Reload" for the
+  whole form. doctor `ok`, publish 200, and a live item create all passed
+  while the form stayed broken — only the builder UI caught it. The tell:
+  Appearance-node count > Style-node count in the draft; each `Appearance`
+  must own exactly one `Style`. `forge_set_styles` with a real token on the
+  stranded section completes the chain and restores render.
 - **A Row is a 6-unit grid.** Field columns tile `(0,2) (2,4) (4,6)` — start
   and end units along a 6-wide row, at most 3 columns per row. Overflow one
   Row (say, columns all pinned at `Start=0`, or more than 3 columns crammed
@@ -528,9 +535,11 @@ child Field { ..., Model:<table id> }                                          #
     (`Column{Type:"Model"}`, not a Section), so a misordered host is invisible — the rebuild read
     as "1 gap" while being completely unrenderable. HTTP 200 + publish + doctor-clean +
     compare-clean all lied; only the builder UI told the truth.
-  - **Fix owed:** `forge_add_table` needs a placement input (e.g. `after_section: <banner name>`)
-    so `add_table` INSERTS the host after that section's root row instead of appending; and the
-    comparator must diff root `Model::Row` order INCLUDING the table host, not around it.
+  - **Fix landed (#10, 2026-08-12):** `add_table`/`forge_add_table` take `after_section: <banner
+    name>` and INSERT the host directly after that section's root row (unknown name raises before
+    any write; omitted = old append behavior). The banner Section itself stays caller-created
+    (`regroup_into_sections` with an empty field list). Still owed elsewhere: the comparator must
+    diff root `Model::Row` order INCLUDING the table host, not around it (#16).
 
 ## Field events
 

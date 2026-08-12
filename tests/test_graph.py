@@ -1024,3 +1024,39 @@ def test_add_field_validation_raises_on_missing_field() -> None:
     d = apply_changes(bare, [FieldSpec(name="a", type=FieldType.TEXT)])
     with pytest.raises(ValueError, match="field not found"):
         add_field_validation(d, "nope", "CONTAINS", "x")
+
+
+def test_add_table_after_section_places_host_adjacent_to_banner() -> None:
+    """#10: a table host must be INSERTABLE right after its banner section's root row in
+    Model::Row — appending it last strands the empty banner and the whole form fails to
+    render (CLAUDE.md > Tables). after_section names the banner; the host lands at
+    index(banner_row) + 1, with later sections after it."""
+    from kfforge.graph import add_table, apply_changes, regroup_into_sections
+    from kfforge.types import FieldSpec, FieldType
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    draft = apply_changes(bare, [FieldSpec(name="A", type=FieldType.TEXT),
+                                 FieldSpec(name="B", type=FieldType.TEXT)])
+    # banner = empty section between two field sections; table must NOT land after "Tail"
+    draft = regroup_into_sections(draft, [("Head", ["A"]), ("Log Banner", []), ("Tail", ["B"])])
+    got = add_table(draft, "Log", [("Round", FieldType.NUMBER)], after_section="Log Banner")
+
+    root_rows = got["M1"]["Model::Row"]
+    row_label = {}
+    for rid in root_rows:
+        cols = got[rid].get("Row::Column", [])
+        col = got[cols[0]]
+        row_label[rid] = (col.get("Type"), col.get("Name"))
+    labels = [row_label[r] for r in root_rows]
+    assert labels == [("Section", "Head"), ("Section", "Log Banner"),
+                      ("Model", "Log"), ("Section", "Tail")]
+
+
+def test_add_table_after_section_unknown_name_raises() -> None:
+    from kfforge.graph import add_table
+    from kfforge.types import FieldType
+    import pytest
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    with pytest.raises(ValueError, match="Nope"):
+        add_table(bare, "Log", [("Round", FieldType.NUMBER)], after_section="Nope")
