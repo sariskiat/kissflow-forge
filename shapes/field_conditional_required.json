@@ -1,0 +1,52 @@
+{
+  "kind": "Criteria",
+  "description": "Conditional-required: a field is required only when another field's value meets a rule. The FOURTH Criteria/Condition owner family — owner key FieldValidation (same owner as a plain validation rule), distinct from ColumnVisibility used for conditional VISIBILITY. Unlike branch/goto Expressions this rule is an inline KRE formula STRING in RHSValue (not a Node-AST), referencing fields BY NAME as ${'form.FieldName'}. Captured live off a copilot build 2026-08-13 (#57). Graph-verified; RUNTIME enforcement UNVERIFIED (no live item walk).",
+  "source_capture": "live-probe-2026-08-13-issue-57.md",
+  "template": {
+    "Model_Sample01": {
+      "Id": "Model_Sample01",
+      "Kind": "Model",
+      "FlowType": "Process",
+      "Model::Field": ["Field_Sample01", "Field_Sample02"]
+    },
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Text",
+      "Name": "Target",
+      "Model": "Model_Sample01",
+      "FieldValidation::Criteria": ["Criteria_Sample01"]
+    },
+    "Field_Sample02": {
+      "Id": "Field_Sample02",
+      "Kind": "Field",
+      "Type": "Select",
+      "Name": "Trigger",
+      "Model": "Model_Sample01"
+    },
+    "Criteria_Sample01": {
+      "Id": "Criteria_Sample01",
+      "Kind": "Criteria",
+      "FieldValidation": "Field_Sample01",
+      "Criteria::Condition": ["Condition_Sample01"]
+    },
+    "Condition_Sample01": {
+      "Id": "Condition_Sample01",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample01",
+      "Operator": "EXPRESSION",
+      "RHSType": "Value",
+      "HasArguments": true,
+      "ErrorMessage": "Target is required when Trigger is Option A",
+      "RHSValue": "if(${'form.Trigger'} == 'Option A', ${'form.Target'} != null, true)"
+    }
+  },
+  "notes": [
+    "Owner-family: this is a FieldValidation-owned Criteria (chain Field -> FieldValidation::Criteria -> Criteria{FieldValidation} -> Criteria::Condition -> Condition{Criteria}, back-refs bidirectional) — the SAME owner key as a plain string-length/range validation rule (shapes/field_validation_criteria.json), NOT the ColumnVisibility owner used for conditional VISIBILITY (shapes/criteria_column_visibility.json). Conditional-required is modelled as a conditional VALIDATION rule, not a `Required:true` flag flip.",
+    "The rule is an inline KRE formula STRING in RHSValue, NOT a Node-AST subtree (unlike branch/goto Expressions). Fields are referenced BY NAME as ${'form.<FieldName>'}, never by Field id. Distinguishing wire keys: Operator:'EXPRESSION', RHSType:'Value', HasArguments:true.",
+    "Formula shape: if(<trigger condition>, <required assertion>, true) — returns true (valid) when the trigger does not apply, else asserts the target is non-null (`${'form.Target'} != null`). The `true` else-branch is what makes the field optional in the non-triggering case.",
+    "Field NAMES inside the KRE string ('Trigger','Target') are display names, not node ids — case-sensitive and unvalidated by the write API (same silent-mismatch trap as any literal; read the real field names, never guess).",
+    "RUNTIME UNVERIFIED (THE RULE): the graph landed coherent but was NOT walked through a submit to confirm it actually blocks/allows. Owed: a live item walk that submits with the trigger set and the target blank, expecting a block.",
+    "Copilot structural builds AUTO-PUBLISH the draft without being asked — snapshot expecting the flow to already be live afterward."
+  ]
+}

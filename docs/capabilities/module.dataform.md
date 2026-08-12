@@ -15,6 +15,7 @@ routes:
   - "GET|POST /dataset/2/{acct}/{flow_id}/list"
 shapes:
   - shapes/dataform_dataset_skeleton.json
+  - shapes/widget_view_table_dataform.json
 params:
   - name: Name
     type: string
@@ -80,9 +81,32 @@ first write.
 - Connect a process to a dataform with a Reference field:
   `QueryDefinition{LHSModel: <dataform id>, FlowType: "Dataset"}` —
   `FlowType` is the sole discriminator of the target kind (Process / Form /
-  User / Dataset all confirmed). Page widgets bind through the same
-  `view/*` `flow_type`/`flow_id`/`view_id` trio with `flow_type:"Dataset"`
-  (write-proven; render unverified until a builder-UI check).
+  User / Dataset all confirmed). To embed a dataform's records in a PAGE, see
+  the Page widget section below — the binding is NOT `flow_type:"Dataset"`.
+
+## Page widget
+
+To show a dataform's records on a page, use a `view/table` widget (Component
+`Script.web` `"view/table"`) bound with **`flow_type="Form"`** (NOT
+`"Dataset"`) and **`view_id="allitems"`** (NOT `"myitems"`), plus display
+config `showform=true` / `newItem=true`
+(`shapes/widget_view_table_dataform.json`). This CORRECTS the earlier
+write-proven-only guess (`flow_type:"Dataset"`, `view_id:"myitems"`), which
+rendered "Unable to display component".
+
+⚠️ Two open points (THE RULE — captured, not proven-live):
+
+- **`flow_id` id-form is ambiguous.** Copilot bound `flow_id` to the
+  dataform's name-slug WITHOUT the `_A00` app suffix, while the dataset's API
+  `_id` carries the suffix. Either page widgets use a different id namespace
+  or copilot mis-slugged — flag BOTH forms until a render check resolves which
+  id actually loads.
+- **Render is UI-pending.** The graph is coherent and fully wired but was not
+  opened in the builder. `forge_build_page` does NOT validate `flow_type` (it
+  accepts both `Form` and `Dataset`), so it can produce the working shape
+  today by passing `flow_type="Form"` + `view_id="allitems"` explicitly — but
+  just as happily the broken one. A `WIDGET_REQUIRED_CONFIG` tightening is
+  owed once render confirms the id form.
 
 ## Gotchas
 

@@ -259,4 +259,4 @@ If both carry the SAME Name (e.g. both "FDE Log"), an `owners` key in `forge_set
 used to resolve to the host (empty) and hard-reject the banner's field as "outside every
 matrix section". The engine now resolves a section-owner name to the Section node first, but
 DON'T rely on it — give the banner Section a distinct name (e.g. "FDE Log Notes") from the
-table ("FDE Log"). Proven live building the AI Clinic Case form 2026-08-12.
+table ("FDE Log"). Proven live building a sample Case form 2026-08-12.

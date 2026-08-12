@@ -1,0 +1,130 @@
+{
+  "kind": "Component",
+  "description": "Table view widget bound to a DATAFORM (dataset) on a page. The load-bearing difference from the broken guess: flow_type='Form' (NOT 'Dataset') and view_id='allitems' (NOT 'myitems'). Same view/* trio + Container/FieldMapping/Property structure as widget_view_table.json, specialized for a dataform's records. Captured live off a copilot build 2026-08-13 (#58). Graph-verified; RENDER UI-pending.",
+  "source_capture": "live-probe-2026-08-13-issue-58.md",
+  "template": {
+    "FieldMapping_Sample01": {
+      "Id": "FieldMapping_Sample01",
+      "Kind": "FieldMapping",
+      "Name": "flow_type",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": ["Property_Sample01"]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample01",
+      "Value": "Form"
+    },
+    "FieldMapping_Sample02": {
+      "Id": "FieldMapping_Sample02",
+      "Kind": "FieldMapping",
+      "Name": "flow_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": ["Property_Sample02"]
+    },
+    "Property_Sample02": {
+      "Id": "Property_Sample02",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample02",
+      "Value": "Sample_Dataform"
+    },
+    "FieldMapping_Sample03": {
+      "Id": "FieldMapping_Sample03",
+      "Kind": "FieldMapping",
+      "Name": "view_id",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": ["Property_Sample03"]
+    },
+    "Property_Sample03": {
+      "Id": "Property_Sample03",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample03",
+      "Value": "allitems"
+    },
+    "FieldMapping_Sample04": {
+      "Id": "FieldMapping_Sample04",
+      "Kind": "FieldMapping",
+      "Name": "showform",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": ["Property_Sample04"]
+    },
+    "Property_Sample04": {
+      "Id": "Property_Sample04",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample04",
+      "Value": true
+    },
+    "FieldMapping_Sample05": {
+      "Id": "FieldMapping_Sample05",
+      "Kind": "FieldMapping",
+      "Name": "newItem",
+      "Container": "Container_Sample01",
+      "FieldMapping::Property": ["Property_Sample05"]
+    },
+    "Property_Sample05": {
+      "Id": "Property_Sample05",
+      "Kind": "Property",
+      "Type": "Value",
+      "FieldMapping": "FieldMapping_Sample05",
+      "Value": true
+    },
+    "Container_Sample01": {
+      "Id": "Container_Sample01",
+      "Kind": "Container",
+      "Type": "Component",
+      "Name": "DataformTable",
+      "LayoutConfig": {
+        "colSpan": 6,
+        "rowSpan": 10,
+        "minRowSpan": "auto",
+        "maxRowSpan": "auto"
+      },
+      "Container": "Container001",
+      "Container::Component": ["Component_Sample01"],
+      "Container::FieldMapping": [
+        "FieldMapping_Sample01",
+        "FieldMapping_Sample02",
+        "FieldMapping_Sample03",
+        "FieldMapping_Sample04",
+        "FieldMapping_Sample05"
+      ],
+      "Container::Style": ["Style_Sample01"]
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Script": {
+        "web": "view/table"
+      },
+      "Name": "DataformTable",
+      "Page": "Page_Sample01",
+      "Data": {
+        "manifest_id": "Table",
+        "category": "view",
+        "visualization_type": "table",
+        "flow_type": "Form",
+        "flow_id": "Sample_Dataform",
+        "view_id": "allitems"
+      },
+      "Container": "Container_Sample01"
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Container": "Container_Sample01",
+      "Value": {}
+    }
+  },
+  "notes": [
+    "The two load-bearing differences from a myitems process table (shapes/widget_view_table.json): flow_type='Form' (NOT 'Dataset') and view_id='allitems' (NOT 'myitems'). The engine's prior Dataset-bound guess (flow_type='Dataset', view_id='myitems') rendered 'Unable to display component'; this Form/allitems binding is what copilot chose for a dataform.",
+    "flow_id AMBIGUITY, unresolved (THE RULE): copilot bound flow_id to the dataform's name-SLUG WITHOUT the _A00 app suffix (captured as 'R2_Data'), while the dataset's API _id carries the suffix ('R2_Data_A00'). Either page widgets bind datasets in a different id namespace, or copilot mis-slugged. Both forms are flagged; the RENDER check that resolves which id actually loads is still owed — the shape above uses a synthetic single-token id to avoid encoding either guess as truth.",
+    "RENDER UI-pending: the graph is coherent and fully wired but was NOT opened in the builder to confirm it renders (headless capture). Strong candidate, not proven-live.",
+    "Direct forge_build_page does NOT validate flow_type — it accepted BOTH 'Form' and 'Dataset' with view_id='allitems' and read both back coherently. So the tool can produce this working shape today by passing flow_type='Form' + view_id='allitems' explicitly, but it will just as happily produce the broken one; a WIDGET_REQUIRED_CONFIG tightening is owed once render confirms the id form.",
+    "showform=true and newItem=true are display config (not binding) — they are NOT mirrored into Component.Data, same convention as widget_view_table.json's showform/steps."
+  ]
+}
