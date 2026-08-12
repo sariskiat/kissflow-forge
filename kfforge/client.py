@@ -261,6 +261,34 @@ class KfClient:
         c = self._cfg
         return self._json("GET", f"{c.base}/app_role/2/{c.account}/{role_id}")
 
+    def put_app_role(self, role_id: str, body: dict[str, Any], app_id: str | None = None) -> Any | Err:
+        """Write an AppRole's own record — the SAME route `get_app_role` reads. Proven live
+        2026-08-12 (#52): `PUT /app_role/2/{acct}/{role_id}?_application_id={app}`. Used for both
+        assigning users (⚠️ WRITE key `Users`, asymmetric with the READ key `Members` — a `Members`
+        write silently no-ops) and setting `Preference` (DefaultPage/DefaultNavigation)."""
+        c = self._cfg
+        scope = app_id if app_id is not None else c.app_id
+        return self._json("PUT", f"{c.base}/app_role/2/{c.account}/{role_id}?_application_id={scope}",
+                          body)
+
+    def get_assignee(self, query: str) -> list[dict[str, Any]] | Err:
+        """Search for a real user to hand to `put_app_role`'s `Users` write. Proven live
+        2026-08-12 (#52): `GET /user/2/{acct}/assignee?q=<query>` -> a bare array of assignee
+        objects `{_id, Kind:"User", Email, Name}`, written onto a role VERBATIM."""
+        c = self._cfg
+        return self._json("GET", f"{c.base}/user/2/{c.account}/assignee?q={query}")
+
+    def delete_member(self, kind: FlowKind, flow_id: str, role_id: str) -> Any | Err:
+        """Remove an AppRole's grant on a flow entirely — the "No access" tier
+        (shapes/app_role_grant.json note 0, browser-proven 2026-08-12): a real removal route,
+        `DELETE /flow/2/{acct}/{kind}/{flow_id}/member/{role_id}?_application_id={app}`."""
+        c = self._cfg
+        return self._json(
+            "DELETE",
+            f"{c.base}/flow/2/{c.account}/{kind}/{flow_id}/member/{role_id}"
+            f"?_application_id={c.app_id}",
+        )
+
     def post_member_batch(self, kind: FlowKind, flow_id: str, members: list[dict[str, Any]]) -> Any | Err:
         """CLAUDE.md Permissions: body=[{_id,Name,Kind:"AppRole",Role,Permission}]. `Name` is validated
         against AppRoles that ALREADY exist in the account — `KISSFLOW_ERROR_00051
@@ -2114,3 +2142,111 @@ def delete_anything(
         verified = not any(isinstance(f, dict) and f.get("_id") == flow_id for f in still)
     return {"kind": kind, "id": flow_id, "deleted": True, "verified": verified,
             "isError": not verified}
+
+
+# =====================================================================================
+# issue #55 surface additions below. Same shape as every apply_* above: GET/resolve -> offline
+# mutate where applicable -> guarded PUT -> READ-BACK verify -> explicit output-invariant audit.
+# =====================================================================================
+
+
+def _role_write_body(detail: dict[str, Any]) -> dict[str, Any]:
+    """Non-underscore keys off a `GET /app_role/.../{role_id}` detail, ready to PUT straight back.
+
+    The write endpoint reuses the SAME record shape the read endpoint returns, but with one
+    asymmetric key (proven live 2026-08-12, #52): it reads back under `Members` but must be
+    WRITTEN under `Users` — a body that carries `Members` instead 200s and silently no-ops.
+    `Members` is dropped from the body here and its entries carried over verbatim under `Users`,
+    so a caller writing e.g. only `Preference` never accidentally wipes existing membership.
+    """
+    body = {k: v for k, v in detail.items() if not k.startswith("_")}
+    members = body.pop("Members", None) or []
+    body["Users"] = list(members)
+    return body
+
+
+@dataclass(frozen=True)
+class RoleUsersReport:
+    """Output-invariant audit for forge_add_role_users (#52): every candidate user lands in
+    `added`, `already_present`, or `not_found` — never silently unaccounted for. `not_found`
+    covers BOTH a `user_query` that matched zero real assignees and a candidate that was written
+    but failed to verify on read-back (a real write failure, not folded into `already_present`)."""
+    role_id: str
+    added: tuple[str, ...]
+    already_present: tuple[str, ...]
+    not_found: tuple[str, ...]
+    user_count: int | None
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "role_id": self.role_id, "added": list(self.added),
+            "already_present": list(self.already_present), "not_found": list(self.not_found),
+            "user_count": self.user_count, "isError": bool(self.not_found),
+        }
+
+
+def apply_add_role_users(
+    client: KfClient,
+    role_id: str,
+    user_query: str | None = None,
+    user_ids: list[dict[str, Any]] | None = None,
+    app_id: str | None = None,
+) -> RoleUsersReport | Err:
+    """Grant one or more users onto an AppRole (#52's assignee-lookup + asymmetric role-write).
+
+    GET the role detail -> resolve candidate assignee objects (by `user_query` via
+    `KfClient.get_assignee`, and/or `user_ids` — full assignee dicts `{_id, Kind, Email, Name}` a
+    caller already resolved earlier, passed through verbatim) -> merge them onto the role's
+    EXISTING `Members` (never drop current membership) -> ONE `put_app_role` write under the
+    WRITE key `Users` -> read back and verify by `Members`/`UserCount`.
+
+    Requires at least one of `user_query`/`user_ids`. A `user_query` with zero assignee matches
+    is not a tool error on its own — it lands in `not_found`, the same "state it, never silently
+    drop it" discipline as every other audit in this pack.
+    """
+    if user_query is None and not user_ids:
+        return Err("verify", "apply_add_role_users: give user_query or user_ids")
+
+    detail = client.get_app_role(role_id)
+    if isinstance(detail, Err):
+        return detail
+
+    candidates: list[dict[str, Any]] = list(user_ids or [])
+    not_found: list[str] = []
+    if user_query is not None:
+        found = client.get_assignee(user_query)
+        if isinstance(found, Err):
+            return found
+        matched = [c for c in found if isinstance(c, dict) and c.get("_id")]
+        if matched:
+            candidates.extend(matched)
+        else:
+            not_found.append(user_query)
+
+    existing_members = list(detail.get("Members") or [])
+    existing_ids = {str(m.get("_id")) for m in existing_members if isinstance(m, dict)}
+    already = tuple(str(c["_id"]) for c in candidates if str(c.get("_id")) in existing_ids)
+    new_ones = [c for c in candidates if str(c.get("_id")) not in existing_ids]
+
+    if not new_ones:
+        return RoleUsersReport(role_id=role_id, added=(), already_present=already,
+                               not_found=tuple(not_found), user_count=detail.get("UserCount"))
+
+    body = _role_write_body(detail)
+    body["Users"] = existing_members + new_ones
+
+    written = client.put_app_role(role_id, body, app_id)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_app_role(role_id)
+    if isinstance(read_back, Err):
+        return read_back
+    live_ids = {str(m.get("_id")) for m in (read_back.get("Members") or []) if isinstance(m, dict)}
+    added = tuple(str(c["_id"]) for c in new_ones if str(c["_id"]) in live_ids)
+    unverified = tuple(str(c["_id"]) for c in new_ones if str(c["_id"]) not in live_ids)
+
+    return RoleUsersReport(
+        role_id=role_id, added=added, already_present=already,
+        not_found=tuple(not_found) + unverified, user_count=read_back.get("UserCount"),
+    )

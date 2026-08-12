@@ -61,6 +61,7 @@ from .client import (
     Err,
     KfClient,
     KfConfig,
+    apply_add_role_users,
     apply_branch_conditions,
     apply_field_events,
     apply_field_validation,
@@ -928,6 +929,39 @@ def forge_delete_flow(kind: str, flow_id: str, app_id: str | None = None) -> dic
     if isinstance(c, Err):
         return c.as_tool_result()
     return delete_anything(c, kind, flow_id, app_id=app_id)
+
+
+# =====================================================================================
+# forge_* — issue #55 surface additions. Same thin-wrapper contract as the P2 tools above: the
+# logic lives in kfforge.client (or kfforge.capabilities for the offline docs tool); every write
+# tool is dev-only, KF_APP-scoped, and read-verify-write with an explicit audit.
+# =====================================================================================
+
+
+@mcp.tool()
+def forge_add_role_users(
+    role_id: str,
+    user_query: str | None = None,
+    user_ids: list[dict[str, Any]] | None = None,
+    app_id: str | None = None,
+) -> dict[str, Any]:
+    """LIVE write (dev only): grant one or more users onto an AppRole (#52). Give EITHER
+    `user_query` (a name/email substring searched via `GET /user/2/{acct}/assignee?q=...`) OR
+    `user_ids` (assignee objects `{_id, Kind, Email, Name}` a caller already resolved elsewhere)
+    — at least one is required. Existing members are never dropped: the write merges onto the
+    role's current `Members`, never replaces it.
+
+    ⚠️ Asymmetric wire keys (CLAUDE.md Pages, RESOLVED 2026-08-12): the role reads back under
+    `Members` but must be WRITTEN under `Users` — a body carrying `Members` instead 200s and
+    silently no-ops; this tool writes the correct key for you. Verified by re-reading
+    `Members`/`UserCount`; `not_found` covers both a `user_query` with zero matches and a
+    candidate that was written but failed to verify on read-back.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_add_role_users(c, role_id, user_query=user_query, user_ids=user_ids,
+                                        app_id=app_id))
 
 
 # =====================================================================================
