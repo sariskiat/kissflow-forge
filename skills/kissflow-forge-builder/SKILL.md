@@ -108,6 +108,15 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
    Section immediately ABOVE the table, and pass `after_section=<banner name>` so the host row
    sits directly after the banner (a stranded empty banner breaks the whole form's render).
    Row cap is `MaxRow` on the host column.
+   ⚠️ **HARD ORDERING (live-proven render-breaker, THE RULE trap): NEVER call `forge_apply_fields`
+   with a `sections` re-layout AFTER `forge_add_table`.** A re-layout rebuilds the ROOT `Model::Row`,
+   which (a) strands the child table's own schema Row (dangling `Model::Row` ref on the child Model)
+   and (b) dumps the child columns into a stray form-level "Other" section. Result: the flow
+   publishes Live and items walk fine, but the BUILDER FORM shows "There was an error / Reload" —
+   Live+walks ≠ renders. Correct order: create process → ALL form fields + the FINAL section layout
+   in as few `apply_fields` calls as possible (never a corrective re-layout later) → `add_table`(s)
+   LAST with `after_section` → workflow → conditions → gotos → visibility → publish. If a layout fix
+   IS needed after a table exists, DELETE+REBUILD the flow — never re-layout in place.
 
 **4. Workflow — `forge_build_workflow`.**
    Needs `Model::ProcessDef` + `RootProcessDef` (the id as a string ref) + `Button::Row`.
