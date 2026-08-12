@@ -2,14 +2,15 @@
 
 Research ticket: [#53](https://github.com/sariskiat/kissflow-forge/issues/53), part of map [#42](https://github.com/sariskiat/kissflow-forge/issues/42).
 
-**Scope of this file (docs-research half only).** This captures what Kissflow's own
-published documentation (Community help center, `helpdocs.kissflow.com`,
-`kissflow.com` marketing/product pages) says about the three modules. A second
-half — asking the Kissflow copilot directly, headless, and treating its answers
-as `[copilot, unverified]` unless they match a doc citation or a live graph
-capture — is **owed by a later session** and should be merged into this same
-file when it lands. Nothing in this file was verified against a live graph
-capture; every claim here is "the vendor says," not "the engine proved."
+**Scope of this file (both halves now landed).** §1–§6 capture what Kissflow's
+own published documentation (Community help center, `helpdocs.kissflow.com`,
+`kissflow.com` marketing/product pages) says about the three modules. §7 is the
+second half: the same five questions asked of the Kissflow copilot directly,
+headless (2026-08-12), every answer treated as `[copilot, unverified]` unless
+it matches a doc citation here or a live graph capture elsewhere. Nothing in
+this file was verified against a live graph capture; every claim is "the
+vendor says" (docs) or "the vendor's assistant says" (copilot), never "the
+engine proved."
 
 All fetches below were run 2026-08-12. Kissflow's help center has no visible
 per-article revision date, so "as of 2026-08-12" is the freshness marker for
@@ -346,8 +347,77 @@ phrasings converged on the same handful of pages each time:
   is "the vendor's help center says," never "the engine proved against a
   live graph capture." Reconciling this against `shapes/` and a live probe
   is future work, not scoped to this ticket.
-- The copilot-Q&A half of ticket #53 (owed — see the top of this file and
-  the addendum comment on #53): what Kissflow's own AI assistant says when
-  asked these same five questions directly, headless, treated as
-  `[copilot, unverified]` unless it corroborates a doc citation here or a
-  live graph capture elsewhere.
+- ~~The copilot-Q&A half of ticket #53~~ — landed as §7 below (2026-08-12).
+
+## 7. Copilot Q&A (second source, headless, 2026-08-12)
+
+The same five questions (§1–§5 topics), asked of the in-builder copilot via
+the headless send/poll routes with the engine's API token, each suffixed
+"question only — do not build anything" (no build was triggered; chat-only
+replies). Raw replies archived at
+`kissflow-forge-eval/captures/copilot_module_semantics_qa.json`. Everything
+below is `[copilot, unverified]` unless marked otherwise.
+
+**Where copilot corroborates the docs (§1, §3, §5):**
+
+- Module purposes match §1 exactly: Process = "structured, sequential
+  workflows... formal approvals," Board = "dynamic, unpredictable, or
+  collaborative" status-driven tracking (Kanban/List/Matrix), Dataform =
+  "collect, organize, and store master data without any underlying workflow."
+- It volunteered the decision rule the docs never publish (§3's gap):
+  *"If the work is governed by 'Who needs to approve this next?' → Process.
+  If governed by 'What is the current status of this item, and who is
+  working on it?' → Board."* Concrete pick-Process indicators: fixed
+  sequence, conditional routing on data, step-level field permissions,
+  per-step SLAs. Pick-Board: flexible pathing (statuses revisitable in any
+  order), visual workload views, ad-hoc collaboration/checklists. This is
+  the most direct answer §3 was missing — still vendor-flavored, unverified.
+- The four dataform↔process mechanisms match §5's list, with sharper
+  when-to-use framing: Lookup = user picks a master record during a step;
+  Dataform connector = the process *writes* a dataform record on approval
+  (outbound automation); Data-table-in-page = dashboard read surface.
+- Step-scoped validation for Process ("optional at submit, Required only at
+  the Manager Approval step") corroborates the engine's own live capture
+  (`CLAUDE.md` Visibility: "Required is scoped by per-step visibility").
+
+**Where copilot CONFLICTS with the docs or the engine's captures — docs/
+captures win until a live probe says otherwise:**
+
+- **Limits (vs §2's dataform numbers).** Copilot: "no strict hard stop,"
+  recommends ≤150 fields and ≤5 child tables for performance, "no hard limit"
+  on rows, exports capped ~100,000. Docs: hard soft-limits of 1,000 fields,
+  10 child tables, 5,000 rows per child table, 30 events, published on the
+  dataform page. Treat copilot's numbers as performance folklore, not
+  limits.
+- **Remote lookup (vs §5b).** Copilot: a lookup into "a Dataform located in
+  a different workspace or application." Docs: Remote lookup crosses *out of
+  Kissflow entirely* (external HTTP endpoint, JSON/XML/text). Direct
+  contradiction; the docs' definition is the fetched, primary one.
+- **Permission levels (vs §2's sharpest finding).** Copilot gave Dataform
+  "Read, Write, Manage" (docs: Read-only/Edit/Manage) and described Board
+  permissions only as "role-based" without the documented 4-level set. Vague
+  and partially wrong where the docs are precise — §2's table stands.
+- **"Kissflow Formula Engine" shared across all three modules (vs the
+  engine's own live capture).** Copilot asserts all three modules share a
+  formula engine for computed values, with Process formulas additionally
+  referencing step parameters. The engine's proven capture says a process
+  has **no formula/computed field type** — computed values are field events
+  (`CLAUDE.md`, Field events). This lines up with the already-logged fog
+  item (map #42): copilot once wrote a `DefaultValue` formula `=IF(...)`
+  onto a Field with zero Event nodes — possible real default-formula
+  capability, runtime UNVERIFIED. Copilot claiming a formula engine exists
+  is weak evidence the `DefaultValue` path is real; only a runtime probe
+  settles it.
+
+**New, doc-unconfirmed claims worth a later probe (all `[copilot,
+unverified]`):**
+
+- Per-module system fields: Process gets Current Step / Step Assignee /
+  Step Status; Board gets Case ID / Status / Assignee / Closed At; Dataform
+  only Created/Modified metadata.
+- Board items support ad-hoc checklists and activity feeds inside a case.
+- Board/Dataform conditional visibility via "Form Rules" (if field X then
+  show field Y) — a mechanism the engine has never captured on any module.
+- Process supports parallel steps and conditional routing (matches the
+  engine's own `Parallel` + branch-condition captures — corroborated, but
+  copilot adds SLA/escalation claims the engine has never seen in a graph).
