@@ -57,6 +57,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from . import tools
+from .capabilities import search_capabilities
 from .client import (
     Err,
     KfClient,
@@ -1069,6 +1070,19 @@ def forge_sweep(scope: str, app_id: str | None = None) -> dict[str, Any]:
     if isinstance(c, Err):
         return c.as_tool_result()
     return run_sweep(c, scope, app_id=app_id)
+
+
+@mcp.tool()
+def forge_capabilities(query: str = "") -> dict[str, Any]:
+    """OFFLINE, read-only: search the docs/capabilities/*.md capability docs + their linked
+    shapes/*.json captures. Empty `query` returns the full index (`id`, `name`, `status`,
+    `modules` per doc) — the cheapest way to see what is captured at all before building
+    anything. A non-empty `query` matches (case-insensitive substring) against a doc's id, name,
+    ui_path, status, or body text, and returns each match's full frontmatter + body + every
+    linked shape's parsed JSON content inline, so a caller gets the real wire shape in the same
+    call instead of a dangling file reference.
+    """
+    return search_capabilities(query)
 
 
 # =====================================================================================
