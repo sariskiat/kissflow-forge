@@ -83,6 +83,7 @@ from .client import (
     create_flow_any,
     create_process,
     delete_anything,
+    publish_application_verified,
     run_doctor,
 )
 from .dataplane import LiveDataPlane, StepPlan, walk
@@ -993,6 +994,21 @@ def forge_create_flow(kind: str, name: str, extra: dict[str, Any] | None = None)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(create_flow_any(c, kind, name, extra))
+
+
+@mcp.tool()
+def forge_publish_app(app_id: str) -> dict[str, Any]:
+    """LIVE publish (dev only): compile an APPLICATION's draft to its live version, WITH a
+    genuine post-publish read-back (THE RULE: a 200 from publish proves nothing by itself) — the
+    fresh `meta_version` plus any `Runtime_`-prefixed node id found on the app draft, when one is
+    present (⚠️ that shape is UNCAPTURED on this tenant — `runtime_id` is honestly `None` with a
+    note when absent, never guessed). Equivalent to `forge_publish(kind="application", ...)` plus
+    this extra read-back.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(publish_application_verified(c, app_id))
 
 
 # =====================================================================================

@@ -17,6 +17,7 @@ from kfforge.client import (
     apply_add_role_users,
     apply_grant_tier,
     create_flow_any,
+    publish_application_verified,
 )
 
 
@@ -232,3 +233,47 @@ def test_create_flow_unknown_kind_rejected() -> None:
     c = CreateFlowClient()
     got = create_flow_any(c, "wizardry", "x")
     assert isinstance(got, Err) and got.kind == "verify"
+
+
+# ---- forge_publish_app (#4) --------------------------------------------------------------------
+
+
+class PublishAppClient(FakeClient):
+    def __init__(self, app_draft: dict[str, Any]) -> None:
+        super().__init__(_bare_draft())
+        self.app_draft = app_draft
+        self.publish_calls: list[str] = []
+
+    def publish_app(self, app_id):  # type: ignore[override]
+        self.publish_calls.append(app_id)
+        return None
+
+    def get_app_draft(self, app_id):  # type: ignore[override]
+        return self.app_draft
+
+
+def test_publish_app_reads_back_meta_version_no_runtime_node() -> None:
+    c = PublishAppClient({"Root": "M1", "_meta_version": "v9", "M1": {"Id": "M1"}})
+    rep = publish_application_verified(c, "App1")
+    assert rep["published"] is True and rep["isError"] is False
+    assert rep["meta_version"] == "v9"
+    assert rep["runtime_id"] is None and rep["note"]
+    assert c.publish_calls == ["App1"]
+
+
+def test_publish_app_surfaces_a_runtime_node_when_present() -> None:
+    c = PublishAppClient({"Root": "M1", "_meta_version": "v9", "M1": {"Id": "M1"},
+                          "Runtime_abc123": {"Id": "Runtime_abc123"}})
+    rep = publish_application_verified(c, "App1")
+    assert rep["runtime_id"] == "Runtime_abc123"
+    assert "note" not in rep or rep.get("note") is None
+
+
+def test_publish_app_propagates_publish_failure() -> None:
+    class Failing(PublishAppClient):
+        def publish_app(self, app_id):  # type: ignore[override]
+            return Err("http", "boom", 500)
+
+    c = Failing({"Root": "M1", "_meta_version": "v9", "M1": {"Id": "M1"}})
+    got = publish_application_verified(c, "App1")
+    assert isinstance(got, Err)

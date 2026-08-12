@@ -32,7 +32,7 @@ FORGE_TOOLS = {
     "forge_set_styles", "forge_publish", "forge_doctor", "forge_create_page", "forge_build_page",
     "forge_set_navigation", "forge_share_report", "forge_simulate_case", "forge_create_app",
     "forge_delete_flow",
-    "forge_add_role_users", "forge_grant_tier", "forge_create_flow",
+    "forge_add_role_users", "forge_grant_tier", "forge_create_flow", "forge_publish_app",
 }
 
 KF_ENV_VARS = (
@@ -67,6 +67,7 @@ DUMMY_ARGS: dict[str, dict[str, Any]] = {
     "forge_add_role_users": {"role_id": "x", "user_query": "ann"},
     "forge_grant_tier": {"kind": "process", "flow_id": "x", "role_id": "r", "tier": "Manage"},
     "forge_create_flow": {"kind": "process", "name": "x"},
+    "forge_publish_app": {"app_id": "x"},
 }
 
 

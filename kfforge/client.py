@@ -2454,3 +2454,34 @@ def create_flow_any(
 
     return Err("verify", f"create_flow_any: unknown kind {kind!r} — "
                          f"valid: process, form, list, dataset, case")
+
+
+def publish_application_verified(client: KfClient, app_id: str) -> dict[str, Any] | Err:
+    """Publish an APPLICATION (`forge_publish` already exposes `kind="application"`, but bare —
+    this adds a genuine post-publish read-back, THE RULE: a 200 from publish proves nothing by
+    itself). `publish_app` -> `get_app_draft` -> report the fresh `_meta_version` plus any
+    `Runtime_`-prefixed node id found on the draft.
+
+    ⚠️ `Runtime_` is UNCAPTURED — no shape in this repo has ever observed one (grepped the whole
+    tree before writing this). It is included here defensively, as the read-back's own honest
+    finding, not asserted as a proven shape: `runtime_id` is `None` with a note when absent,
+    never a guessed or synthesized value (CLAUDE.md: never guess a literal — read it).
+    """
+    published = client.publish_app(app_id)
+    if isinstance(published, Err):
+        return published
+    draft = client.get_app_draft(app_id)
+    if isinstance(draft, Err):
+        return {"app_id": app_id, "published": True, "runtime_id": None,
+                "meta_version": None, "isError": True,
+                "error": f"publish succeeded but read-back failed: {draft.as_tool_result()['error']}"}
+    runtime_id = next((k for k in draft if isinstance(k, str) and k.startswith("Runtime_")), None)
+    return {
+        "app_id": app_id, "published": True, "runtime_id": runtime_id,
+        "meta_version": draft.get(_META_VERSION), "isError": False,
+        "note": None if runtime_id else (
+            "no Runtime_-prefixed node observed on the app draft read-back — that shape is "
+            "unconfirmed on this tenant; ponytail: not verified live yet, do not treat absence "
+            "as proof either way"
+        ),
+    }
