@@ -322,6 +322,32 @@ class KfClient:
         return self._json("GET", f"{c.base}/flow/2/{c.account}/list/{list_id}/items"
                                  f"?_application_id={c.app_id}")
 
+    # --- word lists (#13, probed live 2026-08-12 on the dev tenant) -------------------------
+    def list_lists(self) -> list[dict[str, Any]] | Err:
+        """App-scoped list inventory. `_application_id` is load-bearing — without it this route
+        silently returns the WHOLE account's lists (CLAUDE.md Item data plane leakage note)."""
+        c = self._cfg
+        return self._json("GET", f"{c.base}/flow/2/{c.account}/list"
+                                 f"?page_size=100&_application_id={c.app_id}")
+
+    def create_list(self, name: str) -> dict[str, Any] | Err:
+        """Create a word-list flow: `POST /flow/2/{acct}/list?_application_id={app}` with
+        `{"Name": ...}` -> `{_id, Type:"List", Status:"Live"}` — born LIVE, no publish step.
+        Duplicate name 400s `FlowNameAlreadyExists` (same as an application create)."""
+        c = self._cfg
+        return self._json("POST", f"{c.base}/flow/2/{c.account}/list?_application_id={c.app_id}",
+                          {"Name": name})
+
+    def set_list_items(self, list_id: str, items: list[str]) -> Any | Err:
+        """SET the list's whole item array: `POST .../list/{id}/items` body
+        `{"ListItems": [...]}`. REPLACE semantics, proven by a two-write live probe (2026-08-12):
+        a second POST replaces the first array outright, so re-running is idempotent and there is
+        no separate delete route to need. A bare array 403s TypeMissMatchError; other dict keys
+        400 InvalidSchemaArguments — `ListItems` is the one accepted shape."""
+        c = self._cfg
+        return self._json("POST", f"{c.base}/flow/2/{c.account}/list/{list_id}/items",
+                          {"ListItems": items})
+
     # --- applications (forge_create_app; PROBE 2026-08-06 — see the DEV report's probe matrix) --
     def list_applications(self) -> list[dict[str, Any]] | Err:
         c = self._cfg
@@ -751,6 +777,70 @@ class TableReport:
             "missing_columns": list(self.missing_columns), "meta_version": self.meta_version,
             "published": self.published, "isError": bool(self.missing_columns),
         }
+
+
+@dataclass(frozen=True)
+class ListReport:
+    """Output-invariant audit for forge_create_list: every requested item value lands in exactly
+    one bucket after the read-back — `verified_items` or `missing_items`."""
+    list_id: str
+    name: str
+    created: bool                        # False when a list of that name already existed (reused)
+    items: tuple[str, ...]
+    verified_items: tuple[str, ...]
+    missing_items: tuple[str, ...]
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "list_id": self.list_id, "name": self.name, "created": self.created,
+            "items": list(self.items), "verified_items": list(self.verified_items),
+            "missing_items": list(self.missing_items), "isError": bool(self.missing_items),
+        }
+
+
+def apply_word_list(
+    client: KfClient,
+    name: str,
+    items: list[str],
+) -> ListReport | Err:
+    """Create-or-reuse a word list by NAME, SET its items, read back every value (#13).
+
+    Routes probed live 2026-08-12: create `POST /flow/2/{acct}/list?_application_id={app}`
+    (born LIVE, no publish step); items `POST .../list/{id}/items` `{"ListItems":[...]}` with
+    REPLACE semantics — so this whole function is idempotent. Resolution by name goes through
+    the app-scoped inventory, never an unscoped route (leakage rule). Read-back is the audit:
+    a requested value absent from the live item array lands in `missing_items`, never silently.
+    """
+    inventory = client.list_lists()
+    if isinstance(inventory, Err):
+        return inventory
+    rows = inventory.get("Data", inventory) if isinstance(inventory, dict) else inventory
+    existing = {r.get("Name"): r.get("_id") for r in rows if isinstance(r, dict)}
+
+    created = name not in existing
+    if created:
+        made = client.create_list(name)
+        if isinstance(made, Err):
+            return made
+        list_id = made.get("_id", "")
+    else:
+        list_id = existing[name]
+    if not list_id:
+        return Err("verify", f"list {name!r}: no _id resolvable from create/inventory")
+
+    wrote = client.set_list_items(list_id, items)
+    if isinstance(wrote, Err):
+        return wrote
+
+    live = client.get_list_items(list_id)
+    if isinstance(live, Err):
+        return live
+    live_set = set(live)
+    return ListReport(
+        list_id=list_id, name=name, created=created, items=tuple(items),
+        verified_items=tuple(v for v in items if v in live_set),
+        missing_items=tuple(v for v in items if v not in live_set),
+    )
 
 
 def apply_table(

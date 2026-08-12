@@ -75,6 +75,7 @@ from .client import (
     apply_sequence_number,
     apply_step_permissions,
     apply_table,
+    apply_word_list,
     apply_workflow,
     create_application_verified,
     create_process,
@@ -426,6 +427,26 @@ def forge_add_table(
     col_pairs = [(c[0], c[1], c[2] if len(c) > 2 else None) for c in columns]
     return _result(apply_table(c, kind, flow_id, name, col_pairs, max_rows=max_rows,  # type: ignore[arg-type]
                                allow_import=allow_import, publish=publish, after_section=after_section))
+
+
+@mcp.tool()
+def forge_create_list(
+    name: str,
+    values: list[str],
+) -> dict[str, Any]:
+    """LIVE write (dev only, KF_APP): create-or-reuse a word list by NAME and SET its item
+    values (#13, routes probed live 2026-08-12). A list is born LIVE — no publish step. Items
+    use REPLACE semantics (the whole array is set each call), so re-running is idempotent.
+    Point a Select at it afterwards via forge_apply_fields' `referred_list` (proven end to end:
+    a real value persists on an item, a value outside the list PUTs 200 and silently clears the
+    field — CLAUDE.md's Select discard rule, which is why values are read back and audited
+    here). Lists holding personal data stay HUMAN-MADE (PDPA) — the spec path refuses to compile
+    them into this tool; do not route one here by hand either.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_word_list(c, name, values))
 
 
 @mcp.tool()

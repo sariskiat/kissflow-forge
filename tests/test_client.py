@@ -109,6 +109,22 @@ class FakeClient(KfClient):
             return Err("http", f"list {list_id} fetch failed")
         return self.list_items.get(list_id, [])
 
+    # --- word lists (#13) ---
+    def list_lists(self):  # type: ignore[override]
+        return [{"_id": lid, "Name": name} for name, lid in getattr(self, "word_lists", {}).items()]
+
+    def create_list(self, name):  # type: ignore[override]
+        if not hasattr(self, "word_lists"):
+            self.word_lists: dict[str, str] = {}
+        lid = f"{name.replace(' ', '_')}_X1"
+        self.word_lists[name] = lid
+        return {"_id": lid, "Type": "List", "Status": "Live", "Name": name}
+
+    def set_list_items(self, list_id, items):  # type: ignore[override]
+        dropped = getattr(self, "drop_list_values", set())
+        self.list_items[list_id] = [v for v in items if v not in dropped]  # REPLACE semantics
+        return {"ListItems": self.list_items[list_id]}
+
     # --- member batch ---
     def list_flows(self, kind):  # type: ignore[override]
         return self.flows.get(kind, [])
@@ -1067,3 +1083,45 @@ def test_get_app_role_fetches_role_detail_by_id() -> None:
     c = _AppRoleRouteClient([[]])
     got = c.get_app_role("Ro_X")
     assert isinstance(got, dict) and got["Name"] == "X" and got["Members"] == [{"_id": "U1"}]
+
+
+# ---- apply_word_list (#13) --------------------------------------------------------------------
+
+def test_apply_word_list_creates_sets_and_verifies() -> None:
+    from kfforge.client import ListReport, apply_word_list
+
+    c = FakeClient(_bare_form_draft())
+    rep = apply_word_list(c, "Priorities", ["High", "Medium", "Low"])
+    assert isinstance(rep, ListReport)
+    assert rep.created is True
+    assert rep.verified_items == ("High", "Medium", "Low") and rep.missing_items == ()
+    assert rep.as_tool_result()["isError"] is False
+
+
+def test_apply_word_list_reuses_existing_by_name_and_replaces_items() -> None:
+    """REPLACE semantics (live-proven 2026-08-12): a second call with a changed value set
+    replaces the array outright — no duplicate list, no stale leftovers."""
+    from kfforge.client import ListReport, apply_word_list
+
+    c = FakeClient(_bare_form_draft())
+    first = apply_word_list(c, "Priorities", ["High", "Low"])
+    assert isinstance(first, ListReport)
+    rep = apply_word_list(c, "Priorities", ["Critical", "High", "Low"])
+    assert isinstance(rep, ListReport)
+    assert rep.created is False, "reused by name, never a second list"
+    assert rep.list_id == first.list_id
+    assert c.list_items[rep.list_id] == ["Critical", "High", "Low"]
+
+
+def test_apply_word_list_missing_value_lands_in_missing_bucket() -> None:
+    """A requested value absent on read-back is reported missing, never silently (the same
+    silent-discard class the Select fill rule already has)."""
+    from kfforge.client import ListReport, apply_word_list
+
+    c = FakeClient(_bare_form_draft())
+    c.drop_list_values = {"Ghost"}
+    rep = apply_word_list(c, "Priorities", ["High", "Ghost"])
+    assert isinstance(rep, ListReport)
+    assert rep.verified_items == ("High",)
+    assert rep.missing_items == ("Ghost",)
+    assert rep.as_tool_result()["isError"] is True

@@ -582,7 +582,9 @@ def test_set_branch_conditions_sits_between_add_goto_gate_and_set_visibility() -
 
 # ---- B2: master-data list values must reach the plan ------------------------------------------
 
-def test_create_list_carries_values_and_is_human_gated() -> None:
+def test_create_list_carries_values_and_is_executable() -> None:
+    """#13: the gate lifted — a non-personal list compiles to an EXECUTABLE op naming
+    forge_create_list, values still carried verbatim."""
     plan = compile_spec(_full_spec())
     list_ops = [op for op in plan.ops if op.kind == "create_list"]
     assert len(list_ops) == 2
@@ -590,8 +592,25 @@ def test_create_list_carries_values_and_is_human_gated() -> None:
     assert by_name["Urgency Levels"].args["values"] == ("High", "Medium", "Low")
     assert by_name["Yes No"].args["values"] == ("Yes", "No")
     for op in list_ops:
-        assert "HUMAN-GATED" in op.why
-        assert "ReferredList" in op.why
+        assert "HUMAN-GATED" not in op.why
+        assert "forge_create_list" in op.why
+
+
+def test_create_list_personal_data_stays_human_gated() -> None:
+    """PDPA (D2/D9): a personal_data list keeps the human gate — values still in the plan, the
+    why forbids forge_create_list from writing it."""
+    import dataclasses as _dc
+
+    full = _full_spec()
+    flagged = tuple(_dc.replace(l, personal_data=(l.name == "Urgency Levels"))
+                    for l in full.master_data.lists)
+    spec = _dc.replace(full, master_data=_dc.replace(full.master_data, lists=flagged))
+    plan = compile_spec(spec)
+    by_name = {op.args["name"]: op for op in plan.ops if op.kind == "create_list"}
+    assert "HUMAN-GATED" in by_name["Urgency Levels"].why
+    assert "personal_data" in by_name["Urgency Levels"].why
+    assert by_name["Urgency Levels"].args["values"] == ("High", "Medium", "Low")
+    assert "HUMAN-GATED" not in by_name["Yes No"].why
 
 
 def test_create_list_precedes_apply_fields() -> None:

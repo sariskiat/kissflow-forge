@@ -392,14 +392,17 @@ class DataModel:
 class ListSpec:
     """A reference list backing one or more Select fields. `values` are read verbatim into any
     Expression literal that compares against this list — CLAUDE.md's "never guess a literal, read
-    it" starts here: this is where the real, byte-exact values get recorded, once. Compiles to a
-    human-gated `create_list` op (CLAUDE.md forbids synthesizing NEW `ReferredList` wiring via the
-    write API), never a silent no-op — the values still have to reach the plan even though writing
-    them is not something this compiler can prove safe to automate.
+    it" starts here: this is where the real, byte-exact values get recorded, once. Compiles to an
+    EXECUTABLE `create_list` op (#13, live-proven 2026-08-12: create + `{"ListItems": [...]}`
+    set + `ReferredList` wiring all captured and verified end to end on a real item) — UNLESS
+    `personal_data` is set: a list flagged as holding personal data stays HUMAN-MADE in the
+    builder UI (PDPA, decision D2/D9), and its op stays human-gated with the values still in the
+    plan so nothing is silently dropped.
     """
     name: str
     values: tuple[str, ...]
     owner_role: str
+    personal_data: bool = False
 
 
 @dataclass(frozen=True)

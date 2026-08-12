@@ -8,10 +8,11 @@ are enforced structurally rather than left to whoever executes the plan later:
 - **Never synthesize a style token.** `set_styles` ops name WHICH stage's section needs a look,
   never a color or token value — CLAUDE.md Write path: a bogus token PUTs 200 and fails silently
   at render, so a real token name may only ever come from reading the builder's own dropdown.
-- **Never synthesize a ReferredList wiring.** `create_list` ops carry the real list VALUES (so
-  they are never silently lost) but their `why` says plainly that the write itself is human-gated
-  — the wiring shape of a NEW ReferredList has never been captured, so this compiler does not
-  pretend it can automate that write.
+- **ReferredList wiring is captured and executable (#13, 2026-08-12)** — `create_list` ops are
+  now executable via forge_create_list (create-or-reuse + REPLACE-semantics item set +
+  `ReferredList:<list_id>` on the Select, all live-proven end to end on a real item). The one
+  standing gate: a `personal_data` list stays human-made (PDPA, D2/D9), its op's `why` says so,
+  and its VALUES still ride in the plan so they are never silently lost.
 - **Gate polarity is checked before a plan can exist at all.** `_check_loop_gate_is_boolean`
   resolves the gate field against `DataModel.fields` and raises rather than trusting a
   self-declared flag; `_check_loop_stages` additionally requires the jump to be backward.
@@ -928,15 +929,20 @@ def _op_member_batch(spec: AppSpec) -> tuple[Op, ...]:
 
 def _op_create_list(spec: AppSpec) -> tuple[Op, ...]:
     """One op per reference list (dimension 7), BEFORE apply_fields so a Select field never
-    references a list the plan hasn't already flagged. The write itself is human-gated (CLAUDE.md
-    forbids synthesizing a NEW ReferredList wiring), but the VALUES still belong in the plan —
-    the alternative is exactly the silent-discard bug this op exists to close."""
+    references a list the plan hasn't already flagged. Executable since #13 (create + item-set +
+    ReferredList wiring all live-proven 2026-08-12) — EXCEPT a `personal_data` list, which stays
+    human-gated (PDPA, D2/D9) with its VALUES still in the plan so nothing is silently dropped."""
     return tuple(
         Op(kind="create_list",
-           args={"name": l.name, "values": l.values, "owner_role": l.owner_role},
-           why="HUMAN-GATED: CLAUDE.md forbids synthesizing new ReferredList wiring via the "
-               "write API — a human must create/verify this list in the builder UI with EXACTLY "
-               "these values before any Select field below may reference it")
+           args={"name": l.name, "values": l.values, "owner_role": l.owner_role,
+                 "personal_data": l.personal_data},
+           why=("HUMAN-GATED (personal_data, PDPA): this list holds personal data — a human "
+                "must create/verify it in the builder UI with EXACTLY these values; "
+                "forge_create_list must NOT write it"
+                if l.personal_data else
+                "execute with forge_create_list (create-or-reuse by name, REPLACE-semantics "
+                "item set, read-back audited); then Select fields below may reference it via "
+                "referred_list — #13, live-proven 2026-08-12"))
         for l in spec.master_data.lists
     )
 

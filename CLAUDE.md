@@ -780,12 +780,20 @@ creates one from nothing, see below).
   delete directly, no archive step needed.
 - A `User`-type field blocks publish outright. Avoid it until its exact
   required shape has been captured off a builder-authored example.
-- **Never synthesize a `ReferredList` wiring.** The ids a `ReferredList`
-  points at do resolve against the account's list inventory, and option
-  values are readable through the runtime items route (see Item data plane),
-  but the wiring shape of a *new* `ReferredList` reference has not been
-  captured — only reuse one a human already wired in the builder, never
-  invent the reference yourself.
+- **`ReferredList` wiring is CAPTURED and proven (#13, 2026-08-12 — replacing
+  the old "never synthesize" rule outright).** The whole chain is three
+  probed routes plus one key: create a list flow with
+  `POST /flow/2/{acct}/list?_application_id={app}` body `{"Name": ...}` →
+  200 `{_id, Type:"List", Status:"Live"}` (born LIVE, no publish step;
+  duplicate name 400s FlowNameAlreadyExists); SET its values with
+  `POST .../list/{id}/items` body `{"ListItems": [...]}` — REPLACE
+  semantics, proven by a two-write probe (a bare array 403s
+  TypeMissMatchError, any other dict key 400s InvalidSchemaArguments); then
+  write `ReferredList:<list_id>` on the Select's Field node. Proven end to
+  end on a real item: a value from the list persists, a value outside it
+  PUTs 200 and silently CLEARS the field (the Select discard rule, one
+  notch worse than "discards" — it wipes what was there). Lists flagged as
+  holding personal data stay human-made (PDPA, D2/D9).
 - **Style tokens are not validated by the write API.** A completely bogus
   token name PUTs 200, publishes 200, and reads back verbatim — and then
   fails silently at render, with no error anywhere in the chain to tell you
@@ -815,11 +823,11 @@ class the flow-list route already has (see Members first)** — confirmed live
 2026-08-07: `GET /flow/2/{acct}/list?page_size=100` with no `_application_id`
 returned 100 lists (paginated) from an UNRELATED app in the same account;
 adding `&_application_id={app_id}` to the SAME call returned the true,
-correctly-scoped count for KF_APP (0, on the tenant checked). No client
-method wraps this route yet (only `KfClient.get_list_items`, which is already
-scoped by a specific `list_id` and has no leakage risk) — this note exists so
-nobody hand-rolls the unscoped URL and reads, or later writes against an id
-sourced from, a DIFFERENT app's list.
+correctly-scoped count for KF_APP (0, on the tenant checked).
+`KfClient.list_lists` now wraps this route with the scoping baked in (#13);
+`KfClient.get_list_items` is scoped by a specific `list_id` and has no
+leakage risk — this note stays so nobody hand-rolls the unscoped URL and
+reads, or later writes against an id sourced from, a DIFFERENT app's list.
 
 - **The aiid trap:** the activity-instance id returned by a "my items"-style
   listing is the initiator's already-CONSUMED instance — submitting or
