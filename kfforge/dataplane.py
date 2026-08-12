@@ -341,11 +341,16 @@ def field_name_index(draft: dict[str, Any]) -> dict[str, str]:
 
 def resolve_value_keys(
     values: dict[str, object], field_index: dict[str, str],
+    passthrough: frozenset[str] = frozenset(),
 ) -> dict[str, object] | Err:
     """Translate a fill dict's KEYS (field name OR field id) to field ids, leaving every VALUE
     untouched (a Select value stays the option literal — only the key is resolved). A key already
     shaped like a field id (`Field_...` prefix) or matching a known live field id is kept as-is;
     any other key is looked up as a field NAME. Mixed names and ids in one dict are fine.
+
+    `passthrough` is a set of extra keys allowed through verbatim without being treated as field
+    names — e.g. a dataform record's synthetic system `"Name"` key, which is a column id, not a
+    display name (default empty preserves the process-fill behavior exactly).
 
     Fails LOUD on a name that matches no field — naming the unresolved key AND listing every
     available field name, so a caller with only the MCP tool surface (no code, no source) sees the
@@ -354,7 +359,7 @@ def resolve_value_keys(
     known_ids = set(field_index.values())
     resolved: dict[str, object] = {}
     for key, val in values.items():
-        if key.startswith("Field_") or key in known_ids:
+        if key in passthrough or key.startswith("Field_") or key in known_ids:
             resolved[key] = val
         elif key in field_index:
             resolved[field_index[key]] = val

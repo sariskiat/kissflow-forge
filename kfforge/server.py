@@ -1068,18 +1068,29 @@ def forge_dataset_records(
     flow_id: str,
     op: str,
     record: dict[str, Any] | None = None,
+    record_id: str | None = None,
 ) -> dict[str, Any]:
-    """LIVE (dev only, KF_APP): the THIRD data-plane route family — dataform records (#50), a
-    flat `POST /dataset/2/{acct}/{flow_id}` + `GET .../list`, distinct from the process item
-    data plane and the word-list items route. `op="create"` writes ONE `record` (a dict whose
-    `Name` key is the dataform's synthetic unique key — a duplicate 409s cleanly, named in the
-    error, never a raw HTTP body). `op="list"` reads back `{Columns, Data}`. No membership gate
-    on a dataform (CLAUDE.md-adjacent finding, #50) — record create/list works with zero members.
+    """LIVE (dev only, KF_APP): the THIRD data-plane route family — dataform records (#50, #58).
+    Distinct from the process item data plane and the word-list items route. Record KEYS accept a
+    field NAME or a field id for `create`/`update` — auto-resolved to ids against the dataform's
+    live draft before the write (the raw route 404s FieldNotFound on a name key); the synthetic
+    `Name` key (the record's unique key) passes through. A name matching no field fails loud,
+    listing every available field name.
+
+    - `op="create"`: writes ONE `record` (must carry the `Name` unique key; a duplicate 409s
+      cleanly, named in the error).
+    - `op="update"`: partial-patches the record `record_id` (`PUT .../{flow}?_id={rec}`) with
+      `record` — only the keys sent change.
+    - `op="delete"`: deletes `record_id` (`DELETE .../{flow}?_id={rec}`); `record` must carry the
+      mandatory `{"Name": ...}` delete body.
+    - `op="list"`: reads back `{Columns, Data}`.
+
+    No membership gate on a dataform (#50) — records work with zero members.
     """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(apply_dataset_records(c, flow_id, op, record))
+    return _result(apply_dataset_records(c, flow_id, op, record, record_id))
 
 
 @mcp.tool()

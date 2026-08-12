@@ -441,6 +441,25 @@ class KfClient:
         return self._json("GET", f"{c.base}/dataset/2/{c.account}/{flow_id}/list"
                                  f"?_application_id={c.app_id}")
 
+    def update_dataset_record(self, flow_id: str, record_id: str,
+                              record: dict[str, Any]) -> dict[str, Any] | Err:
+        """Partial-update ONE dataform record by its `_id`. Per-record route found in a prior
+        probe (residuals_r1): `PUT /dataset/2/{acct}/{flow_id}?_id={rec}` body `{"<FieldId>": value,
+        ...}` — a partial patch (only the keys sent change). Caller resolves field NAMES to ids
+        before this call (see apply_dataset_records)."""
+        c = self._cfg
+        return self._json("PUT", f"{c.base}/dataset/2/{c.account}/{flow_id}"
+                                 f"?_application_id={c.app_id}&_id={record_id}", record)
+
+    def delete_dataset_record(self, flow_id: str, record_id: str,
+                              name: str) -> dict[str, Any] | Err:
+        """Delete ONE dataform record by its `_id`. Per-record route found in a prior probe
+        (residuals_r1): `DELETE /dataset/2/{acct}/{flow_id}?_id={rec}` — the body MUST carry the
+        record's synthetic system `{"Name": ...}` key (mandatory on this route)."""
+        c = self._cfg
+        return self._json("DELETE", f"{c.base}/dataset/2/{c.account}/{flow_id}"
+                                    f"?_application_id={c.app_id}&_id={record_id}", {"Name": name})
+
     # --- applications (forge_create_app; PROBE 2026-08-06 — see the DEV report's probe matrix) --
     def list_applications(self) -> list[dict[str, Any]] | Err:
         c = self._cfg
@@ -2562,44 +2581,107 @@ def publish_application_verified(client: KfClient, app_id: str) -> dict[str, Any
     }
 
 
+def _resolve_dataset_record_keys(
+    client: KfClient, flow_id: str, record: dict[str, Any],
+) -> dict[str, Any] | Err:
+    """Translate a dataform record's KEYS from field NAMES to field ids, so a caller may pass
+    either (the raw record route 404s FieldNotFound on a name key). Mirrors the simulate_case fix:
+    fetch the dataform's live draft, build the name->id index, resolve. The synthetic system
+    `"Name"` key (the record's unique key — a column id, not a display name) is passed through
+    verbatim. A name matching no field fails LOUD, listing every available field name; a draft
+    read failure fails LOUD too rather than silently letting a name key 404 downstream.
+    """
+    # Function-local import breaks the client<->dataplane cycle (dataplane imports client at module
+    # load; a module-level import here would deadlock). Safe at call time — both modules are loaded.
+    from .dataplane import field_name_index, resolve_value_keys
+    draft = client.get_draft("dataset", flow_id)  # type: ignore[arg-type]
+    if isinstance(draft, Err):
+        return Err("verify", f"cannot resolve dataform field names — draft read failed: "
+                             f"{draft.message}", status=draft.status)
+    index = field_name_index(draft)
+    return resolve_value_keys(record, index, passthrough=frozenset({"Name"}))
+
+
 def apply_dataset_records(
     client: KfClient,
     flow_id: str,
     op: str,
     record: dict[str, Any] | None = None,
+    record_id: str | None = None,
 ) -> dict[str, Any] | Err:
-    """The THIRD data-plane route family: dataform records (#50). `op="create"` writes ONE record
-    (`record` required, must carry the synthetic system `Name` key — a dataform's per-record
-    unique key; a duplicate 409s DuplicateKeyException, surfaced here as a CLEAN Err naming the
-    duplicate `Name` rather than the raw HTTP body). `op="list"` reads back `{Columns, Data}`.
+    """The THIRD data-plane route family: dataform records (#50, per-record CRUD #58). Record KEYS
+    accept a field NAME or a field id for `create`/`update` — auto-resolved to ids against the
+    dataform's live draft before the write (the raw route 404s FieldNotFound on a name key), the
+    synthetic `"Name"` key passing through verbatim.
 
-    Output-invariant audit: `created`/`listed`/`failed` are integer counts, never a swallowed
-    exception — a `create` that 409s lands in `failed` with the duplicate name named in `error`,
+    - `op="create"`: writes ONE `record` (must carry the unique `Name` key; a duplicate 409s
+      DuplicateKeyException, surfaced as a CLEAN Err naming the duplicate `Name`).
+    - `op="update"`: partial-patches the record `record_id` (`PUT .../{flow}?_id={rec}`) with
+      `record` (only the keys sent change).
+    - `op="delete"`: deletes `record_id` (`DELETE .../{flow}?_id={rec}`); `record` must carry the
+      mandatory `{"Name": ...}` delete body.
+    - `op="list"`: reads back `{Columns, Data}`.
+
+    Output-invariant audit: `created`/`listed`/`updated`/`deleted`/`failed` are integer counts,
+    never a swallowed exception — a write that errors lands in `failed` with the cause in `error`,
     never silently dropped.
     """
+    base = {"flow_id": flow_id, "op": op, "created": 0, "listed": 0,
+            "updated": 0, "deleted": 0, "failed": 0, "isError": False}
+
     if op == "create":
         if not record:
             return Err("verify", "apply_dataset_records(op='create') requires a non-empty record")
-        got = client.create_dataset_record(flow_id, record)
+        resolved = _resolve_dataset_record_keys(client, flow_id, record)
+        if isinstance(resolved, Err):
+            return resolved
+        got = client.create_dataset_record(flow_id, resolved)
         if isinstance(got, Err):
             if got.status == 409:
                 name = record.get("Name", "<unknown>")
                 return Err("verify", f"dataset record with Name={name!r} already exists "
                                      f"(duplicate key) — {got.message}", status=409)
             return got
-        return {"flow_id": flow_id, "op": op, "created": 1, "listed": 0, "failed": 0,
-               "record": got, "isError": False}
+        return {**base, "created": 1, "record": got}
+
+    if op == "update":
+        if not record:
+            return Err("verify", "apply_dataset_records(op='update') requires a non-empty record")
+        if not record_id:
+            return Err("verify", "apply_dataset_records(op='update') requires record_id (the "
+                                 "record's _id)")
+        resolved = _resolve_dataset_record_keys(client, flow_id, record)
+        if isinstance(resolved, Err):
+            return resolved
+        got = client.update_dataset_record(flow_id, record_id, resolved)
+        if isinstance(got, Err):
+            return got
+        return {**base, "updated": 1, "record_id": record_id, "record": got}
+
+    if op == "delete":
+        if not record_id:
+            return Err("verify", "apply_dataset_records(op='delete') requires record_id (the "
+                                 "record's _id)")
+        name = (record or {}).get("Name")
+        if not name:
+            return Err("verify", "apply_dataset_records(op='delete') requires record={'Name': "
+                                 "<key>} — the delete route mandates the Name body")
+        got = client.delete_dataset_record(flow_id, record_id, name)
+        if isinstance(got, Err):
+            return got
+        return {**base, "deleted": 1, "record_id": record_id}
 
     if op == "list":
         got = client.list_dataset_records(flow_id)
         if isinstance(got, Err):
             return got
         rows = got.get("Data", []) if isinstance(got, dict) else []
-        return {"flow_id": flow_id, "op": op, "created": 0, "listed": len(rows), "failed": 0,
-               "columns": got.get("Columns", []) if isinstance(got, dict) else [],
-               "records": rows, "isError": False}
+        return {**base, "listed": len(rows),
+                "columns": got.get("Columns", []) if isinstance(got, dict) else [],
+                "records": rows}
 
-    return Err("verify", f"apply_dataset_records: unknown op {op!r} — valid: create, list")
+    return Err("verify", f"apply_dataset_records: unknown op {op!r} — valid: create, list, "
+                         f"update, delete")
 
 
 @dataclass(frozen=True)

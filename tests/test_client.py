@@ -18,6 +18,7 @@ from kfforge.client import (
     TableReport,
     WorkflowReport,
     apply_branch_conditions,
+    apply_dataset_records,
     apply_field_events,
     apply_fields,
     apply_fields_and_layout,
@@ -1205,3 +1206,159 @@ def test_create_flow_any_process_from_template_false() -> None:
     pd = c.draft[m["RootProcessDef"]]
     acts = [c.draft[a] for a in pd["ProcessDef::Activity"]]
     assert [a["Name"] for a in acts] == ["Start", "Review", "Completed"]
+
+
+# ---- apply_dataset_records: name->id resolution + per-record update/delete (#58) --------------
+# The record route 404s FieldNotFound on a NAME key, so create/update resolve names to ids off the
+# dataform's live draft (the synthetic system "Name" key passes through). update/delete are the
+# per-record ?_id= PUT/DELETE routes (residuals_r1); delete's body must carry {"Name": ...}.
+
+def _dataset_draft() -> dict:
+    """Minimal dataform draft: a root Model with two named fields — the name->id source."""
+    return {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "FlowType": "Dataset", "Model::Field": ["Field_a", "Field_b"]},
+        "Field_a": {"Id": "Field_a", "Kind": "Field", "Name": "Item Name", "Model": "M1"},
+        "Field_b": {"Id": "Field_b", "Kind": "Field", "Name": "Category", "Model": "M1"},
+    }
+
+
+class _DatasetRecordClient:
+    """Duck-typed stand-in exercising apply_dataset_records' real resolution + op routing offline.
+    Records every raw call so a test can assert what actually hit the (mocked) client."""
+
+    def __init__(self, draft: dict | None = None) -> None:
+        self._draft = draft if draft is not None else _dataset_draft()
+        self.created: list[tuple[str, dict[str, Any]]] = []
+        self.updated: list[tuple[str, str, dict[str, Any]]] = []
+        self.deleted: list[tuple[str, str, str]] = []
+        self.listed = 0
+
+    def get_draft(self, kind, flow_id):
+        return self._draft
+
+    def create_dataset_record(self, flow_id, record):
+        self.created.append((flow_id, record))
+        return {"_id": "Rec_new", **record}
+
+    def update_dataset_record(self, flow_id, record_id, record):
+        self.updated.append((flow_id, record_id, record))
+        return {"_id": record_id, **record}
+
+    def delete_dataset_record(self, flow_id, record_id, name):
+        self.deleted.append((flow_id, record_id, name))
+        return {"_id": record_id, "deleted": True}
+
+    def list_dataset_records(self, flow_id):
+        self.listed += 1
+        return {"Columns": [{"Id": "Name"}], "Data": [{"_id": "Rec_1"}, {"_id": "Rec_2"}]}
+
+
+def test_dataset_create_resolves_field_names_to_ids() -> None:
+    c = _DatasetRecordClient()
+    got = apply_dataset_records(
+        c, "Flow_1", "create",
+        record={"Name": "Widget A", "Item Name": "Widget A", "Category": "Tools"},
+    )
+    assert got["isError"] is False and got["created"] == 1
+    # the record that actually reached the client is keyed by ids, Name passed through, no name key
+    _, sent = c.created[0]
+    assert sent == {"Name": "Widget A", "Field_a": "Widget A", "Field_b": "Tools"}
+    assert "Item Name" not in sent and "Category" not in sent
+
+
+def test_dataset_create_accepts_field_ids_too() -> None:
+    c = _DatasetRecordClient()
+    got = apply_dataset_records(
+        c, "Flow_1", "create",
+        record={"Name": "K1", "Field_a": "v", "Category": "Tools"},  # mixed id + name
+    )
+    assert got["created"] == 1
+    _, sent = c.created[0]
+    assert sent == {"Name": "K1", "Field_a": "v", "Field_b": "Tools"}
+
+
+def test_dataset_unknown_field_name_fails_loud() -> None:
+    c = _DatasetRecordClient()
+    got = apply_dataset_records(
+        c, "Flow_1", "create", record={"Name": "K", "Nope": "x"},
+    )
+    assert isinstance(got, Err)
+    assert "Nope" in got.message and "Item Name" in got.message  # lists available names
+    assert c.created == []  # nothing written
+
+
+def test_dataset_update_by_id_hits_put_and_resolves() -> None:
+    c = _DatasetRecordClient()
+    got = apply_dataset_records(
+        c, "Flow_1", "update", record={"Category": "New"}, record_id="Rec_9",
+    )
+    assert got["isError"] is False and got["updated"] == 1 and got["record_id"] == "Rec_9"
+    assert c.updated == [("Flow_1", "Rec_9", {"Field_b": "New"})]
+
+
+def test_dataset_update_requires_record_id() -> None:
+    c = _DatasetRecordClient()
+    got = apply_dataset_records(c, "Flow_1", "update", record={"Category": "New"})
+    assert isinstance(got, Err) and "record_id" in got.message
+    assert c.updated == []
+
+
+def test_dataset_delete_sends_name_body() -> None:
+    c = _DatasetRecordClient()
+    got = apply_dataset_records(
+        c, "Flow_1", "delete", record={"Name": "K1"}, record_id="Rec_9",
+    )
+    assert got["isError"] is False and got["deleted"] == 1
+    assert c.deleted == [("Flow_1", "Rec_9", "K1")]
+
+
+def test_dataset_delete_requires_name_body() -> None:
+    c = _DatasetRecordClient()
+    got = apply_dataset_records(c, "Flow_1", "delete", record_id="Rec_9")
+    assert isinstance(got, Err) and "Name" in got.message
+    assert c.deleted == []
+
+
+def test_dataset_unknown_op_fails_loud() -> None:
+    c = _DatasetRecordClient()
+    got = apply_dataset_records(c, "Flow_1", "purge")
+    assert isinstance(got, Err) and "purge" in got.message
+
+
+def test_dataset_list_counts_rows() -> None:
+    c = _DatasetRecordClient()
+    got = apply_dataset_records(c, "Flow_1", "list")
+    assert got["isError"] is False and got["listed"] == 2 and len(got["records"]) == 2
+
+
+def test_dataset_update_delete_build_id_scoped_routes() -> None:
+    """The REAL KfClient builds the per-record ?_id= PUT/DELETE URLs, delete carrying the Name body."""
+    class _Rec(KfClient):
+        def __init__(self) -> None:
+            super().__init__(DEV)
+            self.calls: list[tuple[str, str, Any]] = []
+
+        def _json(self, method: str, url: str, data: Any = None):  # type: ignore[override]
+            self.calls.append((method, url, data))
+            return {"_id": "Rec_9"}
+
+    c = _Rec()
+    c.update_dataset_record("Flow_1", "Rec_9", {"Field_b": "New"})
+    c.delete_dataset_record("Flow_1", "Rec_9", "K1")
+    put_m, put_url, put_body = c.calls[0]
+    del_m, del_url, del_body = c.calls[1]
+    assert put_m == "PUT" and "/dataset/2/Acc/Flow_1?" in put_url and "_id=Rec_9" in put_url
+    assert put_body == {"Field_b": "New"}
+    assert del_m == "DELETE" and "_id=Rec_9" in del_url and del_body == {"Name": "K1"}
+
+
+def test_dataset_create_draft_read_failure_fails_loud() -> None:
+    class _NoDraft(_DatasetRecordClient):
+        def get_draft(self, kind, flow_id):
+            return Err("http", "draft 500", status=500)
+
+    c = _NoDraft()
+    got = apply_dataset_records(c, "Flow_1", "create", record={"Name": "K", "Item Name": "x"})
+    assert isinstance(got, Err) and "draft read failed" in got.message
+    assert c.created == []
