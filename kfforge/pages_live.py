@@ -15,7 +15,17 @@ from typing import Any
 
 from .client import Err, KfClient
 from .nav import add_page_menu, point_all_navs_at, sweep_orphans
-from .pages import add_container, add_event_mapping, add_popup, add_widget, page_summary, set_styles
+from .pages import (
+    _fm_index,
+    add_container,
+    add_event_mapping,
+    add_popup,
+    add_widget,
+    bind_widget,
+    page_summary,
+    resolve_container_id,
+    set_styles,
+)
 
 Draft = dict[str, Any]
 _META_VERSION = "_meta_version"
@@ -71,11 +81,11 @@ def create_page_flow(
 
 @dataclass(frozen=True)
 class PageBuildStep:
-    """One page-build op. `kind` is one of "container" | "widget" | "popup" | "event" | "style";
-    `kwargs` are passed straight to the matching kfforge.pages builder
-    (add_container/add_widget/add_popup/add_event_mapping/set_styles) — see their own docstrings
-    for the accepted keys. A spec dict from a caller (e.g. an MCP tool argument) becomes a list of
-    these."""
+    """One page-build op. `kind` is one of "container" | "widget" | "popup" | "event" | "style" |
+    "bind"; `kwargs` are passed straight to the matching kfforge.pages builder
+    (add_container/add_widget/add_popup/add_event_mapping/set_styles/bind_widget) — see their own
+    docstrings for the accepted keys. A spec dict from a caller (e.g. an MCP tool argument) becomes
+    a list of these."""
     kind: str
     kwargs: dict[str, Any]
 
@@ -138,6 +148,25 @@ def _style_props_landed(read_back: Draft, key: str, props: dict[str, Any]) -> bo
         else:
             if value.get(prop) != {"value": v}:
                 return False
+    return True
+
+
+def _bind_config_landed(read_back: Draft, host: str, config: dict[str, Any]) -> bool:
+    """Did every FieldMapping Value in `config` (the SAME dict passed to pages.bind_widget's own
+    `config`) actually land on the read-back for the widget host addressed by `host`? Mirrors
+    pages.resolve_container_id + pages._fm_index exactly, so this checks the shape the writer
+    actually wrote, not a guessed one — same shell-vs-substance discipline as the widget/event
+    checks below. An unresolvable host, or any key whose landed Value doesn't match, is False.
+    """
+    try:
+        host_id = resolve_container_id(read_back, host)
+    except ValueError:
+        return False
+    fm_index = _fm_index(read_back, host_id)
+    for key, value in config.items():
+        prop_id = fm_index.get(key)
+        if prop_id is None or read_back.get(prop_id, {}).get("Value") != value:
+            return False
     return True
 
 
@@ -222,10 +251,20 @@ def apply_page_build(
                         _style_props_landed(rb, name, props) for name, props in r.items()
                     ),
                 ))
+            elif step.kind == "bind":
+                host = step.kwargs.get("host")
+                config = step.kwargs.get("config", {})
+                new = bind_widget(new, **step.kwargs)
+                label = f"bind:{host}={sorted(config)}"
+                applied.append(label)
+                checks.append((
+                    label,
+                    lambda rb, h=host, c=config: _bind_config_landed(rb, h, c),
+                ))
             else:
                 raise ValueError(
                     f"unknown page-build step kind {step.kind!r}; expected one of "
-                    "container/widget/popup/event/style"
+                    "container/widget/popup/event/style/bind"
                 )
     except ValueError as e:
         return Err("verify", f"offline page build rejected step: {e}")

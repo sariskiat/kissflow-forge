@@ -851,10 +851,13 @@ def forge_build_page(
     dead button.
 
     `steps` + `page_id` — the raw primitive: each step is `{"kind": "container"|"widget"|
-    "popup"|"event"|"style", "kwargs": {...}}` passed straight to the matching kfforge.pages
-    builder. A widget whose binding is load-bearing (view/*, report/*, metrics, masterdetail,
-    repeater) REQUIRES its full config — THE RULE: a placeholder binding publishes clean and
-    renders broken, so it is rejected offline, before any write.
+    "popup"|"event"|"style"|"bind", "kwargs": {...}}` passed straight to the matching
+    kfforge.pages builder. A widget whose binding is load-bearing (view/*, report/*, metrics,
+    masterdetail, repeater) REQUIRES its full config — THE RULE: a placeholder binding publishes
+    clean and renders broken, so it is rejected offline, before any write. `"bind"` repairs an
+    ALREADY-BUILT widget's FieldMapping Values in place (`{"host": <container id or name>,
+    "config": {<FieldMapping Name>: <value>, ...}}`) — the primitive for fixing a live widget that
+    was added unbound (e.g. a `view/form` submit widget with no `flow_id` wired).
     """
     c = _client()
     if isinstance(c, Err):

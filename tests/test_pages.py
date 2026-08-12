@@ -16,6 +16,7 @@ from kfforge.pages import (
     add_event_mapping,
     add_popup,
     add_widget,
+    bind_widget,
     load_shape,
     new_page_graph,
     page_summary,
@@ -199,6 +200,21 @@ def test_add_widget_view_form_still_requires_flow_id() -> None:
     with pytest.raises(ValueError, match="flow_id"):
         add_widget(page, container_id="Container001", widget="view/form",
                    config={"flow_type": "Process"})
+
+
+def test_add_widget_view_form_no_view_id_expresses_a_submit_form() -> None:
+    """The engine must be able to express a genuine submit/initiate view/form -- flow_type+flow_id
+    only, no view_id -- matching the human-built oracle page (CLAUDE.md task context: flow_type=
+    "Process", flow_id set, view_id absent). Distinct from the null-binding test above: this one
+    asserts specifically on flow_id landing and view_id's own FieldMapping carrying no Value."""
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="view/form",
+        config={"flow_type": "Process", "flow_id": "Flow_abc123"},
+    )
+    values = _fm_values(page, host)
+    assert values["flow_id"] == "Flow_abc123"
+    assert values["view_id"] is None
 
 
 def test_add_widget_view_table_reaches_live_binding_and_mirrors_data() -> None:
@@ -790,6 +806,79 @@ def test_add_event_mapping_does_not_mutate_input() -> None:
     before = set(page)
     add_event_mapping(page, container_id="Container001", type="OpenPopup", popup_id=popup_id)
     assert set(page) == before, "add_event_mapping must not mutate its input draft"
+
+
+# ---------------------------------------------------------------------------------------------
+# bind_widget: the repair primitive -- patching an ALREADY-BUILT widget's FieldMapping Values,
+# closing the gap add_widget can't (add_widget only ever adds a new widget; there was no way to
+# fix a live one left unbound, e.g. a view/form submit widget with no flow_id wired).
+# ---------------------------------------------------------------------------------------------
+
+def test_bind_widget_sets_flow_id_on_a_form_built_unbound() -> None:
+    """Simulates the real live gap: a view/form widget whose flow_id Property.Value was left
+    unset (as if the binding never landed) renders bound to nothing. bind_widget repairs it in
+    place, by container id."""
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="view/form",
+        config={"flow_type": "Process", "flow_id": "Flow_placeholder"},
+    )
+    flow_id_fid = next(fid for fid in page[host]["Container::FieldMapping"]
+                       if page[fid]["Name"] == "flow_id")
+    prop_id = page[flow_id_fid]["FieldMapping::Property"][0]
+    del page[prop_id]["Value"]  # simulate: never actually wired
+
+    page = bind_widget(page, host=host, config={"flow_id": "Flow_abc123"})
+    assert _fm_values(page, host)["flow_id"] == "Flow_abc123"
+    _assert_backrefs_resolve(page)
+
+
+def test_bind_widget_addresses_host_by_name() -> None:
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="view/form", name="Submit Form",
+        config={"flow_type": "Process", "flow_id": "Flow_abc123"},
+    )
+    page = bind_widget(page, host="Submit Form", config={"flow_id": "Flow_rebind99"})
+    assert _fm_values(page, host)["flow_id"] == "Flow_rebind99"
+
+
+def test_bind_widget_mirrors_into_component_data_when_key_present() -> None:
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="view/table",
+        config={"flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "myitems"},
+    )
+    page = bind_widget(page, host=host, config={"flow_id": "Flow_rebind99"})
+    assert _fm_values(page, host)["flow_id"] == "Flow_rebind99"
+    assert _host_component(page, host)["Data"]["flow_id"] == "Flow_rebind99"
+
+
+def test_bind_widget_unknown_key_raises_listing_valid_keys() -> None:
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="view/form",
+        config={"flow_type": "Process", "flow_id": "Flow_abc123"},
+    )
+    with pytest.raises(ValueError, match="no slot"):
+        bind_widget(page, host=host, config={"bogus_key": "x"})
+
+
+def test_bind_widget_unknown_host_raises() -> None:
+    page = new_page_graph("Sample Page")
+    with pytest.raises(ValueError, match="no Container"):
+        bind_widget(page, host="Container_nope", config={"flow_id": "x"})
+
+
+def test_bind_widget_does_not_mutate_input() -> None:
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="view/form",
+        config={"flow_type": "Process", "flow_id": "Flow_abc123"},
+    )
+    before = _fm_values(page, host)
+    bind_widget(page, host=host, config={"flow_id": "Flow_other"})
+    assert _fm_values(page, host) == before, "bind_widget must not mutate its input draft"
 
 
 # ---------------------------------------------------------------------------------------------

@@ -155,6 +155,35 @@ def test_apply_page_build_container_then_widget() -> None:
     assert c.page_puts == 1, "every step must land in ONE guarded PUT, not one per step"
 
 
+def test_apply_page_build_bind_repairs_an_already_built_widget() -> None:
+    """The "bind" step kind: a widget is added first (view/form, flow_type+flow_id only, no
+    view_id -- a submit form), then a follow-up "bind" step rewrites its flow_id in place,
+    verified on the read-back the same way every other step is."""
+    c = FakePageClient()
+    page_id = c.create_page("App1", "Sample Page")
+    steps = [
+        PageBuildStep("widget", {"container_id": "Container001", "widget": "view/form",
+                                 "config": {"flow_type": "Process", "flow_id": "Flow_placeholder"}}),
+    ]
+    rep = apply_page_build(c, "App1", page_id, steps)
+    assert isinstance(rep, PageBuildReport) and rep.missing == ()
+    host = next(v["Id"] for v in c.page_drafts[page_id].values()
+               if isinstance(v, dict) and v.get("Kind") == "Container"
+               and v.get("Container::Component"))
+
+    steps2 = [PageBuildStep("bind", {"host": host, "config": {"flow_id": "Flow_rebind99"}})]
+    rep2 = apply_page_build(c, "App1", page_id, steps2)
+    assert isinstance(rep2, PageBuildReport)
+    assert rep2.verified == rep2.applied
+    assert rep2.missing == ()
+    assert rep2.as_tool_result()["isError"] is False
+
+    fm_ids = c.page_drafts[page_id][host]["Container::FieldMapping"]
+    flow_id_fid = next(f for f in fm_ids if c.page_drafts[page_id][f]["Name"] == "flow_id")
+    prop_id = c.page_drafts[page_id][flow_id_fid]["FieldMapping::Property"][0]
+    assert c.page_drafts[page_id][prop_id]["Value"] == "Flow_rebind99"
+
+
 def test_apply_page_build_popup_widget_then_event_wires_open_popup() -> None:
     """#22: a popup + a button built in one PageBuildStep list is inert on its own -- a follow-up
     "event" step is what actually lets the button open the popup, dispatched the same way
@@ -319,6 +348,40 @@ def test_apply_page_build_detects_a_style_value_that_never_landed() -> None:
     assert rep.verified == ()
     assert len(rep.missing) == 1
     assert rep.as_tool_result()["isError"] is True
+
+
+def test_apply_page_build_detects_a_bind_value_that_never_landed() -> None:
+    """Same silent-discard class, for a bind step: the PUT succeeds but the rebound Property.Value
+    never actually reflects the requested config."""
+    class DroppingBind(FakePageClient):
+        def put_page_draft(self, app_id, page_id, new, expect_version):  # type: ignore[override]
+            self.page_puts += 1
+            stripped = {}
+            for k, v in new.items():
+                if isinstance(v, dict) and v.get("Value") == "Flow_rebind99":
+                    v = {**v}
+                    v.pop("Value", None)  # the rebind silently never lands
+                stripped[k] = v
+            stripped["_meta_version"] = "v2"
+            self.page_drafts[page_id] = stripped
+            return stripped
+
+    c = DroppingBind()
+    page_id = c.create_page("App1", "Sample Page")
+    steps = [PageBuildStep("widget", {"container_id": "Container001", "widget": "view/form",
+                                      "config": {"flow_type": "Process", "flow_id": "Flow_x"}})]
+    rep = apply_page_build(c, "App1", page_id, steps)
+    assert isinstance(rep, PageBuildReport) and rep.missing == ()
+    host = next(v["Id"] for v in c.page_drafts[page_id].values()
+               if isinstance(v, dict) and v.get("Kind") == "Container"
+               and v.get("Container::Component"))
+
+    steps2 = [PageBuildStep("bind", {"host": host, "config": {"flow_id": "Flow_rebind99"}})]
+    rep2 = apply_page_build(c, "App1", page_id, steps2)
+    assert isinstance(rep2, PageBuildReport)
+    assert rep2.verified == ()
+    assert len(rep2.missing) == 1
+    assert rep2.as_tool_result()["isError"] is True
 
 
 def test_apply_page_build_view_table_needs_full_binding_or_raises_offline() -> None:

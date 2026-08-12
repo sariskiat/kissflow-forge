@@ -557,6 +557,53 @@ def add_widget(
     return new, host_id
 
 
+def bind_widget(page: Draft, *, host: str, config: dict[str, Any]) -> Draft:
+    """Repair/rebind an EXISTING widget's FieldMapping Values on an already-built page. Pure.
+
+    Closes the gap add_widget cannot: add_widget only ever ADDS a brand-new widget, there was no
+    primitive to patch a widget already sitting on a page whose binding was left unset -- e.g. a
+    `view/form` submit widget with no `flow_id` FieldMapping Value, which renders as a form bound
+    to nothing (THE RULE: publishes clean, renders broken).
+
+    `host` addresses the widget's host Container the SAME way set_styles/resolve_container_id do:
+    an existing Container id (collision-proof), or a unique Container Name -- see
+    resolve_container_id for the exact rule (id wins, ambiguous name raises).
+
+    `config` maps FieldMapping Name -> value, same convention as add_widget's own `config` (e.g.
+    {"flow_id": "Flow_abc123"}). A key with no matching FieldMapping slot on that host's widget
+    raises ValueError listing the valid keys, same discipline as add_widget -- never a silent
+    no-op on a typo'd key.
+
+    Mirrors into the widget's own Component.Data too, same "write both" convention add_widget uses
+    (e.g. for repeater's selectedFields) -- only for keys ALREADY present in Data, so a bind that
+    only touches a FieldMapping-only key (e.g. view_id, which is never mirrored into Data on
+    view/form) does not invent a new Data key no captured shape ever showed.
+    """
+    new: Draft = copy.deepcopy(page)
+    host_id = resolve_container_id(new, host)
+
+    fm_index = _fm_index(new, host_id)
+    if not fm_index:
+        raise ValueError(f"container {host!r} hosts no widget FieldMappings to bind")
+    bad = set(config) - set(fm_index)
+    if bad:
+        raise ValueError(
+            f"widget at {host!r} has no slot for {sorted(bad)}; valid keys: {sorted(fm_index)}"
+        )
+    for key, value in config.items():
+        new[fm_index[key]]["Value"] = value
+
+    comp_id = next((cid for cid in new[host_id].get("Container::Component") or []), None)
+    if comp_id is not None:
+        data = new[comp_id].get("Data")
+        if isinstance(data, dict):
+            for key, value in config.items():
+                if key in data:
+                    data[key] = value
+
+    return new
+
+
 def add_popup(page: Draft, *, name: str) -> tuple[Draft, str]:
     """Add a Popup (shapes/popup.json): its own Container tree, title FieldMapping, Style. Pure.
 
