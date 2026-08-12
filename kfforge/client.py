@@ -377,6 +377,41 @@ class KfClient:
         return self._json("POST", f"{c.base}/flow/2/{c.account}/list/{list_id}/items",
                           {"ListItems": items})
 
+    def create_dataset(self, name: str) -> dict[str, Any] | Err:
+        """Create a dataform (flowtype `dataset`). Proven live 2026-08-12 (#50):
+        `POST /flow/2/{acct}/dataset?_application_id={app}` body `{"Name": ...}` -> born LIVE,
+        `{_id, Type:"Dataset", Status:"Live"}`. NO publish route exists at all for this flowtype —
+        the draft IS live (shapes/dataform_dataset_skeleton.json)."""
+        c = self._cfg
+        return self._json("POST", f"{c.base}/flow/2/{c.account}/dataset?_application_id={c.app_id}",
+                          {"Name": name})
+
+    def create_case(self, name: str, item_type: str, prefix: str) -> dict[str, Any] | Err:
+        """Create a board/case (flowtype `case`). Proven live 2026-08-12 (#49):
+        `POST /flow/2/{acct}/case?_application_id={app}` body `{"Name", "ItemType", "Prefix"}` —
+        BOTH `ItemType` ("Board"|"Case") and `Prefix` are MANDATORY (400 MissingRequiredFieldError
+        without them; both ItemType values produce a byte-identical graph). Born LIVE, no publish
+        step (shapes/board_case_skeleton.json)."""
+        c = self._cfg
+        return self._json("POST", f"{c.base}/flow/2/{c.account}/case?_application_id={c.app_id}",
+                          {"Name": name, "ItemType": item_type, "Prefix": prefix})
+
+    def create_dataset_record(self, flow_id: str, record: dict[str, Any]) -> dict[str, Any] | Err:
+        """Create ONE dataform record. Proven live 2026-08-12 (#50):
+        `POST /dataset/2/{acct}/{flow_id}` body `{"Name": ..., "<FieldId>": value, ...}` — `Name`
+        is a synthetic system column (the record's unique key); a duplicate 409s
+        DuplicateKeyException."""
+        c = self._cfg
+        return self._json("POST", f"{c.base}/dataset/2/{c.account}/{flow_id}"
+                                  f"?_application_id={c.app_id}", record)
+
+    def list_dataset_records(self, flow_id: str) -> dict[str, Any] | Err:
+        """List a dataform's records + schema. Proven live 2026-08-12 (#50):
+        `GET /dataset/2/{acct}/{flow_id}/list?_application_id={app}` -> `{Columns, Data}`."""
+        c = self._cfg
+        return self._json("GET", f"{c.base}/dataset/2/{c.account}/{flow_id}/list"
+                                 f"?_application_id={c.app_id}")
+
     # --- applications (forge_create_app; PROBE 2026-08-06 — see the DEV report's probe matrix) --
     def list_applications(self) -> list[dict[str, Any]] | Err:
         c = self._cfg
@@ -2346,3 +2381,76 @@ def apply_grant_tier(
         for m in read_back
     )
     return TierReport(flow_id=flow_id, kind=kind, role_id=role_id, tier=tier, verified=verified)
+
+
+_BORN_LIVE_KINDS = ("list", "dataset", "case")
+
+
+@dataclass(frozen=True)
+class FlowCreateReport:
+    kind: str
+    flow_id: str
+    name: str
+    status: str | None
+    born_live: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind, "flow_id": self.flow_id, "name": self.name,
+            "status": self.status, "born_live": self.born_live, "isError": not self.flow_id,
+        }
+
+
+def create_flow_any(
+    client: KfClient,
+    kind: str,
+    name: str,
+    extra: dict[str, Any] | None = None,
+) -> FlowCreateReport | Err:
+    """Unified create for every flowtype this engine can build from zero: process|form (start
+    Draft, need a build sequence — see forge_create_process / kf_create_process), list|dataset
+    (born LIVE, no publish step), case (born LIVE — REQUIRES `extra["item_type"]` +
+    `extra["prefix"]`, refused loudly without them: `POST .../case` 400s MissingRequiredFieldError
+    on either omission, shapes/board_case_skeleton.json).
+
+    A thin dispatcher, not a new write path: every branch below calls the SAME KfClient method
+    the kind-specific tools already use (`create_flow`, `apply_word_list`'s own `create_list`,
+    `create_dataset`, `create_case`).
+    """
+    extra = extra or {}
+    if kind in ("process", "form"):
+        fid = client.create_flow(kind, name)  # type: ignore[arg-type]
+        if isinstance(fid, Err):
+            return fid
+        return FlowCreateReport(kind=kind, flow_id=fid, name=name, status="Draft", born_live=False)
+
+    if kind == "list":
+        got = client.create_list(name)
+        if isinstance(got, Err):
+            return got
+        return FlowCreateReport(kind=kind, flow_id=got.get("_id", ""), name=name,
+                                status=got.get("Status"), born_live=True)
+
+    if kind == "dataset":
+        got = client.create_dataset(name)
+        if isinstance(got, Err):
+            return got
+        return FlowCreateReport(kind=kind, flow_id=got.get("_id", ""), name=name,
+                                status=got.get("Status"), born_live=True)
+
+    if kind == "case":
+        item_type = extra.get("item_type")
+        prefix = extra.get("prefix")
+        if not item_type or not prefix:
+            return Err("verify",
+                      "create_flow_any(kind='case') requires extra={'item_type': 'Board'|'Case', "
+                      "'prefix': <2-4 char string>} — both are mandatory on the write API "
+                      "(400 MissingRequiredFieldError without them)")
+        got = client.create_case(name, item_type, prefix)
+        if isinstance(got, Err):
+            return got
+        return FlowCreateReport(kind=kind, flow_id=got.get("_id", ""), name=name,
+                                status=got.get("Status"), born_live=True)
+
+    return Err("verify", f"create_flow_any: unknown kind {kind!r} — "
+                         f"valid: process, form, list, dataset, case")

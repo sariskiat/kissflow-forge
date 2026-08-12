@@ -80,6 +80,7 @@ from .client import (
     apply_word_list,
     apply_workflow,
     create_application_verified,
+    create_flow_any,
     create_process,
     delete_anything,
     run_doctor,
@@ -978,6 +979,20 @@ def forge_grant_tier(kind: str, flow_id: str, role_id: str, tier: str) -> dict[s
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_grant_tier(c, kind, flow_id, role_id, tier))  # type: ignore[arg-type]
+
+
+@mcp.tool()
+def forge_create_flow(kind: str, name: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """LIVE (dev only, KF_APP): unified create for `kind` in process|form|list|dataset|case.
+    process/form start Draft (build fields/workflow next); list/dataset/case are born LIVE, no
+    publish step. `kind="case"` (a board) REQUIRES `extra={"item_type": "Board"|"Case", "prefix":
+    <short string>}` — refused loudly before any write when either is missing (the write API
+    itself 400s MissingRequiredFieldError on either omission).
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(create_flow_any(c, kind, name, extra))
 
 
 # =====================================================================================

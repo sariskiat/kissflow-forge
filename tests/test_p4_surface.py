@@ -9,7 +9,15 @@ from typing import Any
 
 from test_client import DEV, FakeClient, _bare_process_draft
 
-from kfforge.client import Err, RoleUsersReport, TierReport, apply_add_role_users, apply_grant_tier
+from kfforge.client import (
+    Err,
+    FlowCreateReport,
+    RoleUsersReport,
+    TierReport,
+    apply_add_role_users,
+    apply_grant_tier,
+    create_flow_any,
+)
 
 
 def _bare_draft(version: str = "v1") -> dict[str, Any]:
@@ -156,3 +164,71 @@ def test_grant_tier_unknown_tier_rejected_before_any_write() -> None:
     assert isinstance(got, Err) and got.kind == "verify"
     assert "Superuser" in got.message
     assert c.member_batches == []
+
+
+# ---- forge_create_flow (#3) -------------------------------------------------------------------
+
+
+class CreateFlowClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__(_bare_draft())
+        self._counter = 0
+
+    def _next_id(self, prefix: str) -> str:
+        self._counter += 1
+        return f"{prefix}_{self._counter}"
+
+    def create_flow(self, kind, name):  # type: ignore[override]
+        return self._next_id(kind)
+
+    def create_list(self, name):  # type: ignore[override]
+        return {"_id": self._next_id("List"), "Type": "List", "Status": "Live", "Name": name}
+
+    def create_dataset(self, name):  # type: ignore[override]
+        return {"_id": self._next_id("Dataset"), "Type": "Dataset", "Status": "Live", "Name": name}
+
+    def create_case(self, name, item_type, prefix):  # type: ignore[override]
+        return {"_id": self._next_id("Case"), "Type": "Case", "Status": "Live", "Name": name,
+                "ItemType": item_type, "Prefix": prefix}
+
+
+def test_create_flow_process_starts_draft() -> None:
+    c = CreateFlowClient()
+    rep = create_flow_any(c, "process", "Expense Approval")
+    assert isinstance(rep, FlowCreateReport)
+    assert rep.status == "Draft" and rep.born_live is False and rep.flow_id
+
+
+def test_create_flow_list_is_born_live() -> None:
+    c = CreateFlowClient()
+    rep = create_flow_any(c, "list", "Priority")
+    assert isinstance(rep, FlowCreateReport)
+    assert rep.status == "Live" and rep.born_live is True
+
+
+def test_create_flow_dataset_is_born_live() -> None:
+    c = CreateFlowClient()
+    rep = create_flow_any(c, "dataset", "Vendors")
+    assert isinstance(rep, FlowCreateReport)
+    assert rep.status == "Live" and rep.born_live is True
+
+
+def test_create_flow_case_requires_item_type_and_prefix() -> None:
+    c = CreateFlowClient()
+    got = create_flow_any(c, "case", "Support Tickets")
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "item_type" in got.message and "prefix" in got.message
+
+
+def test_create_flow_case_with_extra_succeeds() -> None:
+    c = CreateFlowClient()
+    rep = create_flow_any(c, "case", "Support Tickets",
+                          extra={"item_type": "Board", "prefix": "SUP"})
+    assert isinstance(rep, FlowCreateReport)
+    assert rep.status == "Live" and rep.born_live is True
+
+
+def test_create_flow_unknown_kind_rejected() -> None:
+    c = CreateFlowClient()
+    got = create_flow_any(c, "wizardry", "x")
+    assert isinstance(got, Err) and got.kind == "verify"
