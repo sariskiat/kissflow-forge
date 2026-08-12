@@ -889,11 +889,17 @@ reads, or later writes against an id sourced from, a DIFFERENT app's list.
   user must actually be a member of that role (see Members first); there is
   no API route that grants role membership itself, only the builder UI does.
 - A handful of routes are confirmed dead ends, worth knowing so nobody
-  re-probes them: a dataset-style product surface 403s outright (the account
-  tier doesn't include it); a legacy list-flow path is pure front-end with no
+  re-probes them: a legacy list-flow path is pure front-end with no
   API behind it; per-field lookup/reverse-lookup routes 500 on any editable
   Select; and no API route exists to reassign an in-flight activity to a
-  different user.
+  different user. ⚠️ A CORRECTED BELIEF (2026-08-12, #50): this list used to
+  claim "a dataset-style product surface 403s outright (account tier)" — WRONG
+  for flow creation. The `dataset` flowtype (Dataforms) works cleanly:
+  `POST /flow/2/{acct}/dataset` creates one born Live, records live on their
+  own `/dataset/2/{acct}/{flow_id}` route family, no members needed, no
+  publish route at all. See docs/capabilities/module.dataform.md +
+  shapes/dataform_dataset_skeleton.json. The old 403 note likely described an
+  analytics-shaped surface, not this flowtype.
 
 ## Pages
 

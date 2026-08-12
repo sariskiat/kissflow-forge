@@ -91,9 +91,11 @@ system TabularReport appears on a case exactly as on a process.
 
 ## Gotchas
 
-Copilot **fabricated a success** on this module: asked for a Kanban view, it
-replied with a specific-sounding view id while `CaseView` stayed `[]` and no
-graph key changed — not reply-lag, a false claim. Stronger than the known
-"reply lags the graph": diff the graph (and the flow-detail `CaseView`/
-`Report` arrays, which live on flow-detail, not the draft) after EVERY claimed
-board change, however concrete the reply sounds.
+Copilot **claimed a success that had not landed** on this module: asked for a
+Kanban view, it replied with a specific-sounding view id while `CaseView`
+stayed `[]` and no graph key changed in the polling window. The copilot
+system is slow and inconsistent — a reply can outrun, lag, or misdescribe the
+graph — so this is a verification rule, not a capability verdict: diff the
+graph (and the flow-detail `CaseView`/`Report` arrays, which live on
+flow-detail, not the draft) after EVERY claimed board change, however
+concrete the reply sounds, and retry rather than conclude "cannot" on a miss.

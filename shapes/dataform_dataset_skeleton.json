@@ -1,0 +1,33 @@
+{
+  "kind": "Model",
+  "description": "Dataform = flowtype 'dataset'. Fresh-dataform draft scaffold. Created via POST /flow/2/{acct}/dataset?_application_id={app} {Name} -> born Live; NO publish route exists at all (draft IS live). Field writes use the identical node shapes as form/process — the engine's apply_fields worked unmodified. Captured live 2026-08-12 (#50).",
+  "source_capture": "live-probe-2026-08-12-issue-50",
+  "template": {
+    "Model_Sample01": {
+      "Id": "Model_Sample01",
+      "Kind": "Model",
+      "FlowType": "Dataset",
+      "Name": "Sample Dataform",
+      "Description": "",
+      "Model::Row": ["Row_Sample01"],
+      "Model::Field": []
+    },
+    "Row_Sample01": {
+      "Id": "Row_Sample01",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": []
+    }
+  },
+  "notes": [
+    "Flowtype string is `dataset` — dataform/data_form/masterdata/datatable all 404. Create: {\"Name\":...} only; response {_id, Type:\"Dataset\", Status:\"Live\"}. PublishedAt/PublishedBy stamped at creation; the publish route 404s — there is NO draft/live split on this flowtype (same family as `list`).",
+    "Record data plane is a THIRD route family: POST /dataset/2/{acct}/{flow_id} creates a record ({\"Name\": ..., \"<FieldId>\": value}); GET or POST /dataset/2/{acct}/{flow_id}/list returns {Columns, Data} — schema plus live rows keyed by field id. Wrong-typed values 400 cleanly (e.g. InvalidNumberFormat).",
+    "The record's own `Name` is a synthetic system column (labeled \"Key\", IsSystemField:true), REQUIRED and UNIQUE per record — a duplicate 409s DuplicateKeyException. Schema design must give the record a genuinely unique natural key or creation starts failing.",
+    "NO membership gate: record create/list worked with a completely empty member list — a real divergence from process's Members-first rule. NO workflow surface either: ProcessDef/Activity/Permission never appear, before or after field adds.",
+    "Native size ceiling on the flow record itself: MaxRowCount:50000, MaxColumnCount:100 — surface this to anyone sizing a reference table.",
+    "Field writes produce the IDENTICAL Node-graph-invariants shapes as form/process (Field{Model,CreatedAt,Column}, 6-unit Row grid, complete Model::Appearance->Appearance->Appearance::Style->Style chain, per-type keys like Number's DefaultValue/Decimalpoint) — apply_fields ran unmodified with kind=\"dataset\".",
+    "Per-record GET/PUT/DELETE by id is UNRESOLVED — every route guess 404'd; an upsert-style POST with _id hits the same create-uniqueness check (409), so it is not an update. The /list response carries empty Sort/Filter keys — a POST {\"Filter\":...} sweep is the flagged follow-up.",
+    "Pointing a process at a dataform = Field{Type:\"Reference\"} + QueryDefinition{LHSModel:<dataform flow id>, FlowType:\"Dataset\", LookupField:[...]} — see shapes/field_lookup.json / field_remote_lookup.json for the field-side template; FlowType is the sole discriminator of the target kind (Process/Form/User/Dataset all confirmed). Page widgets bind via the same view/* flow_type/flow_id/view_id trio with flow_type:\"Dataset\" (write-proven; RENDER unverified — no UI in the capture).",
+    "Copilot CANNOT see or create a Dataset flow at all — asked twice with the exact type name and an explicit create-from-scratch fallback, it substituted a Form both times (QueryDefinition read back FlowType:\"Form\"). Direct engine write is the ONLY path for dataforms; a copilot fallback must refuse loudly here."
+  ]
+}
