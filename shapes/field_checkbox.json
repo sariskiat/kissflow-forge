@@ -1,0 +1,23 @@
+{
+  "kind": "Field",
+  "description": "Checkbox field. A list-backed MULTIPLE-choice group (tick any of the options), NOT a single boolean toggle — it carries ReferredList like the other pick-from-a-list fields. For a true on/off value use field_boolean.json (Type:Boolean) instead. Captured live headless via copilot 2026-08-12 (field sweep #45); ids de-identified.",
+  "source_capture": "copilot field sweep #45 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Checkbox",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Checkbox Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "ReferredList": "List_Sample01"
+    }
+  },
+  "notes": [
+    "IMPORTANT: Type \"Checkbox\" here is a list-backed multi-tick group (has ReferredList), a different node type from the boolean Type:\"Boolean\" (field_boolean.json). Do not confuse the two — a loop gate needs the Boolean, not this.",
+    "Options live in a list flow via ReferredList=<list flow id>; off-list values silently clear (same discard rule as Select/Multiselect).",
+    "Computed: Select-family, source family-inferred onClick (unverified). Validation via forge_add_field_validation."
+  ]
+}

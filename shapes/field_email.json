@@ -1,0 +1,21 @@
+{
+  "kind": "Field",
+  "description": "Email field. A single email address. Captured live headless via copilot 2026-08-12 (field sweep #45); ids de-identified. No per-type config key beyond the standard envelope was written by copilot's default build.",
+  "source_capture": "copilot field sweep #45 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Email",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Email Field",
+      "Column": "Column_Sample01",
+      "Required": false
+    }
+  },
+  "notes": [
+    "Type is \"Email\". Kissflow likely enforces address format natively, but no explicit format/pattern key was captured — treat built-in format validation as inferred until the config-tabs sweep (#48).",
+    "Computed: Email is Text-family; a source is family-inferred to fire onChange (unverified live). Validation offering via forge_add_field_validation."
+  ]
+}

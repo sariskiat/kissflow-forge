@@ -1,0 +1,26 @@
+{
+  "kind": "Field",
+  "description": "Currency field. A money value with a chosen currency set (CurrencyTypes) and fixed decimal places (Decimalpoint). Captured live headless via copilot 2026-08-12 (field sweep #45); ids de-identified to synthetic Sample names.",
+  "source_capture": "copilot field sweep #45 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Currency",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Amount Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "DefaultValue": "0",
+      "Decimalpoint": "2",
+      "CurrencyTypes": ["USD"]
+    }
+  },
+  "notes": [
+    "CurrencyTypes is a LIST of currency codes (captured: [\"USD\"]) — the set of currencies the field accepts, not a single string.",
+    "DefaultValue is the STRING \"0\" and Decimalpoint the STRING \"2\" — both wire strings, like Number (see field_number.json).",
+    "Validation offering: attach a FieldValidation::Criteria -> Condition (forge_add_field_validation), e.g. a max amount. The mechanism is captured live (CLAUDE.md F7); the exact operator set valid for Currency is a config-tabs sweep (#48) not yet run.",
+    "Computed offering: set the value from an event on a SOURCE field (forge_set_events -> Field::Event). Currency is not in trigger_for yet; family-inferred trigger is onSelect (Number family), unverified live."
+  ]
+}

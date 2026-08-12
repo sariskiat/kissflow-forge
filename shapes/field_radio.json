@@ -1,0 +1,24 @@
+{
+  "kind": "Field",
+  "description": "Radio button field. Pick ONE option from a list flow, rendered as radio buttons. Captured live as Type:\"Select\" with Widget:\"Radio\" — a Radio is a single-select whose display widget is radio, not a distinct node type. Captured live headless via copilot 2026-08-12 (field sweep #45); ids de-identified.",
+  "source_capture": "copilot field sweep #45 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Select",
+      "Widget": "Radio",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Radio Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "ReferredList": "List_Sample01"
+    }
+  },
+  "notes": [
+    "Radio = Type:\"Select\" + Widget:\"Radio\" (captured). The same underlying single-select as a dropdown; only Widget changes the render. Omit Widget (or set it to the dropdown value) for a plain dropdown Select.",
+    "Options live in a list flow via ReferredList=<list flow id>; off-list values silently clear.",
+    "Computed: a Select SOURCE fires onClick (live-confirmed, CLAUDE.md #12). Validation via forge_add_field_validation."
+  ]
+}

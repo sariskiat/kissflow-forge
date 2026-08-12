@@ -1,0 +1,23 @@
+{
+  "kind": "Field",
+  "description": "Multi-select dropdown field. Pick MANY options from a list flow, referenced by id via ReferredList — the same list-backed pattern as Select/Checkbox/Radio, differing only in Type and how many values it accepts. Captured live headless via copilot 2026-08-12 (field sweep #45); ids de-identified.",
+  "source_capture": "copilot field sweep #45 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Multiselect",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Multi-select Field",
+      "Column": "Column_Sample01",
+      "Required": false,
+      "ReferredList": "List_Sample01"
+    }
+  },
+  "notes": [
+    "Type is the single word \"Multiselect\". Its options live in a separate list flow, wired by ReferredList=<list flow id> (see field_currency.json's sibling list pattern and CLAUDE.md ReferredList rules).",
+    "The write API never validates a value against the list — an off-list value PUTs 200 and silently clears the field. Read the live option list before writing any value.",
+    "Computed: Select-family; a source is family-inferred to fire onClick (Select is live-confirmed onClick, Multiselect unverified). Validation via forge_add_field_validation."
+  ]
+}

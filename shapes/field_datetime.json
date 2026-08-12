@@ -1,0 +1,22 @@
+{
+  "kind": "Field",
+  "description": "Date & Time field. A calendar date plus time-of-day. Captured live headless via copilot 2026-08-12 (field sweep #45); ids de-identified. No per-type config key was written by copilot's default build beyond the standard envelope.",
+  "source_capture": "copilot field sweep #45 (2026-08-12), de-identified",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "DateTime",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample Date Field",
+      "Column": "Column_Sample01",
+      "Required": false
+    }
+  },
+  "notes": [
+    "Type is the single word \"DateTime\" (one node type covers both date and time).",
+    "No format / min / max key was captured in copilot's default build — a date-format or range config is a config-tabs sweep (#48), treat as inferred.",
+    "Computed: a DateTime SOURCE fires onSelect (live-confirmed, CLAUDE.md #12). Validation offering via forge_add_field_validation as with any field."
+  ]
+}
