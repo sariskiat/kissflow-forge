@@ -718,10 +718,18 @@ def test_add_goto_task_branch_process_def_id_lands_inside_that_branch_not_root()
     assert root_chain_names == ["Start", "Root Step 1", "Root Step 2", "Fork", "End"]
 
 
-def test_add_goto_task_branch_process_def_id_matches_default_when_target_already_in_branch() -> None:
+def test_add_goto_task_branch_process_def_id_matches_default_when_target_already_in_branch(
+    monkeypatch,
+) -> None:
     """Passing the target's OWN branch explicitly must be byte-identical to omitting the param —
     the validation is a no-op when the caller's assumption was already correct."""
+    from kfforge import graph as graph_mod
     from kfforge.graph import add_goto_task
+
+    # Freeze _now: the two add_goto_task calls below each stamp CreatedAt from a LIVE millisecond
+    # clock, so straddling a ms boundary would make them differ on that one incidental key (~3%
+    # of runs) — nothing to do with the branch-resolution logic this test actually asserts.
+    monkeypatch.setattr(graph_mod, "_now", lambda: "2026-08-12T00:00:00.000Z")
 
     draft, _root_pd_id, branch_a_pd_id, _branch_b_pd_id = _process_with_parallel_branches()
     a1_id = next(a for a in draft[branch_a_pd_id]["ProcessDef::Activity"] if draft[a]["Name"] == "A1")
