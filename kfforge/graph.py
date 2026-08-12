@@ -785,56 +785,96 @@ def set_field_events(draft: Draft, events: dict[str, list[tuple[str, str]]]) -> 
     return new
 
 
-def set_section_style(draft: Draft, styles: dict[str, dict[str, str | None]]) -> Draft:
-    """Colour sections. `styles` maps a section NAME to {property: design-token ref}. Pure.
+def _style_wire_value(prop: str, v: str | dict[str, Any]) -> dict[str, Any]:
+    """Normalize one style property to its wire shape: a bare token string wraps as
+    {"ref": token} (the dominant, form-proven shape); an explicit {"ref": ...} or
+    {"value": ...} dict passes through verbatim (#11 — the old bare-string type rejected the
+    real captured shape at the tool boundary, so styles never landed at all)."""
+    if isinstance(v, dict):
+        if v and set(v) <= {"ref", "value"}:
+            return v
+        raise ValueError(f"style {prop!r}: a dict value must use 'ref' or 'value', got {v!r}")
+    return {"ref": v}
 
-    A property set to None is REMOVED, which returns it to the theme default — the only way to undo
-    a colour, since Kissflow persists non-default values only.
 
-    Captured shape (builder-written, 2026-08-04):
+def _write_style_props(style_node: dict[str, Any], props: dict[str, Any]) -> None:
+    """Merge props into a Style node's Value. None removes (back to the theme default — the only
+    way to undo, since Kissflow persists non-default values only). Mutates in place."""
+    value = dict(style_node.get("Value") or {})
+    for prop, token in props.items():
+        if token is None:
+            value.pop(prop, None)
+        else:
+            value[prop] = _style_wire_value(prop, token)
+    if value:
+        style_node["Value"] = value
+    else:
+        style_node.pop("Value", None)          # an empty Value is what "unstyled" looks like
+
+
+def set_section_style(
+    draft: Draft,
+    styles: dict[str, dict[str, Any]],
+    root_style: dict[str, Any] | None = None,
+    hint_text_position: str | None = None,
+) -> Draft:
+    """Colour sections AND (optionally) the root Model's own chain (#11). Pure.
+
+    `styles` maps a section NAME to {property: value}; `root_style` writes the same shape onto
+    the ROOT Model's Appearance/Style chain (the one CLAUDE.md's Node-graph invariants make
+    mandatory), and `hint_text_position` sets `HintTextPosition` on the root Appearance node
+    (oracle carries "Icon"). A value is a bare token string (wrapped as {"ref": ...}), an
+    explicit {"ref": ...}/{"value": ...} dict (verbatim), or None (property REMOVED — back to
+    the theme default, the only way to undo a colour).
+
+    Captured shape (builder-written, 2026-08-04; root chain + HintTextPosition read off the live
+    oracle 2026-08-10, #11):
         Column{Type:Section} --Column::Appearance--> Appearance{Column} --Appearance::Style--> Style
+        Model --Model::Appearance--> Appearance{Model, HintTextPosition?} --Appearance::Style--> Style
         Style.Value = {"Section.Bg.Color": {"ref": "Color.Info.300"}, ...}
 
-    Colours are TOKEN REFS into Kissflow's theme, never hex. ⚠️ The API does NOT validate them:
+    On a FORM every captured colour is a TOKEN REF, never hex. ⚠️ The API does NOT validate them:
     `Color.Totally.Bogus.999` was accepted, published and read back verbatim (two-arm test,
     2026-08-04). A wrong token therefore fails SILENTLY at render time. Only use tokens seen in the
-    builder's own dropdown. Idempotent: an existing Appearance/Style pair is reused, never duplicated.
+    builder's own dropdown. Idempotent: an existing Appearance/Style pair is reused, never
+    duplicated — and every Appearance this writes owns exactly one Style, because an Appearance
+    with an EMPTY Appearance::Style breaks the whole form's render (CLAUDE.md render-breakers).
     """
     new: Draft = copy.deepcopy(draft)
     by_name = {v["Name"]: k for k, v in _kind(new, "Column").items()
                if v.get("Type") == "Section" and v.get("Name")}
 
+    def _chain(owner_id: str, owner_key: str, back_key: str, name: str) -> str:
+        """Ensure owner --back_key--> Appearance --Appearance::Style--> Style; return style id."""
+        owner = new[owner_id]
+        existing = (owner.get(back_key) or [None])[0]
+        if existing and existing in new:
+            app_id = existing
+        else:
+            app_id = _new_id("Appearance", owner_id, 0, name)
+            new[app_id] = {"Id": app_id, "Kind": "Appearance", owner_key: owner_id,
+                           "Appearance::Style": []}
+            owner[back_key] = [app_id]
+        style_id = (new[app_id].get("Appearance::Style") or [None])[0]
+        if not style_id or style_id not in new:
+            style_id = _new_id("Style", owner_id, 0, name)
+            new[style_id] = {"Id": style_id, "Kind": "Style", "Appearance": app_id}
+            new[app_id]["Appearance::Style"] = [style_id]
+        return style_id
+
     for name, props in styles.items():
         sid = by_name.get(name)
         if sid is None:
             raise ValueError(f"no section named {name!r}")
-        sec = new[sid]
+        _write_style_props(new[_chain(sid, "Column", "Column::Appearance", name)], props)
 
-        existing = (sec.get("Column::Appearance") or [None])[0]
-        if existing and existing in new:
-            app_id = existing
-        else:
-            app_id = _new_id("Appearance", sid, 0, name)
-            new[app_id] = {"Id": app_id, "Kind": "Appearance", "Column": sid,
-                           "Appearance::Style": []}
-            sec["Column::Appearance"] = [app_id]
-
-        style_id = (new[app_id].get("Appearance::Style") or [None])[0]
-        if not style_id or style_id not in new:
-            style_id = _new_id("Style", sid, 0, name)
-            new[style_id] = {"Id": style_id, "Kind": "Style", "Appearance": app_id}
-            new[app_id]["Appearance::Style"] = [style_id]
-
-        value = dict(new[style_id].get("Value") or {})
-        for prop, token in props.items():
-            if token is None:
-                value.pop(prop, None)          # back to the theme default
-            else:
-                value[prop] = {"ref": token}
-        if value:
-            new[style_id]["Value"] = value
-        else:
-            new[style_id].pop("Value", None)   # an empty Value is what "unstyled" looks like
+    if root_style is not None or hint_text_position is not None:
+        model_id = _model_id(new)
+        style_id = _chain(model_id, "Model", "Model::Appearance", "Root")
+        if root_style:
+            _write_style_props(new[style_id], root_style)
+        if hint_text_position is not None:
+            new[new[style_id]["Appearance"]]["HintTextPosition"] = hint_text_position
     return new
 
 

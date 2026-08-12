@@ -1060,3 +1060,63 @@ def test_add_table_after_section_unknown_name_raises() -> None:
     bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
     with pytest.raises(ValueError, match="Nope"):
         add_table(bare, "Log", [("Round", FieldType.NUMBER)], after_section="Nope")
+
+
+def _three_section_form() -> dict:
+    from kfforge.graph import apply_changes, regroup_into_sections
+    from kfforge.types import FieldSpec, FieldType
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    d = apply_changes(bare, [FieldSpec(name="A", type=FieldType.TEXT),
+                             FieldSpec(name="B", type=FieldType.TEXT),
+                             FieldSpec(name="C", type=FieldType.TEXT)])
+    return regroup_into_sections(d, [("S1", ["A"]), ("S2", ["B"]), ("S3", ["C"])])
+
+
+def test_set_section_style_full_form_chain_count_is_n_plus_one() -> None:
+    """#11: N sections styled + the root Model addressed -> N+1 complete Appearance/Style chains
+    (the oracle's 10 = 1 root + 9 sections, expressed here as N, not as 10). Every Appearance owns
+    exactly one Style — an empty Appearance::Style breaks the whole form's render (CLAUDE.md)."""
+    from kfforge.graph import set_section_style
+
+    got = set_section_style(
+        _three_section_form(),
+        {name: {"Section.Header.Color": "Color.Secondary.Ten.800"} for name in ("S1", "S2", "S3")},
+        root_style={"Form.Field.Color": {"ref": "Color.Primary.500"},
+                    "Form.Bg.Color": "Color.Transparent"},
+        hint_text_position="Icon",
+    )
+    apps = {k: v for k, v in got.items() if isinstance(v, dict) and v.get("Kind") == "Appearance"}
+    stys = {k: v for k, v in got.items() if isinstance(v, dict) and v.get("Kind") == "Style"}
+    assert len(apps) == 4 and len(stys) == 4          # N+1 with N=3
+    for a in apps.values():
+        assert len(a.get("Appearance::Style") or []) == 1
+
+    root_app_id = (got["M1"].get("Model::Appearance") or [None])[0]
+    root_app = got[root_app_id]
+    assert root_app["HintTextPosition"] == "Icon"
+    root_style = got[root_app["Appearance::Style"][0]]
+    # a bare token string wraps as {"ref": ...}; an explicit {"ref"/"value"} dict passes verbatim
+    assert root_style["Value"]["Form.Field.Color"] == {"ref": "Color.Primary.500"}
+    assert root_style["Value"]["Form.Bg.Color"] == {"ref": "Color.Transparent"}
+
+
+def test_set_section_style_accepts_explicit_ref_and_value_dicts() -> None:
+    """#11: the {"ref": ...} / {"value": ...} shapes pass through verbatim (the old bare-string
+    type rejected them at the tool boundary, so styles never landed at all)."""
+    from kfforge.graph import set_section_style
+
+    got = set_section_style(_three_section_form(),
+                            {"S1": {"Section.Bg.Color": {"value": "#112233"}}})
+    sec = next(v for v in got.values()
+               if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "S1")
+    style = got[got[sec["Column::Appearance"][0]]["Appearance::Style"][0]]
+    assert style["Value"]["Section.Bg.Color"] == {"value": "#112233"}
+
+
+def test_set_section_style_rejects_unknown_dict_shape() -> None:
+    from kfforge.graph import set_section_style
+    import pytest
+
+    with pytest.raises(ValueError, match="ref"):
+        set_section_style(_three_section_form(), {"S1": {"Section.Bg.Color": {"nope": "x"}}})

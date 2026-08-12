@@ -1125,3 +1125,22 @@ def test_apply_word_list_missing_value_lands_in_missing_bucket() -> None:
     assert rep.verified_items == ("High",)
     assert rep.missing_items == ("Ghost",)
     assert rep.as_tool_result()["isError"] is True
+
+
+def test_apply_section_style_root_chain_verified() -> None:
+    """#11: root_style + hint_text_position land on the ROOT Model's chain and the read-back
+    audits them as the '<root>' bucket."""
+    c = FakeClient(_bare_form_draft())
+    rep = apply_section_style(
+        c, "F1", {},
+        root_style={"Form.Field.Color": "Color.Primary.500",
+                    "Form.Bg.Color": {"ref": "Color.Transparent"}},
+        hint_text_position="Icon",
+    )
+    assert isinstance(rep, StyleReport)
+    assert rep.verified == ("<root>",) and rep.missing == ()
+    model = c.draft["M1"]
+    app = c.draft[model["Model::Appearance"][0]]
+    style = c.draft[app["Appearance::Style"][0]]
+    assert app["HintTextPosition"] == "Icon"
+    assert style["Value"]["Form.Field.Color"] == {"ref": "Color.Primary.500"}

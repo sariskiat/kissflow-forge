@@ -663,20 +663,28 @@ def forge_set_events(
 @mcp.tool()
 def forge_set_styles(
     flow_id: str,
-    styles: dict[str, dict[str, str | None]],
+    styles: dict[str, dict[str, Any]],
     kind: str = "process",
     publish: bool = False,
+    root_style: dict[str, Any] | None = None,
+    hint_text_position: str | None = None,
 ) -> dict[str, Any]:
-    """LIVE write (dev only, KF_APP): colour sections. `styles` maps a section NAME to
-    {property: design-token ref}; a value of null removes that property (back to the theme
-    default). Colours are TOKEN REFS, never hex — CLAUDE.md warns these are UNVALIDATED by the API
-    and fail silently at render if wrong, so only pass a token seen live in the builder's own
-    dropdown (two confirmed: Color.Info.300, Color.Secondary.Ten.800).
+    """LIVE write (dev only, KF_APP): colour sections AND (optionally) the root Model's own
+    Appearance/Style chain (#11). `styles` maps a section NAME to {property: value}; a value is
+    a bare design-token string (wrapped as {"ref": token}), an explicit {"ref": ...} or
+    {"value": ...} dict written verbatim, or null (property removed — back to the theme
+    default). `root_style` takes the same shape for the ROOT chain; `hint_text_position` sets
+    HintTextPosition on the root Appearance (oracle: "Icon"). On a FORM colours are TOKEN REFS,
+    never hex — CLAUDE.md warns tokens are UNVALIDATED by the API and fail silently at render if
+    wrong, so only pass one read off the live oracle (Color.Info.300, Color.Secondary.Ten.800,
+    Color.Primary.500, Color.Transparent) or the builder's own dropdown.
     """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(apply_section_style(c, flow_id, styles, publish=publish, kind=kind))  # type: ignore[arg-type]
+    return _result(apply_section_style(c, flow_id, styles, publish=publish, kind=kind,  # type: ignore[arg-type]
+                                       root_style=root_style,
+                                       hint_text_position=hint_text_position))
 
 
 @mcp.tool()

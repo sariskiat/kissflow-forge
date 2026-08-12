@@ -23,6 +23,7 @@ from typing import Any, Literal
 from .expr import build_branch_condition, build_goto_gate, remove_condition
 from .graph import (
     Matrix,
+    _style_wire_value,
     add_field_validation,
     add_goto_task,
     add_sequence_number,
@@ -1604,15 +1605,21 @@ class StyleReport:
 def apply_section_style(
     client: KfClient,
     flow_id: str,
-    styles: dict[str, dict[str, str | None]],
+    styles: dict[str, dict[str, Any]],
     publish: bool = False,
     kind: FlowKind = "process",
+    root_style: dict[str, Any] | None = None,
+    hint_text_position: str | None = None,
 ) -> StyleReport | Err:
-    """GET draft -> graph.set_section_style offline (colour TOKEN REFS only — CLAUDE.md warns
-    these are UNVALIDATED by the API and fail silently at render if wrong; callers should only
-    ever pass the two CONFIRMED tokens, Color.Info.300 / Color.Secondary.Ten.800, or one seen live
-    in the builder's own dropdown) -> guarded PUT -> read-back verify the Style.Value landed ->
-    optional publish.
+    """GET draft -> graph.set_section_style offline (colour TOKEN REFS only on forms — CLAUDE.md
+    warns these are UNVALIDATED by the API and fail silently at render if wrong; callers should
+    only ever pass tokens read off the live oracle: Color.Info.300, Color.Secondary.Ten.800,
+    Color.Primary.500, Color.Transparent — or one seen in the builder's own dropdown) -> guarded
+    PUT -> read-back verify the Style.Value landed -> optional publish.
+
+    `root_style`/`hint_text_position` (#11) address the ROOT Model's own Appearance/Style chain;
+    per-section values accept a bare token (wrapped {"ref": ...}) or an explicit
+    {"ref"/"value": ...} dict verbatim.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
@@ -1620,7 +1627,8 @@ def apply_section_style(
     version = draft.get(_META_VERSION)
 
     try:
-        new = set_section_style(draft, styles)
+        new = set_section_style(draft, styles, root_style=root_style,
+                                hint_text_position=hint_text_position)
     except ValueError as e:
         return Err("verify", f"offline set_section_style rejected the spec: {e}")
 
@@ -1646,10 +1654,29 @@ def apply_section_style(
         style = read_back.get(style_ids[0]) or {}
         value = style.get("Value") or {}
         wanted = styles[name]
-        return all((value.get(k) or {}).get("ref") == v for k, v in wanted.items() if v is not None)
+        return all(value.get(k) == _style_wire_value(k, v)
+                   for k, v in wanted.items() if v is not None)
 
-    wanted_names = tuple(styles)
-    verified = tuple(n for n in wanted_names if _landed(n))
+    def _root_landed() -> bool:
+        model_id = read_back.get("Root", "")
+        app_ids = (read_back.get(model_id) or {}).get("Model::Appearance") or []
+        if not app_ids:
+            return False
+        app = read_back.get(app_ids[0]) or {}
+        style_ids = app.get("Appearance::Style") or []
+        if not style_ids:
+            return False
+        value = (read_back.get(style_ids[0]) or {}).get("Value") or {}
+        ok = all(value.get(k) == _style_wire_value(k, v)
+                 for k, v in (root_style or {}).items() if v is not None)
+        if hint_text_position is not None:
+            ok = ok and app.get("HintTextPosition") == hint_text_position
+        return ok
+
+    wanted_names = tuple(styles) + (("<root>",) if (root_style or hint_text_position) else ())
+    verified = tuple(n for n in tuple(styles) if _landed(n))
+    if (root_style or hint_text_position) and _root_landed():
+        verified += ("<root>",)
     missing = tuple(n for n in wanted_names if n not in verified)
 
     published = False
