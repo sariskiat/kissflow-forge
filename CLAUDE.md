@@ -801,8 +801,23 @@ creates one from nothing, see below).
 - **Archive before deleting a process** — deleting an unarchived process
   fails outright; archive first, then delete. Forms (non-process flows)
   delete directly, no archive step needed.
-- A `User`-type field blocks publish outright. Avoid it until its exact
-  required shape has been captured off a builder-authored example.
+- ⚠️ **A CORRECTED BELIEF (issue #59, 2026-08-12).** This used to say a
+  `User`-type field blocks publish outright and its shape was uncaptured.
+  The shape is now captured off a real, PUBLISHED builder example (a real
+  production process template, 3 live User fields — see
+  `shapes/field_user_reference.json`): `Field{Type:"User"}` plus a sibling
+  `QueryDefinition{FlowType:"User", LHSModel:"User"|"_employee", Field:<field
+  id>}` (and the field's own bidirectional `Field::QueryDefinition`
+  back-ref). With that sibling present, the field publishes and renders
+  fine. What still blocks publish is a **bare** `Field{Type:"User"}` with no
+  `QueryDefinition` at all — that half of the old belief stands, just
+  narrower than originally stated. **Runtime binding on THIS engine's own
+  dev tenant remains unverified** — the proof above is that the shape
+  publishes/renders on the SOURCE prod tenant, not that dev has an
+  equivalent `User`/`_employee` source to resolve against; don't upgrade
+  "publishes clean" to "usable end to end" without a live dev-tenant item
+  walk through a User field (THE RULE, restated for this shape). See
+  `docs/capabilities/field.user.md`.
 - **`ReferredList` wiring is CAPTURED and proven (#13, 2026-08-12 — replacing
   the old "never synthesize" rule outright).** The whole chain is three
   probed routes plus one key: create a list flow with

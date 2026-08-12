@@ -1,0 +1,34 @@
+{
+  "kind": "Field",
+  "description": "User field. CORRECTS a former CLAUDE.md belief (\"A User-type field blocks publish outright\") — captured off a REAL, live PUBLISHED builder example (a real production process template, issue #59): a bare Field{Type:\"User\"} with no sibling QueryDefinition is still the thing that blocks publish; a User field WITH its QueryDefinition{FlowType:\"User\"} sibling publishes and renders fine. Same Type:\"Reference\"-family QueryDefinition wiring as field_lookup.json (FlowType \"Process\") and field_remote_lookup.json (FlowType \"Dataset\") — User is the third FlowType in that same family, except the FIELD's own Type is \"User\", not \"Reference\".",
+  "source_capture": "template_cj_pi_raw.json",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "User",
+      "CreatedAt": "2026-01-01T00:00:00.000Z",
+      "Model": "Model_Sample01",
+      "Name": "Sample User Reference Field",
+      "Column": "Column_Sample01",
+      "Field::QueryDefinition": ["QueryDefinition_Sample01"]
+    },
+    "QueryDefinition_Sample01": {
+      "Id": "QueryDefinition_Sample01",
+      "Kind": "QueryDefinition",
+      "Field": "Field_Sample01",
+      "FlowType": "User",
+      "LHSModel": "User",
+      "LookupField": [],
+      "AutoFill": true
+    }
+  },
+  "notes": [
+    "LHSModel on a live User QueryDefinition was observed as BOTH \"User\" (the plain account-level user directory) and \"_employee\" (an employee-record source) across 3 live User fields on the same real published flow — both are real, platform-level LHSModel literals, not tenant-specific ones. Which to use depends on which directory the field should resolve against; neither is a default to prefer blindly.",
+    "AutoFill:true was present on 2 of the 3 live QueryDefinitions and absent on the 3rd (no AutoFill key at all, not AutoFill:false) — same 'absence is a real state, not a default-false' pattern CLAUDE.md already documents for Textarea AllowFormatting/Attachment CaptureOnly. Set it explicitly only when the field is meant to prefill from a matching Criteria; omit it otherwise, don't assume.",
+    "A live QueryDefinition with AutoFill:true also carried its own QueryDefinition::Criteria (the auto-fill MATCH condition — a Criteria/Condition subtree, same family as expression_branch.json's routing conditions, just owned by a QueryDefinition instead of a ProcessDef/Activity). That subtree is NOT captured in this minimal shape — it is optional (the 3rd live example had neither AutoFill nor Criteria and still published/rendered fine) and its own condition literals are always tenant/business-specific, never safe to copy verbatim from one capture into another.",
+    "LookupField:[] (empty) on every live example — unlike field_remote_lookup.json's Dataset-backed sibling, a User-type QueryDefinition does not appear to need a populated LookupField list to publish or render.",
+    "RUNTIME BINDING ON THIS ENGINE'S OWN DEV TENANT IS STILL UNVERIFIED — this shape proves the WRITE shape publishes and renders on the source production tenant, not that dev has an equivalent user/_employee source to resolve against. Do not upgrade 'publishes clean' to 'usable end to end' without a live dev-tenant item walk through a User field (CLAUDE.md's own THE RULE: a 200/publish proves nothing about runtime behavior).",
+    "The bare-Field-blocks-publish caution STILL HOLDS: this shape's whole point is that the QueryDefinition sibling is what makes a User field publishable, not the Field node alone. Never write Type:\"User\" without also writing its Field::QueryDefinition pair."
+  ]
+}
