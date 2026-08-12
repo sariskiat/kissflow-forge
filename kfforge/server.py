@@ -99,6 +99,7 @@ from .intake.schema import DIMENSION_NAMES, AppSpec, blank_spec
 from .intake.serde import spec_from_dict, spec_to_dict, to_wire
 from .pages_live import (
     PageBuildStep,
+    apply_build_page_op,
     apply_navigation,
     apply_page_build,
     create_page_flow,
@@ -762,21 +763,38 @@ def forge_create_page(app_id: str, name: str, publish: bool = False) -> dict[str
 @mcp.tool()
 def forge_build_page(
     app_id: str,
-    page_id: str,
-    steps: list[dict[str, Any]],
+    page_id: str | None = None,
+    steps: list[dict[str, Any]] | None = None,
     publish: bool = False,
+    op: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """LIVE write (dev only): add containers/widgets/popups/styles to a page, in ONE guarded
-    write. Each step is `{"kind": "container"|"widget"|"popup"|"style", "kwargs": {...}}` —
-    `kwargs` are passed straight to the matching kfforge.pages builder
-    (add_container/add_widget/add_popup/set_styles). A widget whose binding is load-bearing
-    (view/*, report/*, metrics, masterdetail, repeater) REQUIRES its full config —
-    CLAUDE.md's THE RULE: a page with a placeholder binding publishes clean and renders broken, so
-    this is rejected offline, before any write.
+    """LIVE write (dev only). TWO entries, exactly one required:
+
+    `op` — the GOVERNED path (#41, ADR-0005): pass a compiled `build_page` op's args verbatim
+    (name/widgets/kpis/actions/popups/on_click from forge_plan_app). Creates-or-reuses the page
+    by name, builds widgets into the Body, popups with their own widgets, one button per action,
+    and the on-click EventMapping wiring (OpenPopup resolves the target popup id from this same
+    run). Every sub-item lands in built/skipped/refused + read-back verified/missing — a KPI is
+    skipped with its Known-Exclusion reason (#23), a dangling OpenPopup is refused (D6), never a
+    dead button.
+
+    `steps` + `page_id` — the raw primitive: each step is `{"kind": "container"|"widget"|
+    "popup"|"event"|"style", "kwargs": {...}}` passed straight to the matching kfforge.pages
+    builder. A widget whose binding is load-bearing (view/*, report/*, metrics, masterdetail,
+    repeater) REQUIRES its full config — THE RULE: a placeholder binding publishes clean and
+    renders broken, so it is rejected offline, before any write.
     """
     c = _client()
     if isinstance(c, Err):
         return c.as_tool_result()
+    if (op is None) == (steps is None):
+        return {"isError": True,
+                "error": "pass exactly one of 'op' (governed compiled build_page op) or "
+                         "'steps' (+ 'page_id', raw primitive)"}
+    if op is not None:
+        return _result(apply_build_page_op(c, app_id, op, publish=publish))
+    if not page_id:
+        return {"isError": True, "error": "'steps' entry requires 'page_id'"}
     build_steps = [PageBuildStep(kind=s["kind"], kwargs=s.get("kwargs", {})) for s in steps]
     return _result(apply_page_build(c, app_id, page_id, build_steps, publish=publish))
 

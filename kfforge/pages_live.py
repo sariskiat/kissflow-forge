@@ -342,3 +342,190 @@ def apply_navigation(
         app_id=app_id, menu_id=verified_id, unified_nav_ids=tuple(navs) if unify else (),
         swept_orphans=swept, meta_version=read_back.get(_META_VERSION), published=published,
     )
+
+
+@dataclass(frozen=True)
+class BuildPageOpReport:
+    """Output-invariant audit for the GOVERNED page executor (#41): every sub-item of the
+    compiled `build_page` op lands in exactly one of `built` / `skipped` / `refused`, and every
+    built item is then read-back checked into `verified` or `missing` — never a silent drop
+    (D6: a behavioral element is refused, not downgraded; a KPI with no buildable binding is
+    skipped with its Known-Exclusion reason, not faked)."""
+    app_id: str
+    page_id: str | None
+    page_name: str
+    page_created: bool
+    built: tuple[str, ...]
+    skipped: tuple[str, ...]
+    refused: tuple[str, ...]
+    verified: tuple[str, ...]
+    missing: tuple[str, ...]
+    meta_version: str | None
+    published: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "app_id": self.app_id, "page_id": self.page_id, "page_name": self.page_name,
+            "page_created": self.page_created, "built": list(self.built),
+            "skipped": list(self.skipped), "refused": list(self.refused),
+            "verified": list(self.verified), "missing": list(self.missing),
+            "meta_version": self.meta_version, "published": self.published,
+            "isError": bool(self.missing or self.refused),
+        }
+
+
+def apply_build_page_op(
+    client: KfClient,
+    app_id: str,
+    op_args: dict[str, Any],
+    publish: bool = False,
+) -> BuildPageOpReport | Err:
+    """Execute ONE compiled `build_page` op (compile._op_build_page's args: name / widgets /
+    kpis / actions / popups / on_click) against an explicitly-named app — the GOVERNED page
+    entry (#41, ADR-0005). `apply_page_build` stays the raw primitive underneath; this is the
+    layer that turns the plan's content+behavior into builder calls, resolving the ids only the
+    run itself can know (a popup's own container for its widgets, a minted button's container
+    for its on-click EventMapping, a popup NAME into the popup id an OpenPopup Property needs).
+
+    Translation, in order, every item bucketed:
+    - each widget -> the page Body container (layout geometry is platform-default, eval grades
+      pixels — the Build-Correctness Bar vs Eval-Parity split);
+    - each popup -> add_popup, then ITS widgets into the popup's own root container;
+    - each action -> a `general/button` (caption = the action name); an `on_click` wiring for
+      that action attaches an EventMapping to the button's container (OpenPopup resolves the
+      target popup's id from THIS run; a wiring whose target popup is unknown is REFUSED);
+    - each kpi -> `skipped` with its reason: a live-bound KPI number is a Known Exclusion (#23)
+      and the op carries no flow binding to build the metrics substitute — never faked.
+
+    One guarded PUT for everything built, then a read-back proves each built item actually
+    landed (widget Component substance and EventMapping Property payload included, same
+    shell-vs-substance discipline as apply_page_build). Publish is skipped unless everything
+    built verified AND nothing was refused.
+    """
+    name = op_args.get("name")
+    if not name:
+        return Err("verify", "build_page op has no 'name'")
+
+    listed = client.list_pages(app_id)
+    if isinstance(listed, Err):
+        return listed
+    page_id = next((p.get("_id") for p in listed
+                    if isinstance(p, dict) and p.get("Name") == name), None)
+    page_created = page_id is None
+    if page_created:
+        made = client.create_page(app_id, name)
+        if isinstance(made, Err):
+            return made
+        page_id = made
+
+    draft = client.get_page_draft(app_id, page_id)
+    if isinstance(draft, Err):
+        return draft
+    version = draft.get(_META_VERSION)
+    body = next((k for k, v in draft.items() if isinstance(v, dict)
+                 and v.get("Kind") == "Container" and v.get("Type") == "Body"), None)
+    if body is None:
+        return Err("verify", f"page {page_id} has no Body container — not a page draft?")
+
+    built: list[str] = []
+    skipped: list[str] = []
+    refused: list[str] = []
+    checks: list[tuple[str, Any]] = []
+    new: Draft = draft
+
+    def _widget_config(w: dict[str, Any]) -> dict[str, Any]:
+        cfg = dict(w.get("config") or {})
+        if w.get("row_fields"):
+            cfg["row_fields"] = list(w["row_fields"])
+        return cfg
+
+    def _add_widget_checked(container: str, w: dict[str, Any], label: str) -> None:
+        nonlocal new
+        try:
+            new, wid = add_widget(new, container_id=container, widget=w.get("slug", ""),
+                                  config=_widget_config(w))
+        except ValueError as e:
+            refused.append(f"{label}: {e}")
+            return
+        comp_id = next((k for k, v in new.items() if isinstance(v, dict)
+                        and v.get("Kind") == "Component" and v.get("Container") == wid), None)
+        ids = (wid, comp_id) if comp_id else (wid,)
+        built.append(label)
+        checks.append((label, lambda rb, i=ids: all(x in rb for x in i)))
+
+    for w in op_args.get("widgets") or ():
+        _add_widget_checked(body, w, f"widget:{w.get('slug')}")
+
+    popup_id_by_name: dict[str, str] = {}
+    for p in op_args.get("popups") or ():
+        pname = p.get("name", "")
+        new, pid = add_popup(new, name=pname)
+        popup_id_by_name[pname] = pid
+        built.append(f"popup:{pname}")
+        checks.append((f"popup:{pname}", lambda rb, i=pid: i in rb))
+        popup_container = (new[pid].get("Popup::Container") or [None])[0]
+        for w in p.get("widgets") or ():
+            _add_widget_checked(popup_container, w, f"popup:{pname}/widget:{w.get('slug')}")
+
+    wiring = {e.get("action"): e for e in op_args.get("on_click") or ()}
+    # an on_click naming an action outside `actions` still gets its button — compile already
+    # validated action membership; belt-and-braces here so no declared behavior is dropped.
+    for action in list(op_args.get("actions") or ()) + [a for a in wiring
+                                                        if a not in (op_args.get("actions") or ())]:
+        e = wiring.get(action)
+        if e and e.get("kind") == "OpenPopup" and e.get("target_popup") not in popup_id_by_name:
+            refused.append(f"action:{action}: OpenPopup targets unknown popup "
+                           f"{e.get('target_popup')!r} (D6: never a dead button)")
+            continue
+        try:
+            new, host = add_widget(new, container_id=body, widget="general/button",
+                                   config={"caption": action}, name=f"action {action}")
+        except ValueError as err:
+            refused.append(f"action:{action}: {err}")
+            continue
+        built.append(f"action:{action}")
+        checks.append((f"action:{action}", lambda rb, i=host: i in rb))
+        if e:
+            try:
+                if e.get("kind") == "OpenPopup":
+                    new, eid = add_event_mapping(new, container_id=host, type="OpenPopup",
+                                                 popup_id=popup_id_by_name[e["target_popup"]])
+                else:
+                    new, eid = add_event_mapping(new, container_id=host, type="JSAction",
+                                                 script=e.get("script"))
+            except ValueError as err:
+                refused.append(f"on_click:{action}: {err}")
+                continue
+            prop_id = next((k for k, v in new.items() if isinstance(v, dict)
+                            and v.get("Kind") == "Property" and v.get("EventMapping") == eid), None)
+            ids = (eid, prop_id) if prop_id else (eid,)
+            built.append(f"on_click:{action}")
+            checks.append((f"on_click:{action}", lambda rb, i=ids: all(x in rb for x in i)))
+
+    for k in op_args.get("kpis") or ():
+        skipped.append(f"kpi:{k}: live value binding is a Known Exclusion (#23); the op carries "
+                       "no flow binding for the metrics substitute — skipped, never faked")
+
+    if built:
+        written = client.put_page_draft(app_id, page_id, new, expect_version=version)
+        if isinstance(written, Err):
+            return written
+    read_back = client.get_page_draft(app_id, page_id)
+    if isinstance(read_back, Err):
+        return read_back
+    verified = tuple(label for label, check in checks if check(read_back))
+    missing = tuple(label for label, check in checks if not check(read_back))
+
+    published = False
+    if publish and built and not missing and not refused:
+        pub = client.publish_page(app_id, page_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+
+    return BuildPageOpReport(
+        app_id=app_id, page_id=page_id, page_name=name, page_created=page_created,
+        built=tuple(built), skipped=tuple(skipped), refused=tuple(refused),
+        verified=verified, missing=missing,
+        meta_version=read_back.get(_META_VERSION), published=published,
+    )

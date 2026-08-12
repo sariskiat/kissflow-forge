@@ -375,3 +375,71 @@ def test_apply_navigation_no_navigation_node_rejected_before_any_write() -> None
     got = apply_navigation(c, "App1", "Page_New", "Sample Tab")
     assert isinstance(got, Err) and got.kind == "verify"
     assert c.app_puts == 0
+
+
+# ---- apply_build_page_op (#41): the governed executor -------------------------------------------
+
+def _op(name: str = "Ops Home", **over: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "name": name,
+        "widgets": ({"slug": "general/label", "config": {"title": "Welcome"}, "row_fields": ()},),
+        "kpis": ("Open cases",),
+        "actions": ("New Case",),
+        "popups": ({"name": "New Case Form",
+                    "widgets": ({"slug": "general/label", "config": {"title": "Fill me"},
+                                 "row_fields": ()},)},),
+        "on_click": ({"action": "New Case", "kind": "OpenPopup",
+                      "target_popup": "New Case Form", "script": None},),
+    }
+    base.update(over)
+    return base
+
+
+def test_apply_build_page_op_builds_popup_and_onclick_wiring() -> None:
+    """#41 acceptance: the compiled op's popup subtree lands AND the button's EventMapping
+    OpenPopup Property targets that popup's real id — proven off the read-back, not the ack."""
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(c, "App1", _op())
+    assert isinstance(rep, BuildPageOpReport)
+    assert rep.page_created is True
+    assert rep.missing == () and rep.refused == ()
+    assert set(rep.built) == {"widget:general/label", "popup:New Case Form",
+                              "popup:New Case Form/widget:general/label",
+                              "action:New Case", "on_click:New Case"}
+    assert set(rep.verified) == set(rep.built)
+    assert rep.skipped and "Known Exclusion" in rep.skipped[0]      # the KPI, named, never faked
+
+    # read the draft back and prove the OpenPopup Property's Value IS the popup's id
+    draft = c.page_drafts[rep.page_id]
+    popup_id = next(k for k, v in draft.items()
+                    if isinstance(v, dict) and v.get("Kind") == "Popup"
+                    and v.get("Name") == "New Case Form")
+    props = [v for v in draft.values() if isinstance(v, dict) and v.get("Kind") == "Property"
+             and v.get("Value") == popup_id and v.get("EventMapping")]
+    assert props, "OpenPopup Property must target the popup id minted in this same run"
+
+
+def test_apply_build_page_op_refuses_dangling_popup_target() -> None:
+    """D6: an OpenPopup wired at a popup the op never declares is REFUSED (named), not shipped
+    as a dead button."""
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(c, "App1", _op(popups=()))
+    assert isinstance(rep, BuildPageOpReport)
+    assert any("unknown popup" in r for r in rep.refused)
+    assert rep.as_tool_result()["isError"] is True
+    assert "action:New Case" not in rep.built
+
+
+def test_apply_build_page_op_reuses_existing_page_by_name() -> None:
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    first = apply_build_page_op(c, "App1", _op())
+    assert isinstance(first, BuildPageOpReport)
+    rep = apply_build_page_op(c, "App1", _op(widgets=(), popups=(), actions=(), on_click=(), kpis=()))
+    assert isinstance(rep, BuildPageOpReport)
+    assert rep.page_created is False and rep.page_id == first.page_id
