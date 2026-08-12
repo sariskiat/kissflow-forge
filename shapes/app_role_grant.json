@@ -17,33 +17,40 @@
       "NodeType": "UserTask",
       "Name": "Sample Step",
       "ProcessDef": "ProcessDef_Sample01",
-      "Activity::Resource": ["Resource_Sample01"]
+      "Activity::Resource": [
+        "Resource_Sample01"
+      ]
     },
     "ProcessDef_Sample01": {
       "Id": "ProcessDef_Sample01",
       "Kind": "ProcessDef",
       "WorkflowType": "Sequence",
       "Model": "Model_Sample01",
-      "ProcessDef::Activity": ["Activity_Sample01"]
+      "ProcessDef::Activity": [
+        "Activity_Sample01"
+      ]
     },
     "Model_Sample01": {
       "Id": "Model_Sample01",
       "Kind": "Model",
       "FlowType": "Process",
       "Name": "Sample Process",
-      "Model::ProcessDef": ["ProcessDef_Sample01"],
+      "Model::ProcessDef": [
+        "ProcessDef_Sample01"
+      ],
       "RootProcessDef": "ProcessDef_Sample01"
     }
   },
   "notes": [
-    "The builder's 4-tier role screen (No-access/Read-only/Edit/Manage) is NOT a wire enum — no route returns those words. The real mechanism is TWO axes on the documented member/batch route: Role (who the AppRole IS on the flow) + Permission[] (extra grants). The tier->wire mapping is a HYPOTHESIS pending a human diff against the real builder role screen.",
-    "Role vocabulary is FLOW-TYPE-SCOPED (proven by bisection against KISSFLOW_ERROR_04230): process = Admin | DataAdmin | Member; form = Admin | Member | Viewer; report = Admin | Member. Board (case) not probed this pass — a read-only scan of a real board app saw only Role:Admin, Permission:[].",
+    "TIER MAP WIRE-PROVEN (browser round 2026-08-12, replacing the earlier 4-tier hypothesis): tiers are FLOW-TYPE-DEPENDENT — process: No access | Initiate | Manage; case: No access | Read-only | Initiate | Edit | Manage; report: No access | View report | View report & form. Writes: process Initiate = member/batch Role:Member Permission:[] (NOT a no-op trap — it IS the tier), process Manage = DataAdmin+[InitiateItems]; case Read-only/Initiate/Edit/Manage = Viewer/Initiator/Member/Admin all Permission:[]; No access = DELETE /flow/2/{acct}/{type}/{id}/member/{role_id} (a real removal route). The old 'case rejects Viewer' bisection was wrong; Initiator is a real case role.",
+    "Role vocabulary is FLOW-TYPE-SCOPED (bisection vs 04230, extended by the browser round): process = Admin | DataAdmin | Member; form = Admin | Member | Viewer; report = Admin | Member; case = Admin | Member | Initiator | Viewer (browser-proven — an earlier bisection wrongly concluded case rejects Viewer).",
     "Permission[] vocabulary is ROLE-AND-FLOW-TYPE-SCOPED (against KISSFLOW_ERROR_04231): Admin accepts [] ONLY on every flow type (implicitly full-access, every flag 400s); process Member/DataAdmin accept InitiateItems | View; form Member accepts Edit | View | Delete | Share; form Viewer accepts ReadOnly; report Member accepts Edit | View | Share (no Delete — differs from form Member).",
     "A re-POST of member/batch REPLACES the Permission array, not additive — [View,Edit] then [View,Delete] reads back exactly [View,Delete].",
-    "No-access = the AppRole simply ABSENT from the member list; no explicit-deny route exists — absence IS the deny.",
+    "No-access: absence from the member list IS the deny, and the builder writes it via a REAL removal route — DELETE /flow/2/{acct}/{type}/{id}/member/{role_id} (browser-captured; an earlier note claimed no explicit route exists — corrected).",
     "Views ARE reports: the builder's table/kanban/chart views are report records (ViewType: Tabular | IconCard | BarColumnChart | ...). Per-view permissioning = the already-documented report member/batch route; read back via GET .../report/{rid}/member or the SharedWith array on the report record.",
     "Per-role Default page + Default navigation: PUT /app_role/2/{acct}/{role_id} body {\"Preference\": {\"DefaultPage\": <page _id or \"Default\">, \"DefaultNavigation\": <Navigation node's own Id, e.g. Navigation001, or \"Default\">}} — write route newly proven, read back via GET /app_role/2/{acct}/{role_id}.",
     "Copilot on roles: both asks landed on attempt 1, but reply text mismatched the graph both times — an 'Initiator access' ask wrote Role:Member, Permission:[] (which cannot submit, per the InitiateItems rule), an 'Admin access' ask wrote Role:DataAdmin, Permission:[InitiateItems]. Read-back is the record, never the reply.",
-    "Assignee template above: ValueType MUST be AppRole (a persisted ValueType:User publishes clean but is ignored at runtime), and assignees cannot be written before members exist — CLAUDE.md Members first."
+    "Assignee template above: ValueType MUST be AppRole (a persisted ValueType:User publishes clean but is ignored at runtime), and assignees cannot be written before members exist — CLAUDE.md Members first.",
+    "Submit ALSO requires the acting user IN the assignee AppRole (AppRole.Members) — creator is NOT auto-added; PUT /app_role Members write 200s and silently ignores; /member(/batch)/members/user suffixes 404. User->role assignment is UI/account-console only; its absence is THE reproducible 403 KISSFLOW_ERROR_050302 on first submit."
   ]
 }

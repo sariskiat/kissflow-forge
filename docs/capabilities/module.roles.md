@@ -48,12 +48,17 @@ params:
 
 ## What
 
-The builder's 4-tier role screen (No-access / Read-only / Edit / Manage) is
-NOT a wire enum — nothing on the API speaks those words. The real mechanism
-is TWO axes on the already-documented `member/batch` route: `Role` (what the
-AppRole IS on the flow) and `Permission[]` (extra grants layered on top),
-both with flow-type-scoped vocabularies (see params). "No-access" is the
-AppRole simply absent from the member list — no explicit-deny exists.
+The role screen's tiers are FLOW-TYPE-DEPENDENT (browser-captured
+2026-08-12, replacing the earlier 4-tier hypothesis): process = No access /
+Initiate / Manage; board (case) = No access / Read-only / Initiate / Edit /
+Manage; report = No access / View report / View report & form. Each tier
+click writes `member/batch` (No access writes `DELETE
+.../member/{role_id}` — a real removal route). Wire map, read back live:
+process Initiate = `Member+[]` (NOT a no-op trap — it IS this tier), process
+Manage = `DataAdmin+["InitiateItems"]`; case Read-only/Initiate/Edit/Manage
+= `Viewer`/`Initiator`/`Member`/`Admin`, all `Permission:[]` — on a case the
+ROLE string is the whole tier, and `Initiator`/`Viewer` are real case roles
+(the earlier bisection that "rejected Viewer" was wrong).
 "Views" have no entity of their own: a table/kanban/chart view IS a report
 record (`ViewType: Tabular|IconCard|BarColumnChart|...`), permissioned via
 the report `member/batch` route. Per-role Default page + Default navigation
@@ -73,10 +78,13 @@ helpers, and now the `Preference` PUT.
   proven (flow-type, Role) pairs, probe before writing.
 - Admin needs no flags — every extra Permission word 400s on Admin. Wire
   Manage-tier asks as `Role:"Admin", Permission:[]`.
-- The 4-tier → wire mapping is a HYPOTHESIS: before presenting a permission
-  matrix to a user as "the builder's tiers", confirm by setting each tier by
-  hand in the builder role screen once and diffing the member/batch body it
-  writes.
+- The tier → wire mapping is now WIRE-PROVEN (browser round 2026-08-12) —
+  see What above. Submit permission still ALSO requires the acting user to
+  be a member of the assignee AppRole (`AppRole.Members`) — the creator is
+  NOT auto-added, `PUT /app_role` silently ignores a Members write, every
+  member-add route guess 404s: user→role assignment remains UI/account-console
+  only, and its absence is THE reproducible submit-403
+  (KISSFLOW_ERROR_050302).
 - Remember replace semantics: build the full Permission array per grant;
   never POST a delta expecting a merge.
 

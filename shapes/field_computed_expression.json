@@ -1,0 +1,71 @@
+{
+  "kind": "Expression",
+  "description": "Computed field ('Is this a computed field?' toggle + Formula builder): the FOURTH Expression owner — Field. Captured live 2026-08-12 (#48, browser round) by building concatenate(\"BR-\", <Number field>) in the real builder and reading the draft back. Same Node AST family as branch/goto/property Expressions.",
+  "source_capture": "builder-ui-2026-08-12-issue-48",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Text",
+      "Name": "Computed Sample",
+      "Model": "Model_Sample01",
+      "Field::Expression": ["Expression_Sample01"]
+    },
+    "Model_Sample01": {
+      "Id": "Model_Sample01",
+      "Kind": "Model",
+      "FlowType": "Process",
+      "Model::Field": ["Field_Sample01", "Field_Sample02"]
+    },
+    "Field_Sample02": {
+      "Id": "Field_Sample02",
+      "Kind": "Field",
+      "Type": "Number",
+      "Name": "Source Number",
+      "Model": "Model_Sample01"
+    },
+    "Expression_Sample01": {
+      "Id": "Expression_Sample01",
+      "Kind": "Expression",
+      "Field": "Field_Sample01",
+      "ExpressionStr": "concatenate(\"BR-\", Field_Sample02)",
+      "Expression::Node": ["Node_Sample01"]
+    },
+    "Node_Sample01": {
+      "Id": "Node_Sample01",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "concatenate",
+      "DataType": "String",
+      "Category": "String",
+      "FieldRefCount": 1,
+      "Expression": "Expression_Sample01",
+      "Node::Node": ["Node_Sample02", "Node_Sample03"]
+    },
+    "Node_Sample02": {
+      "Id": "Node_Sample02",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "BR-",
+      "DataType": "String",
+      "Node": "Node_Sample01"
+    },
+    "Node_Sample03": {
+      "Id": "Node_Sample03",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "Field_Sample02",
+      "DataType": "Number",
+      "Node": "Node_Sample01"
+    }
+  },
+  "notes": [
+    "This REPLACES the 'Kissflow has no formula or computed field type' belief: the field Settings tab has an 'Is this a computed field?' toggle opening a full Formula builder. Field events remain a separate, still-valid mechanism for script-based computation.",
+    "Formula function catalog seen in the builder: rand, randBetween, dateDiff, calendarDays, currency, number, if, concatenate, date, dateTime, dateFromText, dateTimeFromText, now, initiatedat, today, isBlank, false, true, not.",
+    "ExpressionStr references fields BY FIELD ID (concatenate(\"BR-\", Field_09d27548d1) on the wire) — same readable-mirror-only rule as every other Expression; the Node AST is what matters.",
+    "The root Function node here has NO Syntax key (prefix call) — unlike the Infix '=' comparison roots; DataType/Category derive from the function's own result/operands.",
+    "The computed toggle DISABLES DefaultValue (mutually exclusive in the UI). The one-time '=IF(...) in DefaultValue' sighting was probably this feature read back wrong, or a legacy serialization — the current builder writes Field::Expression, not a DefaultValue formula.",
+    "RUNTIME: the formula did NOT evaluate on an admin data-plane fill (value stayed null on fresh and existing items) — evaluation appears to be client-side in the form UI or at submit; API-driven runtime proof still open (submit was blocked by the user-not-in-role 403).",
+    "Builder marks computed fields with a green fx badge; Save in the formula modal stays disabled until every field ref resolves (insert refs via the picker, typed names do not resolve)."
+  ]
+}

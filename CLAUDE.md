@@ -317,6 +317,7 @@ something different:
 | `ProcessDef` | a branch condition (which path an item takes) |
 | `Activity`   | a `GotoTask` loop condition (see Workflow)     |
 | `Property`   | a value-generator prefix (e.g. an auto-number scheme) |
+| `Field`      | a computed-field formula (#48, 2026-08-12 — see Field events) |
 
 Always branch on which key is present before treating an `Expression` as
 routing logic — treating a `Property`-owned Expression as a branch condition
@@ -556,9 +557,18 @@ child Field { ..., Model:<table id> }                                          #
 
 ## Field events
 
-Kissflow has **no formula or computed field type.** Any computed value is done
-with a field event: a script the client SDK runs in response to a field
-change.
+⚠️ A CORRECTED BELIEF (2026-08-12, #48 browser capture): this section used to
+open "Kissflow has no formula or computed field type" — WRONG on the current
+platform. The field Settings tab carries an "Is this a computed field?"
+toggle opening a full Formula builder; saving writes a FOURTH Expression
+owner, the Field itself (`Field::Expression` → Expression{Field, ExpressionStr,
+Expression::Node} — same Node AST family as branch conditions, field refs BY
+ID, toggle disables DefaultValue). See docs/capabilities/config.computed.md +
+shapes/field_computed_expression.json. Runtime caveat: the formula did NOT
+evaluate on an admin data-plane fill — evaluation is client/submit-side,
+runtime proof still open. Field events below remain a real, separate
+mechanism for script-based computation: a script the client SDK runs in
+response to a field change.
 
 ```
 Field { ..., "Field::Event": ["Event_Sample01"] }        # back-reference, bidirectional
@@ -922,6 +932,18 @@ DELETE /flow/2/{acct}/application/{id}                          -> 400 KISSFLOW_
 `POST /metadata/2/{acct}/application` and `POST /flow/2/{acct}/app` both 404
 (wrong door). Same archive-then-delete rule as a process. Duplicate `Name` on
 create 400s `KISSFLOW_ERROR_04204 FlowNameAlreadyExists`.
+
+**An API-created application is born `Draft` and its Play/runtime view shows
+"This app has not been published yet" until the APP-LEVEL publish fires**
+(captured live 2026-08-12, browser round): `POST
+/metadata/2/{acct}/application/{app}/publish` → 200 with a `Runtime_{app}`
+blob. This is a separate step from per-flow and per-page publishes — build
+order gains it as the app-shell finisher. ⚠️ Do NOT confuse it with the
+builder's **Deploy** button, which is a CROSS-ENVIRONMENT promotion (dev →
+UAT on this tenant, with Build/Version numbers) — never click Deploy on the
+dev tenant. Builder URL pattern: `https://{domain}/appbuilder/{app_id}`
+(Play/Studio; Studio sub-routes `/role/list`, `/process/{id}`, `/case/{id}`,
+`/page/{id}`).
 
 **No AppRole auto-provisions on a fresh application** — this used to be
 inferred from a `PageAccess` list seen in one archive response;

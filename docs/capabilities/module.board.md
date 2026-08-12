@@ -55,12 +55,16 @@ Scaffolded nodes use FLAT ids (`Summary`, `Column001`); anything added later
 uses the normal `Field_`/`Column_` prefix convention — both conventions
 coexist in one graph. No `ProcessDef` exists in the draft; flow-detail instead
 carries a built-in `Priority` enum (Critical/High/Medium/Low, Low default), a
-built-in category set hinted by `_disabled_category: ["Done","ReOpened"]`, and
-a satellite `_default_workflow_id` object that 403s on every draft route even
-for the creating API key (unresolved — treat board workflow as uncaptured, not
-absent). A fresh case has **no style chain at all**, unlike process/form where
-an incomplete chain is a render-breaker; whether the builder needs one on a
-case is unverified.
+built-in category set, and a satellite `_default_workflow_id` object that
+403s on every draft route even for the creating API key. **RESOLVED (browser
+round 2026-08-12): the board Workflow tab is a STATUS-LANE model, not a
+ProcessDef** — fixed categories Not started / In progress / Done (optional,
+toggle-enabled, "for review before closed") / Closed, each holding statuses
+(defaults New / In progress / Closed) with "+ Add status" and "+ Connect a
+flow to a status" (statuses can trigger flows). `_disabled_category:
+["Done","ReOpened"]` matches the optional categories. Also RESOLVED: a fresh
+case with **no style chain renders fine** in the builder — the style-chain
+render-breaker rule is process/form-only, it does not apply to a case.
 
 ## Where
 
@@ -78,13 +82,12 @@ system TabularReport appears on a case exactly as on a process.
   form is free (pre-scaffolded), there is no workflow build order at all.
   Reach for a process when the ask is a multi-step routed approval with
   per-step assignees and gates; a case has no reachable equivalent surface.
-- Member surface: same `member/batch` route shape, but the Role enum differs —
-  `Admin` and `Member` exist (`DataAdmin`/`User`/`Participant` etc. rejected).
-  Every guessed `Permission` literal was rejected (UnsupportedPermissionError);
-  only `Permission: []` returned 200, which per the process precedent is
-  presumptively a silent no-op grant. The valid Permission vocabulary for a
-  case is UNCAPTURED — read it off the builder UI's own network tab before
-  granting anything that must actually work.
+- Member surface (RESOLVED, browser round 2026-08-12 — replacing the earlier
+  "Permission vocabulary UNCAPTURED" flag): on a case the ROLE string is the
+  whole grant and `Permission` stays `[]`. The builder's 5 tiers write:
+  Read-only = `Viewer`, Initiate = `Initiator`, Edit = `Member`, Manage =
+  `Admin` (all `Permission:[]`), No access = `DELETE .../member/{role_id}`.
+  `Initiator` and `Viewer` are real case roles the earlier bisection missed.
 - Application archive CASCADES: archiving the app archived every child flow,
   page, and system report in one call; delete then succeeds. Verify via the
   inventory route, never the delete response.
