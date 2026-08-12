@@ -212,6 +212,18 @@ def test_create_flow_process_starts_draft() -> None:
     assert rep.status == "Draft" and rep.born_live is False and rep.flow_id
 
 
+def test_create_flow_process_seeds_the_processdef_scaffold() -> None:
+    # Regression for the Mode-A bug (2026-08-12): a bare process draft 500s on the next write
+    # until it carries a ProcessDef; create_flow_any(process) must scaffold it, not leave the
+    # draft bare like create_flow does for a form.
+    c = CreateFlowClient()
+    rep = create_flow_any(c, "process", "Expense Approval")
+    assert isinstance(rep, FlowCreateReport)
+    assert c.puts >= 1, "process create must PUT a scaffolded draft, not just POST a bare flow"
+    kinds = {n.get("Kind") for n in c.draft.values() if isinstance(n, dict)}
+    assert "ProcessDef" in kinds, "scaffolded draft must contain a ProcessDef"
+
+
 def test_create_flow_list_is_born_live() -> None:
     c = CreateFlowClient()
     rep = create_flow_any(c, "list", "Priority")

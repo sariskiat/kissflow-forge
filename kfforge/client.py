@@ -2446,11 +2446,37 @@ def create_flow_any(
     `create_dataset`, `create_case`).
     """
     extra = extra or {}
-    if kind in ("process", "form"):
+    if kind == "form":
         fid = client.create_flow(kind, name)  # type: ignore[arg-type]
         if isinstance(fid, Err):
             return fid
         return FlowCreateReport(kind=kind, flow_id=fid, name=name, status="Draft", born_live=False)
+
+    if kind == "process":
+        # A bare process draft is rejected 500 on the very next write until it carries a
+        # ProcessDef (create_process's own docstring / FINDINGS.md). The unified create must
+        # seed that scaffold too, or forge_apply_fields immediately 500s (bug found by the
+        # Mode-A proof run 2026-08-12). Default single step; callers rebuild the real workflow
+        # with build_workflow afterward. On any post-shell failure, abandon the junk flow.
+        fid = client.create_flow("process", name)
+        if isinstance(fid, Err):
+            return fid
+        draft = client.get_draft("process", fid)
+        if isinstance(draft, Err):
+            client.delete_flow("process", fid)
+            return draft
+        try:
+            scaffolded = ensure_process_def(draft, extra.get("steps") or ("Review",))
+        except ValueError as e:
+            client.delete_flow("process", fid)
+            return Err("verify", str(e))
+        written = client.put_draft("process", fid, scaffolded,
+                                   expect_version=draft.get(_META_VERSION))
+        if isinstance(written, Err):
+            client.delete_flow("process", fid)
+            return written
+        return FlowCreateReport(kind="process", flow_id=fid, name=name, status="Draft",
+                                born_live=False)
 
     if kind == "list":
         got = client.create_list(name)
