@@ -15,6 +15,7 @@ from kfforge.client import (
     RoleUsersReport,
     TierReport,
     apply_add_role_users,
+    apply_dataset_records,
     apply_grant_tier,
     create_flow_any,
     publish_application_verified,
@@ -277,3 +278,59 @@ def test_publish_app_propagates_publish_failure() -> None:
     c = Failing({"Root": "M1", "_meta_version": "v9", "M1": {"Id": "M1"}})
     got = publish_application_verified(c, "App1")
     assert isinstance(got, Err)
+
+
+# ---- forge_dataset_records (#5) ----------------------------------------------------------------
+
+
+class DatasetRecordClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__(_bare_draft())
+        self.records: list[dict[str, Any]] = []
+        self.dup_names: set[str] = set()
+
+    def create_dataset_record(self, flow_id, record):  # type: ignore[override]
+        name = record.get("Name")
+        if name in self.dup_names:
+            return Err("http", "DuplicateKeyException: Name already exists", status=409)
+        self.dup_names.add(name)
+        self.records.append(record)
+        return {"_id": f"Rec_{len(self.records)}", **record}
+
+    def list_dataset_records(self, flow_id):  # type: ignore[override]
+        return {"Columns": ["Name"], "Data": list(self.records)}
+
+
+def test_dataset_records_create_lands_and_counts() -> None:
+    c = DatasetRecordClient()
+    rep = apply_dataset_records(c, "F1", "create", record={"Name": "Acme Corp"})
+    assert rep["isError"] is False
+    assert rep["created"] == 1 and rep["listed"] == 0 and rep["failed"] == 0
+
+
+def test_dataset_records_create_requires_a_record() -> None:
+    c = DatasetRecordClient()
+    got = apply_dataset_records(c, "F1", "create")
+    assert isinstance(got, Err) and got.kind == "verify"
+
+
+def test_dataset_records_duplicate_name_is_a_clean_err() -> None:
+    c = DatasetRecordClient()
+    apply_dataset_records(c, "F1", "create", record={"Name": "Acme Corp"})
+    got = apply_dataset_records(c, "F1", "create", record={"Name": "Acme Corp"})
+    assert isinstance(got, Err)
+    assert "Acme Corp" in got.message and "duplicate" in got.message.lower()
+
+
+def test_dataset_records_list_returns_columns_and_rows() -> None:
+    c = DatasetRecordClient()
+    apply_dataset_records(c, "F1", "create", record={"Name": "Acme Corp"})
+    rep = apply_dataset_records(c, "F1", "list")
+    assert rep["isError"] is False
+    assert rep["listed"] == 1 and rep["columns"] == ["Name"]
+
+
+def test_dataset_records_unknown_op_rejected() -> None:
+    c = DatasetRecordClient()
+    got = apply_dataset_records(c, "F1", "update", record={"Name": "x"})
+    assert isinstance(got, Err) and got.kind == "verify"

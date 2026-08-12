@@ -2485,3 +2485,43 @@ def publish_application_verified(client: KfClient, app_id: str) -> dict[str, Any
             "as proof either way"
         ),
     }
+
+
+def apply_dataset_records(
+    client: KfClient,
+    flow_id: str,
+    op: str,
+    record: dict[str, Any] | None = None,
+) -> dict[str, Any] | Err:
+    """The THIRD data-plane route family: dataform records (#50). `op="create"` writes ONE record
+    (`record` required, must carry the synthetic system `Name` key — a dataform's per-record
+    unique key; a duplicate 409s DuplicateKeyException, surfaced here as a CLEAN Err naming the
+    duplicate `Name` rather than the raw HTTP body). `op="list"` reads back `{Columns, Data}`.
+
+    Output-invariant audit: `created`/`listed`/`failed` are integer counts, never a swallowed
+    exception — a `create` that 409s lands in `failed` with the duplicate name named in `error`,
+    never silently dropped.
+    """
+    if op == "create":
+        if not record:
+            return Err("verify", "apply_dataset_records(op='create') requires a non-empty record")
+        got = client.create_dataset_record(flow_id, record)
+        if isinstance(got, Err):
+            if got.status == 409:
+                name = record.get("Name", "<unknown>")
+                return Err("verify", f"dataset record with Name={name!r} already exists "
+                                     f"(duplicate key) — {got.message}", status=409)
+            return got
+        return {"flow_id": flow_id, "op": op, "created": 1, "listed": 0, "failed": 0,
+               "record": got, "isError": False}
+
+    if op == "list":
+        got = client.list_dataset_records(flow_id)
+        if isinstance(got, Err):
+            return got
+        rows = got.get("Data", []) if isinstance(got, dict) else []
+        return {"flow_id": flow_id, "op": op, "created": 0, "listed": len(rows), "failed": 0,
+               "columns": got.get("Columns", []) if isinstance(got, dict) else [],
+               "records": rows, "isError": False}
+
+    return Err("verify", f"apply_dataset_records: unknown op {op!r} — valid: create, list")

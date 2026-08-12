@@ -63,6 +63,7 @@ from .client import (
     KfConfig,
     apply_add_role_users,
     apply_branch_conditions,
+    apply_dataset_records,
     apply_field_events,
     apply_field_validation,
     apply_fields,
@@ -1009,6 +1010,25 @@ def forge_publish_app(app_id: str) -> dict[str, Any]:
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(publish_application_verified(c, app_id))
+
+
+@mcp.tool()
+def forge_dataset_records(
+    flow_id: str,
+    op: str,
+    record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """LIVE (dev only, KF_APP): the THIRD data-plane route family — dataform records (#50), a
+    flat `POST /dataset/2/{acct}/{flow_id}` + `GET .../list`, distinct from the process item
+    data plane and the word-list items route. `op="create"` writes ONE `record` (a dict whose
+    `Name` key is the dataform's synthetic unique key — a duplicate 409s cleanly, named in the
+    error, never a raw HTTP body). `op="list"` reads back `{Columns, Data}`. No membership gate
+    on a dataform (CLAUDE.md-adjacent finding, #50) — record create/list works with zero members.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_dataset_records(c, flow_id, op, record))
 
 
 # =====================================================================================
