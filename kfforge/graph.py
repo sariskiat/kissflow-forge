@@ -975,6 +975,13 @@ def build_workflow(
     roles = roles or {}
     step_meta = step_meta or {}
 
+    # Names of the activities about to die, BEFORE deletion — a SequenceNumber's Step Property
+    # holds a SCALAR activity id the list-only sweep never touches; left dangling it makes
+    # publish 500 MetadataError deterministically with zero diagnostics (#18, isolated live
+    # 2026-08-12 by subsystem bisect). Repointed by NAME after the rebuild, below.
+    old_activity_names = {k: v.get("Name") for k, v in new.items()
+                          if isinstance(v, dict) and v.get("Kind") == "Activity"}
+
     for nid in [k for k, v in new.items() if isinstance(v, dict)
                 and v.get("Kind") in ("Activity", "ProcessDef", "Resource", "Permission")]:
         del new[nid]
@@ -1038,6 +1045,20 @@ def build_workflow(
                                   "NodeType": "SendBackToInitiator", "BaseMetadata": chain[0]}
     model["Model::ProcessDef"] = [root_pd]
     model["RootProcessDef"] = root_pd
+
+    # Repoint every Step-stamp Property left dangling by the rebuild (#18): same-name activity
+    # when the rebuilt workflow still has one, else the new StartEvent (a sequence number stamps
+    # at intake by default) — never a dangling scalar, which is the exact publish-500 condition.
+    new_by_name = {v.get("Name"): k for k, v in new.items()
+                   if isinstance(v, dict) and v.get("Kind") == "Activity" and v.get("Name")}
+    for node in new.values():
+        if not (isinstance(node, dict) and node.get("Kind") == "Property"
+                and node.get("Name") == "Step"):
+            continue
+        tgt = node.get("Value")
+        if isinstance(tgt, str) and tgt not in new:
+            old_name = old_activity_names.get(tgt)
+            node["Value"] = new_by_name.get(old_name) or chain[0]
     return new
 
 

@@ -192,6 +192,22 @@ def doctor(
                     problems.append(f"{nid}.{key} -> missing {ref}")
     checked["dangling_refs"] = dangling_checked
 
+    # 3b. a Step-stamp Property pointing at a deleted Activity — a SCALAR reference the list
+    # sweep above never visits. THE publish-500 condition (#18, isolated live 2026-08-12 by
+    # subsystem bisect on a flow that was doctor-clean while 500ing deterministically): PUTs
+    # fine, publish dies MetadataError with zero diagnostic content.
+    step_stamps = 0
+    for nid, node in N.items():
+        if node.get("Kind") == "Property" and node.get("Name") == "Step":
+            step_stamps += 1
+            tgt = node.get("Value")
+            if isinstance(tgt, str) and (draft.get(tgt) or {}).get("Kind") != "Activity":
+                problems.append(
+                    f"sequence Step stamp {nid} -> missing activity {tgt} (publish will 500 "
+                    f"MetadataError — repoint it or rebuild via build_workflow, which now "
+                    f"repoints by name)")
+    checked["step_stamps"] = step_stamps
+
     # 4. a section nobody can ever edit, and Required fields nobody can ever fill
     susp = {v.get("Name") for v in N.values() if v.get("Kind") == "Activity" and v.get("IsSuspended")}
     secof: dict[str, str] = {}

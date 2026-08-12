@@ -265,6 +265,19 @@ Row        { Id:"Row_Sample01", Kind:"Row", Button:<root model id> }
   live Activity list before blaming the form. The same rebuild also **deletes
   every `Permission` node** — any step-visibility matrix you had configured is
   gone and must be rebuilt after any workflow rebuild, every time.
+  **A rebuild also strands any SequenceNumber `Step` stamp — THE deterministic
+  publish-500 condition (#18, isolated live 2026-08-12).** The stamp is
+  `Property{Name:"Step", Value:<activity id>}`, a SCALAR reference the
+  list-only dangling sweep never touches; once its activity is deleted,
+  `PUT` still 200s but every publish dies `500 MetadataError` with zero
+  diagnostic content ("An unexpected error has occurred"), doctor-clean at
+  the time. Isolated by a subsystem-deletion bisect (Permissions, Events,
+  Expressions, GotoTasks all ruled out; removing the SequenceNumber tree
+  flipped publish to 200) and confirmed by a one-key surgical fix:
+  repointing that single `Value` at a live activity made the same graph
+  publish. `build_workflow` now repoints stamps by activity NAME (falling
+  back to the new StartEvent), and `verify.doctor` flags any dangling Step
+  stamp as its own rule.
 - **A `Parallel`'s branches are UNCONDITIONAL by default.** `build_workflow`'s
   `parallel` argument alone produces an and-fork — every branch always runs.
   Making a branch conditional is a separate, later step; see Conditional

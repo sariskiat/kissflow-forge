@@ -241,3 +241,19 @@ def test_no_role_claims_leaves_the_doctor_clean(clean_draft: Draft) -> None:
     report = doctor(clean_draft)
     assert report.ok() is True
     assert report.checked["role_scoped_visibility_claims"] == 0
+
+
+def test_doctor_flags_dangling_sequence_step_stamp() -> None:
+    """#18: a Step Property whose Value names a nonexistent Activity is THE deterministic
+    publish-500 condition; doctor was blind to it (scalar ref, not a list ref)."""
+    from kfforge.verify import doctor
+
+    draft = {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"},
+        "Property_Step1": {"Id": "Property_Step1", "Kind": "Property", "Name": "Step",
+                           "ValueType": "Value", "Value": "Activity_gone"},
+    }
+    rep = doctor(draft)
+    assert any("Activity_gone" in p and "500" in p for p in rep.problems)
+    assert rep.checked["step_stamps"] == 1

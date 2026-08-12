@@ -1120,3 +1120,36 @@ def test_set_section_style_rejects_unknown_dict_shape() -> None:
 
     with pytest.raises(ValueError, match="ref"):
         set_section_style(_three_section_form(), {"S1": {"Section.Bg.Color": {"nope": "x"}}})
+
+
+def test_build_workflow_repoints_dangling_sequence_step_stamp() -> None:
+    """#18: a SequenceNumber's Step Property holds a SCALAR activity id, which the list-only
+    dangling sweep never touches — after a workflow rebuild that shifts the stamped step's
+    position it pointed at a deleted Activity, and publish 500'd MetadataError deterministically
+    (isolated live 2026-08-12 by subsystem bisect + a one-key surgical fix). build_workflow must
+    repoint the stamp at the rebuilt activity of the SAME NAME (StartEvent when the name is
+    gone), never leave the scalar dangling."""
+    from kfforge.graph import add_sequence_number, apply_changes, build_workflow, regroup_into_sections
+    from kfforge.types import FieldSpec, FieldType
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"}}
+    d = apply_changes(bare, [FieldSpec(name="A", type=FieldType.TEXT)])
+    d = regroup_into_sections(d, [("Intake", ["A"])])
+    d = build_workflow(d, [("Review", None)])
+    d = add_sequence_number(d, "Case ID", "Intake", "CASE-", "0001", "Review")
+    # rebuild with Review at a NEW position -> new hashed id -> the old stamp target is deleted
+    d = build_workflow(d, [("Triage", None), ("Review", None)])
+
+    step = next(v for v in d.values()
+                if isinstance(v, dict) and v.get("Kind") == "Property" and v.get("Name") == "Step")
+    target = d.get(step.get("Value"))
+    assert target is not None, "Step stamp points at a deleted Activity — the publish-500 shape"
+    assert target.get("Name") == "Review", "same-name repoint keeps the intended stamp step"
+
+    # name gone entirely -> fall back to the StartEvent, still never dangling
+    d2 = build_workflow(d, [("Totally Different", None)])
+    step2 = next(v for v in d2.values()
+                 if isinstance(v, dict) and v.get("Kind") == "Property" and v.get("Name") == "Step")
+    target2 = d2.get(step2.get("Value"))
+    assert target2 is not None
+    assert target2.get("NodeType") == "StartEvent"
