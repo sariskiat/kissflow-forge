@@ -251,3 +251,12 @@ reply while zero graph keys changed).
   step-less process) — answer in-thread.
 - **Copilot is the coverage/capture factory; the deterministic `forge_*` tools are correctness.**
   For anything that must be RIGHT, use the direct tools and verify by read-back + a real item walk.
+
+## Gotcha — never name a banner Section the same as its table
+
+A table's host is a `Column{Type:"Model"}`; a banner Section is a `Column{Type:"Section"}`.
+If both carry the SAME Name (e.g. both "FDE Log"), an `owners` key in `forge_set_visibility`
+used to resolve to the host (empty) and hard-reject the banner's field as "outside every
+matrix section". The engine now resolves a section-owner name to the Section node first, but
+DON'T rely on it — give the banner Section a distinct name (e.g. "FDE Log Notes") from the
+table ("FDE Log"). Proven live building the AI Clinic Case form 2026-08-12.
