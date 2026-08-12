@@ -1,0 +1,42 @@
+{
+  "kind": "Criteria",
+  "description": "Form-level conditional visibility — the THIRD Criteria owner family (beyond page Container Criteria and FieldValidation Criteria): ColumnVisibility. Target column carries a static IsHidden:true plus a ColumnVisibility::Criteria whose Condition, when true, reveals the field. Captured live off a copilot build 2026-08-12 (#48, cell 3). Graph-verified; RUNTIME semantics unverified (no live item walk yet).",
+  "source_capture": "live-probe-2026-08-12-issue-48",
+  "template": {
+    "Column_Sample01": {
+      "Id": "Column_Sample01",
+      "Kind": "Column",
+      "Type": "Field",
+      "IsHidden": true,
+      "ColumnVisibility::Criteria": ["Criteria_Sample01"]
+    },
+    "Criteria_Sample01": {
+      "Id": "Criteria_Sample01",
+      "Kind": "Criteria",
+      "IsOR": false,
+      "ColumnVisibility": "Column_Sample01",
+      "Criteria::Condition": ["Condition_Sample01"]
+    },
+    "Condition_Sample01": {
+      "Id": "Condition_Sample01",
+      "Kind": "Condition",
+      "Operator": "EQUAL_TO",
+      "HasArguments": false,
+      "LHSOwnField": "Column_Sample02",
+      "RHSValue": "true"
+    },
+    "Column_Sample02": {
+      "Id": "Column_Sample02",
+      "Kind": "Column",
+      "Type": "Field",
+      "LHSOwnField::Condition": ["Condition_Sample01"]
+    }
+  },
+  "notes": [
+    "Three differences vs the two known Criteria families: (1) HasArguments:false (every FieldValidation Condition captured has it true); (2) the trigger reference is LHSOwnField pointing at the trigger's COLUMN id — not a Field id, not a page LHSVariable dot-path; (3) IsOR sits on the Criteria — an AND/OR combination lever a single-condition capture cannot fully characterize.",
+    "Mechanism as captured: target column hidden by default (static IsHidden:true); the Criteria's Condition true => field revealed. Runtime toggle behavior UNVERIFIED — the graph diff proves the shape, not the behavior (THE RULE).",
+    "Back-ref is bidirectional: the trigger column carries LHSOwnField::Condition listing the Condition node.",
+    "A sibling fourth family for conditional REQUIRED (ColumnRequired or similar) plausibly exists — a conditional-required ask went 0/2 in the same session (recorded inconsistent, not impossible); visibility and required are sibling concepts everywhere else in this graph.",
+    "RHSValue for a Boolean trigger is the STRING \"true\" — same string-typed wire convention as Expression Static nodes."
+  ]
+}

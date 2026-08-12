@@ -1,0 +1,56 @@
+{
+  "kind": "Criteria",
+  "description": "Field validation rules (the Validation config tab): Field -> FieldValidation-owned Criteria -> Condition{Operator, RHSValue, ErrorMessage}. Extends the engine's F7 shape with three live corrections captured 2026-08-12 (#48, cell 1): the ErrorMessage key, multi-Criteria-per-field, and new operator strings incl. the relative-date literal \"Today\".",
+  "source_capture": "live-probe-2026-08-12-issue-48",
+  "template": {
+    "Field_Sample01": {
+      "Id": "Field_Sample01",
+      "Kind": "Field",
+      "Type": "Text",
+      "Model": "Model_Sample01",
+      "FieldValidation::Criteria": ["Criteria_Sample01", "Criteria_Sample02"]
+    },
+    "Model_Sample01": {
+      "Id": "Model_Sample01",
+      "Kind": "Model",
+      "FlowType": "Process",
+      "Model::Field": ["Field_Sample01"]
+    },
+    "Criteria_Sample01": {
+      "Id": "Criteria_Sample01",
+      "Kind": "Criteria",
+      "FieldValidation": "Field_Sample01",
+      "Criteria::Condition": ["Condition_Sample01"]
+    },
+    "Condition_Sample01": {
+      "Id": "Condition_Sample01",
+      "Kind": "Condition",
+      "Operator": "MAX_LENGTH",
+      "RHSValue": "10",
+      "HasArguments": true,
+      "ErrorMessage": "Maximum length is 10 characters"
+    },
+    "Criteria_Sample02": {
+      "Id": "Criteria_Sample02",
+      "Kind": "Criteria",
+      "FieldValidation": "Field_Sample01",
+      "Criteria::Condition": ["Condition_Sample02"]
+    },
+    "Condition_Sample02": {
+      "Id": "Condition_Sample02",
+      "Kind": "Condition",
+      "Operator": "CONTAINS",
+      "RHSValue": "test",
+      "HasArguments": true,
+      "ErrorMessage": "Must contain test"
+    }
+  },
+  "notes": [
+    "ErrorMessage is a REAL per-Condition key the platform writes (human-readable failure text) — the engine's own graph.add_field_validation has no parameter for it: a capability gap to close in the engine.",
+    "A field can own MULTIPLE Criteria nodes (one per rule) — the platform's own builder does NOT append a second Condition into the first Criteria. This falsifies the engine docstring's 'one Criteria per field' as a description of platform behavior; the engine's additive reuse still works, it is just not what the platform itself does.",
+    "Wire-proven Operator strings: MAX_LENGTH, CONTAINS (already known) + GREATER_THAN (Number, RHSValue \"0\") + AFTER (Date, RHSValue \"Today\"). \"Today\" is a platform relative-date keyword — the SAME literal also works as a Field DefaultValue; read it, never guess its casing.",
+    "'Must not be empty' does NOT become a Condition — the platform flips the field's own Required:true instead. Route not-empty asks to Required.",
+    "Q&A-claimed but UNVERIFIED operator families (reply-only, no wire proof): MIN_LENGTH, EQUAL_TO/NOT_EQUAL_TO, NOT_CONTAINS, STARTS_WITH/ENDS_WITH, regex pattern, LESS_THAN, BETWEEN, BEFORE, Is Today/Future/Past. Each needs a live write before use.",
+    "Copilot structural builds AUTO-PUBLISH the draft (PublishedAt changes) without being asked — snapshot accordingly."
+  ]
+}
