@@ -462,7 +462,7 @@ def test_linear_spec_needs_no_branch_or_loop_or_list() -> None:
     summary = plan.summary()
     assert summary.get("add_goto_gate", 0) == 0
     assert summary.get("create_list", 0) == 0
-    assert sum(summary.values()) == len(plan.ops) == 16
+    assert sum(summary.values()) == len(plan.ops) == 17
     assert set(summary) <= set(OP_ORDER)
 
 
@@ -1769,13 +1769,14 @@ def test_op_counts_match_the_fixture_exactly() -> None:
         "set_styles": 5,         # one per stage
         "publish": 1,
         "doctor": 1,
+        "compare": 1,        # fidelity vs the input spec (#16), right after doctor
         "create_page": 2,        # Manager Dashboard, My Jobs — deduplicated across 2 roles
         "build_page": 2,
         "set_navigation": 3,     # (Service Manager, Manager Dashboard), (Technician, My Jobs),
                                  # (Front Desk, Manager Dashboard)
         "simulate_case": 3,
     }
-    assert len(plan.ops) == 38
+    assert len(plan.ops) == 39
 
 
 def test_summary_reconciles_with_ops() -> None:

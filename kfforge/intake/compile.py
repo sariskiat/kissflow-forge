@@ -58,7 +58,7 @@ from .schema import (
 OP_ORDER: tuple[str, ...] = (
     "create_process", "member_batch", "create_list", "apply_fields", "add_table",
     "build_workflow", "set_assignees", "add_goto_gate", "set_branch_conditions",
-    "set_visibility", "set_events", "set_styles", "publish", "doctor", "create_page",
+    "set_visibility", "set_events", "set_styles", "publish", "doctor", "compare", "create_page",
     "build_page", "set_navigation", "simulate_case",
 )
 
@@ -1244,6 +1244,17 @@ def _op_doctor(spec: AppSpec) -> tuple[Op, ...]:
                 why="read-only health check — THE RULE: a 200 and a clean publish prove nothing"),)
 
 
+def _op_compare(spec: AppSpec) -> tuple[Op, ...]:
+    """The fidelity step (#16), AFTER doctor: doctor checks references, compare checks that the
+    build matches the INPUT (field types, ReferredList wiring, table-host order, style chains,
+    event triggers, gateway conditions, loop gates). Executed with forge_compare_to_spec, which
+    re-reads the live draft — never the plan's own echo."""
+    return (Op(kind="compare", args={},
+               why="fidelity check against the input spec (forge_compare_to_spec) — doctor said "
+                   "ok on a build with wrong field types and a missing event; this is the step "
+                   "that catches those (#16)"),)
+
+
 def _unique_pages(spec: AppSpec) -> tuple[PageIntent, ...]:
     """Every distinct page NAME across all persona views (dimension 10), in first-occurrence
     order. The same page can appear under more than one role — dedupe here means `create_page`
@@ -1380,6 +1391,7 @@ _OP_BUILDERS: dict[str, Callable[[AppSpec], tuple[Op, ...]]] = {
     "set_styles": _op_set_styles,
     "publish": _op_publish,
     "doctor": _op_doctor,
+    "compare": _op_compare,
     "create_page": _op_create_page,
     "build_page": _op_build_page,
     "set_navigation": _op_set_navigation,

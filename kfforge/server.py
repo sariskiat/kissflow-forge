@@ -95,6 +95,7 @@ from .design import (
 from .graph import progressive_matrix, field_override_matrix
 from .intake.compile import compile_spec
 from .intake.questions import QUESTIONS, next_questions
+from .compare import compare_built_to_spec
 from .intake.schema import DIMENSION_NAMES, AppSpec, blank_spec
 from .intake.serde import spec_from_dict, spec_to_dict, to_wire
 from .pages_live import (
@@ -428,6 +429,34 @@ def forge_add_table(
     col_pairs = [(c[0], c[1], c[2] if len(c) > 2 else None) for c in columns]
     return _result(apply_table(c, kind, flow_id, name, col_pairs, max_rows=max_rows,  # type: ignore[arg-type]
                                allow_import=allow_import, publish=publish, after_section=after_section))
+
+
+@mcp.tool()
+def forge_compare_to_spec(
+    flow_id: str,
+    spec: dict[str, Any],
+    kind: str = "process",
+) -> dict[str, Any]:
+    """LIVE read-only (dev only, KF_APP): does the BUILT flow match what the INPUT asked for?
+    (#16 — fidelity, not referential integrity: forge_doctor said `ok` on a build with wrong
+    field types, a missing event, spurious Permissions and a misordered table host). Fetches the
+    live draft (THE RULE: judge the read-back, never the plan) and diffs it against the spec:
+    field inventory by (name, type, ReferredList), root Model::Row order INCLUDING table hosts,
+    Permissions on no-Permission columns, style-chain completeness, event (source, trigger)
+    inventory, stages/gateway-conditions/loop-gates. Wire this as its own build-order step after
+    doctor — every mismatch is named, known-benign exclusions are declared in `ignored`.
+    """
+    c = _client()
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    try:
+        parsed = spec_from_dict(spec)
+    except ValueError as e:
+        return {"isError": True, "error": f"spec did not parse: {e}"}
+    draft = c.get_draft(kind, flow_id)  # type: ignore[arg-type]
+    if isinstance(draft, Err):
+        return draft.as_tool_result()
+    return compare_built_to_spec(draft, parsed).as_tool_result()
 
 
 @mcp.tool()
