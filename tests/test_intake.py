@@ -24,6 +24,7 @@ from kfforge.intake.schema import (
     ComputedReq,
     DataModel,
     DecisionPoint,
+    DesignNode,
     EventTrigger,
     FieldReq,
     ListSpec,
@@ -1560,6 +1561,95 @@ def test_build_page_no_behavior_carries_empty_popups_and_on_click() -> None:
                if op.kind == "build_page" and op.args["name"] == "My Jobs")
     assert jobs.args["popups"] == ()
     assert jobs.args["on_click"] == ()
+
+
+# ---- page.design.md: a page's beautiful-page DESIGN tree carried through compile ---------------
+
+def _rich_design() -> DesignNode:
+    """A small but real beautiful-page tree: page shell -> hero (styled) + card, each with a widget
+    inside. Depth and styling mirror the recipes in page.design.md."""
+    return DesignNode(
+        kind="container", name="page shell",
+        style=(("Container.Background", "#FCFAF2"), ("Container.Flex.Direction", "column"),
+               ("Container.Row.Gap", "16px")),
+        children=(
+            DesignNode(
+                kind="container", name="hero",
+                style=(("Container.Background", "#2E6B3B"), ("Container.Padding.Top", "32px")),
+                children=(
+                    DesignNode(kind="widget", name="hero title",
+                               style=(("Label.Color", "token:Color.White"),),
+                               widget=WidgetIntent("general/label",
+                                                   config=(("title", "Submit your case"),))),
+                )),
+            DesignNode(
+                kind="container", name="card",
+                style=(("Container.Background", "#FFFFFF"),),
+                children=(
+                    DesignNode(kind="widget", name="form",
+                               widget=WidgetIntent("view/form",
+                                                   config=(("flow_type", "process"),
+                                                           ("flow_id", "RepairJobs")))),
+                )),
+        ),
+    )
+
+
+def _spec_with_design(design: DesignNode) -> AppSpec:
+    base = _full_spec()
+    v0 = base.personas.views[0]
+    page = PageIntent(name="Submit Case", widgets=(), design=design)
+    view = dataclasses.replace(v0, pages=(page,))
+    return dataclasses.replace(
+        base, personas=Personas(views=(view, *base.personas.views[1:])))
+
+
+def test_build_page_op_carries_the_design_tree_as_wire() -> None:
+    """A page with a `design` compiles it INTO the build_page op as the plain wire dict
+    pages.build_design consumes — nested containers, each carrying style, wrapping the widgets."""
+    plan = compile_spec(_spec_with_design(_rich_design()))
+    op = next(op for op in plan.ops
+              if op.kind == "build_page" and op.args["name"] == "Submit Case")
+    design = op.args["design"]
+    assert design is not None
+    # top is a container carrying a real style key, with children (the nested tree, not a flat list)
+    assert design["kind"] == "container"
+    assert ["Container.Background", "#FCFAF2"] in design["style"]
+    # nested: shell -> hero -> hero-title widget (a container/style/widget "op" chain)
+    hero = design["children"][0]
+    assert hero["kind"] == "container" and ["Container.Background", "#2E6B3B"] in hero["style"]
+    hero_title = hero["children"][0]
+    assert hero_title["kind"] == "widget"
+    assert hero_title["widget"]["slug"] == "general/label"
+    # a widget wrapped in the card lower in the tree
+    card = design["children"][1]
+    assert card["children"][0]["widget"]["slug"] == "view/form"
+
+
+def test_build_page_op_without_design_is_none_backward_compatible() -> None:
+    """A page that declares no design compiles design=None — the flat-widget build, unchanged."""
+    plan = compile_spec(_full_spec())
+    for op in plan.ops:
+        if op.kind == "build_page":
+            assert op.args["design"] is None
+
+
+def test_design_widget_is_governed_by_the_same_checks() -> None:
+    """A widget buried in a design tree is not a loophole: an API-impossible slug inside a design
+    container is refused at compile naming its coverage row, same as a top-level/popup widget."""
+    bad_design = DesignNode(
+        kind="container", name="shell",
+        children=(DesignNode(kind="widget", name="bad", widget=WidgetIntent("custom")),))
+    with pytest.raises(ValueError, match="custom-component"):
+        compile_spec(_spec_with_design(bad_design))
+
+
+def test_design_container_carrying_a_widget_is_refused() -> None:
+    """_check_page_design: a container node must not carry a widget (widgets are leaf nodes)."""
+    bad = DesignNode(kind="container", name="oops",
+                     widget=WidgetIntent("general/label"))
+    with pytest.raises(ValueError, match="must not carry a widget"):
+        compile_spec(_spec_with_design(bad))
 
 
 def test_check_unknown_widget_slug_inside_popup_raises() -> None:

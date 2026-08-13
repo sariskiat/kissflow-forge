@@ -22,6 +22,7 @@ from .pages import (
     add_popup,
     add_widget,
     bind_widget,
+    build_design,
     page_summary,
     resolve_container_id,
     set_styles,
@@ -82,10 +83,11 @@ def create_page_flow(
 @dataclass(frozen=True)
 class PageBuildStep:
     """One page-build op. `kind` is one of "container" | "widget" | "popup" | "event" | "style" |
-    "bind"; `kwargs` are passed straight to the matching kfforge.pages builder
-    (add_container/add_widget/add_popup/add_event_mapping/set_styles/bind_widget) — see their own
-    docstrings for the accepted keys. A spec dict from a caller (e.g. an MCP tool argument) becomes
-    a list of these."""
+    "bind" | "design"; `kwargs` are passed straight to the matching kfforge.pages builder
+    (add_container/add_widget/add_popup/add_event_mapping/set_styles/bind_widget/build_design) — see
+    their own docstrings for the accepted keys. "design" takes `{parent_id, design}` and builds a
+    whole nested styled Container/Component tree from one design dict (page.design.md). A spec dict
+    from a caller (e.g. an MCP tool argument) becomes a list of these."""
     kind: str
     kwargs: dict[str, Any]
 
@@ -261,10 +263,20 @@ def apply_page_build(
                     label,
                     lambda rb, h=host, c=config: _bind_config_landed(rb, h, c),
                 ))
+            elif step.kind == "design":
+                # A whole nested, styled Container/Component tree from ONE design dict
+                # (page.design.md) — the beautiful-page primitive. build_design threads the minted
+                # ids internally (arbitrary depth, no name-uniqueness needed) and returns every
+                # Container/widget-host id it added, so the read-back check proves the tree actually
+                # landed live, not just that the PUT 200'd (THE RULE).
+                new, design_ids = build_design(new, **step.kwargs)
+                label = f"design:{step.kwargs.get('parent_id')}=[{len(design_ids)} nodes]"
+                applied.append(label)
+                checks.append((label, lambda rb, ids=tuple(design_ids): all(i in rb for i in ids)))
             else:
                 raise ValueError(
                     f"unknown page-build step kind {step.kind!r}; expected one of "
-                    "container/widget/popup/event/style/bind"
+                    "container/widget/popup/event/style/bind/design"
                 )
     except ValueError as e:
         return Err("verify", f"offline page build rejected step: {e}")
@@ -420,13 +432,16 @@ def apply_build_page_op(
     publish: bool = False,
 ) -> BuildPageOpReport | Err:
     """Execute ONE compiled `build_page` op (compile._op_build_page's args: name / widgets /
-    kpis / actions / popups / on_click) against an explicitly-named app — the GOVERNED page
-    entry (#41, ADR-0005). `apply_page_build` stays the raw primitive underneath; this is the
+    kpis / actions / popups / on_click / design) against an explicitly-named app — the GOVERNED
+    page entry (#41, ADR-0005). `apply_page_build` stays the raw primitive underneath; this is the
     layer that turns the plan's content+behavior into builder calls, resolving the ids only the
     run itself can know (a popup's own container for its widgets, a minted button's container
     for its on-click EventMapping, a popup NAME into the popup id an OpenPopup Property needs).
 
     Translation, in order, every item bucketed:
+    - the beautiful-page `design` tree (page.design.md), if any -> a nested styled Container/
+      Component tree built into the Body via build_design; a malformed design is refused, never
+      downgraded to the flat skeleton (D6);
     - each widget -> the page Body container (layout geometry is platform-default, eval grades
       pixels — the Build-Correctness Bar vs Eval-Parity split);
     - each popup -> add_popup, then ITS widgets into the popup's own root container;
@@ -491,6 +506,21 @@ def apply_build_page_op(
         ids = (wid, comp_id) if comp_id else (wid,)
         built.append(label)
         checks.append((label, lambda rb, i=ids: all(x in rb for x in i)))
+
+    # The beautiful-page tree (page.design.md), if the plan carried one — a nested styled
+    # Container/Component tree built into the Body, instead of the flat label+form skeleton. Every
+    # node it mints is read-back verified (THE RULE). A malformed design is REFUSED, not downgraded
+    # to the skeleton (D6): a page that silently lost its whole design would look like a success.
+    design = op_args.get("design")
+    if design:
+        try:
+            new, design_ids = build_design(new, parent_id=body, design=design)
+        except ValueError as e:
+            refused.append(f"design: {e}")
+        else:
+            label = f"design:[{len(design_ids)} nodes]"
+            built.append(label)
+            checks.append((label, lambda rb, ids=tuple(design_ids): all(i in rb for i in ids)))
 
     for w in op_args.get("widgets") or ():
         _add_widget_checked(body, w, f"widget:{w.get('slug')}")

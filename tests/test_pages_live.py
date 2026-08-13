@@ -14,10 +14,31 @@ from kfforge.pages_live import (
     PageBuildReport,
     PageBuildStep,
     PageReport,
+    apply_build_page_op,
     apply_navigation,
     apply_page_build,
     create_page_flow,
 )
+
+_DESIGN = {
+    "kind": "container", "name": "page shell",
+    "style": [["Container.Background", "#FCFAF2"], ["Container.Flex.Direction", "column"]],
+    "children": [
+        {"kind": "container", "name": "hero",
+         "style": [["Container.Background", "#2E6B3B"]],
+         "children": [
+             {"kind": "widget", "name": "hero title",
+              "style": [["Label.Color", "token:Color.White"]],
+              "widget": {"slug": "general/label", "config": [["title", "Submit your case"]]}},
+         ]},
+        {"kind": "container", "name": "card", "style": [["Container.Background", "#FFFFFF"]],
+         "children": [
+             {"kind": "widget", "name": "form",
+              "widget": {"slug": "view/form",
+                         "config": [["flow_type", "process"], ["flow_id", "Flow_abc"]]}},
+         ]},
+    ],
+}
 
 DEV = KfConfig(key_id="k", key_secret="s", account="Acc", domain="dev-x.example.com", app_id="App")
 
@@ -153,6 +174,33 @@ def test_apply_page_build_container_then_widget() -> None:
     assert rep.node_counts.get("Container", 0) >= 2  # root + the new Banner container
     assert rep.node_counts.get("Component", 0) >= 1
     assert c.page_puts == 1, "every step must land in ONE guarded PUT, not one per step"
+
+
+def test_apply_page_build_design_step_builds_nested_styled_tree() -> None:
+    """The "design" step kind: one dict builds a whole nested, styled Container/Component tree, and
+    every minted node is read-back verified (page.design.md / THE RULE)."""
+    c = FakePageClient()
+    page_id = c.create_page("App1", "Submit Case")
+    steps = [PageBuildStep("design", {"parent_id": "Container001", "design": _DESIGN})]
+    rep = apply_page_build(c, "App1", page_id, steps)
+    assert isinstance(rep, PageBuildReport)
+    assert rep.missing == (), "every minted design node must be present on the read-back"
+    assert rep.verified == rep.applied
+    assert rep.node_counts.get("Container", 0) >= 5  # root + shell + hero + card + 2 widget hosts
+    assert c.page_puts == 1, "the whole tree lands in ONE guarded PUT"
+
+
+def test_apply_build_page_op_builds_design_into_body() -> None:
+    """The governed executor consumes a compiled build_page op whose args carry a `design`, building
+    the beautiful-page tree into the Body and read-back verifying it."""
+    c = FakePageClient()
+    op = {"name": "Submit Case", "widgets": (), "kpis": (), "actions": (),
+          "popups": (), "on_click": (), "design": _DESIGN}
+    rep = apply_build_page_op(c, "App1", op)
+    result = rep.as_tool_result()
+    assert result["isError"] is False, result
+    assert any(b.startswith("design:") for b in result["built"])
+    assert result["missing"] == []
 
 
 def test_apply_page_build_bind_repairs_an_already_built_widget() -> None:

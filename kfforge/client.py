@@ -72,7 +72,11 @@ class KfConfig:
     app_id: str
 
     @staticmethod
-    def from_env() -> KfConfig | Err:
+    def from_env(app_id_override: str | None = None) -> KfConfig | Err:
+        # app_id_override (a runtime-selected app, e.g. via forge_use_app) wins over the KF_APP env.
+        # Empty app_id is allowed here on purpose — the "an app must be chosen" guard now lives at
+        # the _client() chokepoint (server.py) so a tool carrying its own app_id, plus the
+        # list/use-app tools, can run before any app is selected. See CLAUDE.md Members/Pages.
         try:
             domain = os.environ["KF_DEV_DOMAIN"]
             cfg = KfConfig(
@@ -80,14 +84,12 @@ class KfConfig:
                 key_secret=os.environ["KF_DEV_ACCESS_KEY_SECRET"],
                 account=os.environ["KF_DEV_ACCOUNT_ID"],
                 domain=domain,
-                app_id=os.environ.get("KF_APP", ""),
+                app_id=(app_id_override or os.environ.get("KF_APP", "")),
             )
         except KeyError as e:
             return Err("config", f"missing env var {e.args[0]}")
         if "dev-" not in domain:
             return Err("config", f"refusing non-dev domain {domain!r}")
-        if not cfg.app_id:
-            return Err("config", "KF_APP is required — no default app; set it explicitly")
         return cfg
 
     @property

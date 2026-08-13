@@ -133,11 +133,53 @@ at read time is the earlier, cheaper gate that names the row before a human ever
 approves a spec that could never build. Role-scoped visibility (`role-scoped-
 visibility`, #6) is the doctor's refusal, not yours (ADR-0003).
 
+## Distill the HTML mockup into a DESIGN tree, not just widgets
+
+The HTML page-design mockup is a real visual design — a hero band, cards, section
+headers, tip chips, KPI/step tiles, status pills — not a flat list of widgets. If
+you emit only the functional widgets (`personas.views[].pages[].widgets`, each just
+`{slug, config}`), a rich 104-div mockup collapses to a bare `general/label` +
+`view/form` and the built page renders **correct but ugly** — the exact gap this
+dimension closes. Emit the design too.
+
+Each page carries an **optional** `design` field: a nested `DesignNode` **container
+tree** (`kfforge/intake/schema.py`), the beautiful-page dimension. Distill the
+mockup into it using the design system in **`docs/capabilities/page.design.md`** —
+its token palette (page bg `#FCFAF2`, cards `#FFFFFF`/radius `14px`/pad `24-28px`,
+hero `#2E6B3B`/pad `32px`, tip chips `#EFF7F0`, icon `#2E6B3B` on `#DCEEE0`, text
+`#55564F`/`#7d7b73`, font `13px`), the reusable container recipes (page shell /
+card / hero / section header / tip chip / step tile / step pill / callout), and the
+exact `Style.Value` keys to write.
+
+- A `DesignNode` is either `kind:"container"` (has `children` + `style`, no widget)
+  or `kind:"widget"` (has a `widget` `{slug, config}`, no children). Nest containers
+  to match the mockup's own box structure; put each functional widget in its own
+  card, under a section header, exactly as the recipes show.
+- `style` is a list of `[key, value]` **string** pairs. A value is a raw CSS string
+  for a dimension (`"16px"`, `"column"`, `"999px"`), raw hex for a colour
+  (`"#2E6B3B"` → `{value:"#2E6B3B"}`), or a **design-token ref** written with a
+  `token:` prefix (`"token:Color.White"` → `{ref:"Color.White"}`). Read a real token
+  name off the builder's own dropdown — a bogus ref PUTs 200 and fails silently at
+  render (page.design.md Gotchas), the same "never synthesize a token" rule as form
+  sections.
+- `design` is purely **additive and backward-compatible**: a page with no design
+  compiles and builds exactly as before (flat widgets into the Body). The engine
+  never parses the HTML (D5); THIS skill distills it into the `DesignNode` tree, and
+  `pages.build_design` (driven from the compiled `build_page` op) turns that tree
+  into the real nested `Container`/`Component`/`Style` graph.
+
+A widget buried in the design tree is governed by the **same** cross-checks as any
+other (unknown slug, missing required config, API-impossible capability) — a
+`report/*`, `custom`, or malformed widget inside a design container is refused at
+compile naming its coverage row, never smuggled in one level deeper.
+
 ## What good output looks like
 
 - A complete `AppSpec` JSON: every blocking dimension filled from the diagram/design
   or from an explicit human answer, no dimension guessed.
 - Every routing literal byte-identical to a live option value.
+- Every visually-rich page carries a `design` tree distilled from the mockup per
+  `docs/capabilities/page.design.md` — not just its functional widgets.
 - No `refuses-loudly` shape present — or the run stopped with a named-row refusal.
 - Fully synthetic where it lands in this repo's tests (no target-domain names) — the
   case-1 golden and the built-app-vs-input diff belong to the eval harness (#28), not

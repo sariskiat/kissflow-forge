@@ -110,6 +110,33 @@ WIDGET_REQUIRED_CONFIG: dict[str, tuple[str, ...]] = {
     "repeater": ("flow_type", "flow_id", "view_id", "row_fields"),
 }
 
+# flow_type is a case-SENSITIVE controlled value on every view/report/metrics/repeater widget:
+# the builder renders the widget as "Unable to display component" for a wrong-cased value like
+# "process" (lowercase), while a clean publish + forge_doctor + a live item walk ALL still pass --
+# the page is the one artifact none of those oracles can see (THE RULE; proven live 2026-08-13, a
+# view/form bound flow_type="process" broke render, the oracle app's identical widget carries
+# "Process"). The spec/reader may hand us any case, so canonicalize the ONE controlled literal here.
+# An unknown value fails loud rather than writing a widget that renders broken. This fixes CASE
+# ONLY: a dataform's records bind through flow_type="Form" (not "Dataset") -- that semantic choice
+# is the caller's, and "Form" passes through untouched.
+_FLOW_TYPE_CANON = {"process": "Process", "form": "Form", "dataset": "Dataset", "case": "Case"}
+
+
+def _canon_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return config with `flow_type` normalized to Kissflow's canonical case. Raises on an
+    unknown flow_type. Non-mutating; returns the same object when nothing changes."""
+    ft = config.get("flow_type")
+    if not isinstance(ft, str):
+        return config
+    canon = _FLOW_TYPE_CANON.get(ft.strip().lower())
+    if canon is None:
+        raise ValueError(
+            f"flow_type {ft!r} is not a known widget flow_type; valid (case-insensitive): "
+            f"{sorted(_FLOW_TYPE_CANON.values())}"
+        )
+    return config if canon == ft else {**config, "flow_type": canon}
+
+
 _ALPHABET = string.ascii_letters + string.digits
 # Real captured ids are `<Kind>_<10-char-rand>` (shapes/*.json's own notes, e.g. "Button_<10-char-
 # rand>"); unlike kfforge.graph's deterministic field ids (which must be idempotent-reconcile-safe
@@ -376,6 +403,89 @@ def add_container(
     return new, cid
 
 
+_DESIGN_KINDS: tuple[str, ...] = ("container", "widget")
+
+
+def _style_pairs_to_props(style: Any) -> dict[str, Any]:
+    """Convert a DesignNode `style` (a list/tuple of (key, value) pairs — the wire shape of
+    kfforge.intake.schema.DesignNode.style) into a Style.Value props dict for `add_container`'s
+    `layout` / `set_styles`. A value string prefixed `token:` becomes a design-token ref
+    (`{"ref": "<name>"}`); any other string is passed through unchanged, so _apply_style_props
+    auto-wraps it as `{"value": <str>}` — raw hex for a colour, a raw CSS string for a dimension.
+    Both forms render live on a page (page.design.md); the `token:` prefix is the ONLY way to reach
+    the ref form through a plain, serde-round-trippable string."""
+    props: dict[str, Any] = {}
+    for pair in style or ():
+        key, value = pair[0], pair[1]
+        if isinstance(value, str) and value.startswith("token:"):
+            props[key] = {"ref": value[len("token:"):]}
+        else:
+            props[key] = value
+    return props
+
+
+def build_design(page: Draft, *, parent_id: str, design: dict[str, Any]) -> tuple[Draft, list[str]]:
+    """Build a nested, styled Container/Component tree from a DESIGN dict (the wire shape of
+    kfforge.intake.schema.DesignNode) as a child of `parent_id`. Pure (returns a NEW draft).
+
+    This is the primitive that turns a beautiful-page DESIGN into the real graph a rich mockup
+    needs — a tree of styled `Container`s wrapping the functional widgets, not the flat
+    label+view/form skeleton `add_widget`-into-Body produces (page.design.md: "the gap is DRIVING
+    the primitives with a design"). Recursively:
+
+      - a "container" node -> `add_container(parent_id, name, layout=<its style>)`, then every child
+        built INTO the new container's MINTED id (real ids threaded directly, so arbitrary nesting
+        depth needs no name resolution and no name-uniqueness contract on the design);
+      - a "widget" node -> `add_widget(container_id=parent_id, widget=<slug>, config=<config>,
+        name)`, then its own `style` applied to the widget's host container id via `set_styles`.
+
+    Returns (new_draft, minted_ids) — every top-level Container / widget-host Container id this call
+    added, in build order, so a caller (apply_page_build's "design" step, apply_build_page_op) can
+    read-back verify each one actually landed. Fails loud (ValueError) on an unknown kind, a
+    container carrying a widget, a widget carrying children or no widget, or any add_container/
+    add_widget rejection (placeholder binding, unknown slug) — the same offline-fail-before-write
+    discipline as every builder here.
+    """
+    kind = design.get("kind")
+    if kind not in _DESIGN_KINDS:
+        raise ValueError(f"design node kind {kind!r} unknown; expected one of {list(_DESIGN_KINDS)}")
+    name = design.get("name") or ""
+    style = _style_pairs_to_props(design.get("style"))
+    minted: list[str] = []
+
+    if kind == "container":
+        if design.get("widget"):
+            raise ValueError(
+                f"design container {name!r} must not carry a widget — widgets are leaves, "
+                "nest them as a child 'widget' node instead"
+            )
+        new, cid = add_container(page, parent_id=parent_id, name=name or "Container",
+                                 layout=style or None)
+        minted.append(cid)
+        for child in design.get("children") or ():
+            new, child_ids = build_design(new, parent_id=cid, design=child)
+            minted.extend(child_ids)
+        return new, minted
+
+    # widget leaf
+    if design.get("children"):
+        raise ValueError(
+            f"design widget {name!r} must not carry children — only 'container' nodes nest"
+        )
+    widget = design.get("widget")
+    if not isinstance(widget, dict) or not widget.get("slug"):
+        raise ValueError(f"design widget node {name!r} needs a 'widget' with a 'slug'")
+    config = dict(widget.get("config") or ())
+    if widget.get("row_fields"):
+        config["row_fields"] = list(widget["row_fields"])
+    new, host_id = add_widget(page, container_id=parent_id, widget=widget["slug"],
+                              config=config, name=name or None)
+    minted.append(host_id)
+    if style:
+        new = set_styles(new, rules={host_id: style})
+    return new, minted
+
+
 def _bind_repeater_row_label(draft: Draft, *, page_id: str, content_id: str, field: str) -> tuple[Draft, str]:
     """One repeater row-template label, bound to live per-row data via a VariableRef.
 
@@ -454,6 +564,7 @@ def add_widget(
     """
     if widget not in WIDGET_SLUGS:
         raise ValueError(f"unknown widget {widget!r}; known widgets: {sorted(WIDGET_SLUGS)}")
+    config = _canon_config(config)  # flow_type case-normalized / validated before any write
     if "row_fields" in config and widget != "repeater":
         raise ValueError(f"widget {widget!r} has no slot for 'row_fields' (repeater-only)")
 
@@ -579,6 +690,7 @@ def bind_widget(page: Draft, *, host: str, config: dict[str, Any]) -> Draft:
     only touches a FieldMapping-only key (e.g. view_id, which is never mirrored into Data on
     view/form) does not invent a new Data key no captured shape ever showed.
     """
+    config = _canon_config(config)  # flow_type case-normalized / validated before any write
     new: Draft = copy.deepcopy(page)
     host_id = resolve_container_id(new, host)
 

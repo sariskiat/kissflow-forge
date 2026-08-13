@@ -17,11 +17,114 @@ from kfforge.pages import (
     add_popup,
     add_widget,
     bind_widget,
+    build_design,
     load_shape,
     new_page_graph,
     page_summary,
     set_styles,
 )
+
+
+def _container_depth(page: dict, cid: str = "Container001", d: int = 0) -> int:
+    """Deepest Container::Container nesting reachable from `cid` (0 if it has no child containers)."""
+    kids = [k for k in page.get(cid, {}).get("Container::Container", []) if k in page]
+    return d if not kids else max(_container_depth(page, k, d + 1) for k in kids)
+
+
+_BEAUTIFUL_DESIGN = {
+    "kind": "container", "name": "page shell",
+    "style": [["Container.Background", "#FCFAF2"], ["Container.Flex.Direction", "column"],
+              ["Container.Row.Gap", "16px"]],
+    "children": [
+        {"kind": "container", "name": "hero",
+         "style": [["Container.Background", "#2E6B3B"], ["Container.Padding.Top", "32px"]],
+         "children": [
+             {"kind": "container", "name": "hero header",
+              "style": [["Container.Flex.Direction", "row"], ["Container.Row.Gap", "10px"]],
+              "children": [
+                  {"kind": "widget", "name": "hero title",
+                   "style": [["Label.Color", "token:Color.White"],
+                             ["Label.Font.Weight", "token:Font.Weight.SemiBold"]],
+                   "widget": {"slug": "general/label",
+                              "config": [["title", "Submit your AI use case"]]}},
+              ]},
+         ]},
+        {"kind": "container", "name": "card",
+         "style": [["Container.Background", "#FFFFFF"],
+                   ["Container.Border.Top.Left.Radius", "14px"],
+                   ["Container.Padding.Top", "24px"]],
+         "children": [
+             {"kind": "widget", "name": "form",
+              "widget": {"slug": "view/form",
+                         "config": [["flow_type", "process"], ["flow_id", "Flow_abc"]]}},
+         ]},
+    ],
+}
+
+
+# ---------------------------------------------------------------------------------------------
+# build_design: the beautiful-page tree (page.design.md)
+# ---------------------------------------------------------------------------------------------
+
+def test_build_design_produces_nested_styled_tree() -> None:
+    page = new_page_graph("Submit AI Use Case")
+    page, minted = build_design(page, parent_id="Container001", design=_BEAUTIFUL_DESIGN)
+
+    # a real nested tree, not a flat widget list (Container001 -> shell -> hero -> header -> widget)
+    assert _container_depth(page) > 2, "a beautiful page must nest containers, not lay widgets flat"
+    # every minted node is present, and the widgets landed inside their own styled containers
+    assert all(mid in page for mid in minted)
+    summary = page_summary(page)
+    assert summary["counts"]["Container"] >= 6
+    scripts = {w["script"] for w in summary["widgets"]}
+    assert scripts == {"general/label", "view/form"}
+    _assert_backrefs_resolve(page)
+
+
+def test_build_design_style_nodes_carry_real_token_and_hex_values() -> None:
+    page = new_page_graph("Submit AI Use Case")
+    page, _ = build_design(page, parent_id="Container001", design=_BEAUTIFUL_DESIGN)
+
+    styles = [v.get("Value", {}) for v in page.values()
+              if isinstance(v, dict) and v.get("Kind") == "Style"]
+    # hex colour lands as {"value": "#hex"} (page.design.md: raw hex is a valid page colour form)
+    assert any(val.get("Container.Background") == {"value": "#FCFAF2"} for val in styles)
+    assert any(val.get("Container.Background") == {"value": "#2E6B3B"} for val in styles)
+    # a "token:"-prefixed value lands as a design-token ref {"ref": "..."}
+    assert any(val.get("Label.Color") == {"ref": "Color.White"} for val in styles)
+    assert any(val.get("Label.Font.Weight") == {"ref": "Font.Weight.SemiBold"} for val in styles)
+    # a dimensional value lands as a raw CSS string wrapped {"value": "..."}
+    assert any(val.get("Container.Padding.Top") == {"value": "32px"} for val in styles)
+
+
+def test_build_design_flow_type_is_canonicalized() -> None:
+    """The view/form's lowercase 'process' is canonicalized to 'Process' (pages._canon_config) —
+    the difference between a rendered widget and 'Unable to display component' (page.design.md)."""
+    page = new_page_graph("Submit AI Use Case")
+    page, _ = build_design(page, parent_id="Container001", design=_BEAUTIFUL_DESIGN)
+    flow_types = [v.get("Value") for v in page.values()
+                  if isinstance(v, dict) and v.get("Kind") == "Property" and v.get("Value") == "Process"]
+    assert flow_types, "flow_type must be stored canonicalized as 'Process'"
+
+
+def test_build_design_is_pure() -> None:
+    page = new_page_graph("Submit AI Use Case")
+    before = set(page)
+    build_design(page, parent_id="Container001", design=_BEAUTIFUL_DESIGN)
+    assert set(page) == before, "build_design must not mutate its input draft"
+
+
+def test_build_design_container_with_widget_raises() -> None:
+    page = new_page_graph("x")
+    bad = {"kind": "container", "name": "oops", "widget": {"slug": "general/label"}}
+    with pytest.raises(ValueError, match="must not carry a widget"):
+        build_design(page, parent_id="Container001", design=bad)
+
+
+def test_build_design_unknown_kind_raises() -> None:
+    page = new_page_graph("x")
+    with pytest.raises(ValueError, match="unknown"):
+        build_design(page, parent_id="Container001", design={"kind": "banner"})
 
 
 def _kind(draft: dict, kind: str) -> dict:
@@ -200,6 +303,28 @@ def test_add_widget_view_form_still_requires_flow_id() -> None:
     with pytest.raises(ValueError, match="flow_id"):
         add_widget(page, container_id="Container001", widget="view/form",
                    config={"flow_type": "Process"})
+
+
+def test_add_widget_flow_type_case_is_canonicalized() -> None:
+    """flow_type is case-SENSITIVE on the platform: a lowercase 'process' renders 'Unable to
+    display component' though publish+doctor+item-walk all pass (proven live 2026-08-13). add_widget
+    must normalize the case so the widget renders. Both the FieldMapping and the Component.Data
+    mirror must carry the canonical 'Process'."""
+    page = new_page_graph("Sample Page")
+    page, host = add_widget(
+        page, container_id="Container001", widget="view/form",
+        config={"flow_type": "process", "flow_id": "Flow_abc123"},  # lowercase in -> canonical out
+    )
+    assert _fm_values(page, host)["flow_type"] == "Process"
+    assert _host_component(page, host)["Data"]["flow_type"] == "Process"
+
+
+def test_add_widget_flow_type_unknown_fails_loud() -> None:
+    """An unknown flow_type is refused before any write, not passed through to render broken."""
+    page = new_page_graph("Sample Page")
+    with pytest.raises(ValueError, match="flow_type"):
+        add_widget(page, container_id="Container001", widget="view/form",
+                   config={"flow_type": "workflow", "flow_id": "Flow_abc123"})
 
 
 def test_add_widget_view_form_no_view_id_expresses_a_submit_form() -> None:

@@ -519,15 +519,62 @@ class PopupIntent:
 
 
 @dataclass(frozen=True)
+class DesignNode:
+    """One node of a page's DESIGN tree — the beautiful-page dimension (page.design.md). A page is
+    a tree of styled `Container`s wrapping the functional widgets, not a flat widget list; this
+    dataclass is how a spec EXPRESSES that tree so it survives the pipeline instead of collapsing
+    to bare label+form (the exact gap this dimension closes).
+
+    Exactly two kinds, closed by convention (compile refuses any other):
+
+    - `kind == "container"`: a layout box. `children` holds its sub-tree (more containers and/or
+      widgets); `widget` MUST be None. `style` styles the box itself (background, padding, gap,
+      radius, border — the `Container.*` keys in page.design.md).
+    - `kind == "widget"`: a leaf functional widget. `widget` names it (a `WidgetIntent`, same slug/
+      config catalog as `PageIntent.widgets`); `children` MUST be empty. `style` styles the
+      widget's own host container (`Label.*`/`Icon.*`/`Container.*` keys).
+
+    `style` is (Style.Value-key, value) STRING pairs — a tuple of pairs, this schema's frozen-
+    collection convention (never a dict). The value string carries one of the two page colour/value
+    shapes page.design.md documents, disambiguated by a `token:` prefix so the whole thing stays a
+    plain serde-round-trippable string:
+
+    - `"token:Color.White"` / `"token:Font.Weight.SemiBold"` -> `{"ref": "Color.White"}` (a design-
+      token ref — the dominant colour convention on a page, and the ONLY form form-sections accept).
+    - anything else (`"#2E6B3B"`, `"16px"`, `"column"`, `"999px"`) -> `{"value": "<str>"}` — raw hex
+      for a colour, a raw CSS string for a dimension (both proven rendering on a page).
+
+    The tree round-trips through serde with zero special-casing (it is dataclasses + tuples + a
+    `WidgetIntent | None` union, all shapes serde already reflects) and is compiled by
+    `compile._design_to_wire` into the `build_page` op, where `pages.build_design` builds it into
+    real nested `Container`/`Component`/`Style` nodes.
+    """
+    kind: str
+    name: str = ""
+    style: tuple[tuple[str, str], ...] = ()
+    children: tuple["DesignNode", ...] = ()
+    widget: WidgetIntent | None = None
+
+
+@dataclass(frozen=True)
 class PageIntent:
     """A page's content (`widgets`) plus its BEHAVIOR half (`popups` + `on_click`), the schema
     side of ADR-0005 ("the governed plan carries content AND behavior"). Both behavior fields
     default empty, so a plain content-only page still constructs as `PageIntent(name, widgets)`.
+
+    `design` (optional, page.design.md) is the BEAUTIFUL-page half: a styled `DesignNode` container
+    tree that carries the real layout, colours, and nesting a rich mockup has — the thing the flat
+    `widgets` list cannot express (it only holds `{slug, config}` per widget, no containers, no
+    colours). It is purely ADDITIVE and backward-compatible: a page with `design=None` compiles and
+    builds EXACTLY as before (flat widgets into the Body). When a `design` IS present, the build
+    produces the nested styled tree instead of the bare skeleton — see `compile._op_build_page` and
+    `pages.build_design`.
     """
     name: str
     widgets: tuple[WidgetIntent, ...]
     popups: tuple[PopupIntent, ...] = ()
     on_click: tuple[OnClickAction, ...] = ()
+    design: DesignNode | None = None
 
 
 @dataclass(frozen=True)

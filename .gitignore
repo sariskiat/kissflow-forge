@@ -3,3 +3,8 @@ __pycache__/
 .venv/
 .ruff_cache/
 .DS_Store
+kf.env
+dist/
+.env.deploy
+bestonesource.html
+brokesoruce.html

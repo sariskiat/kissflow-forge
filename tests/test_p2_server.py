@@ -212,7 +212,7 @@ class _FakeDetailClient:
 
 def test_forge_publish_reports_isError_false_when_status_reads_back_live(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeDetailClient(status="Live")
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_publish(kind="process", flow_id="F1")
     assert got == {"kind": "process", "id": "F1", "published": True, "status": "Live", "isError": False}
 
@@ -221,7 +221,7 @@ def test_forge_publish_reports_isError_true_when_status_is_not_live(monkeypatch:
     """A 200 publish response is not proof — if the read-back still shows "Draft" (or anything
     else), this must be isError=True, never a silent false-positive success."""
     fake = _FakeDetailClient(status="Draft")
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_publish(kind="process", flow_id="F1")
     assert got["isError"] is True and got["status"] == "Draft"
 
@@ -249,14 +249,14 @@ class _FakePagePublishClient:
 def test_forge_publish_page_kind_requires_app_id(monkeypatch: pytest.MonkeyPatch) -> None:
     # _client() runs BEFORE the app_id check, so it must succeed here (a fake with no methods is
     # enough — the app_id validation fires before anything is ever called on it).
-    monkeypatch.setattr(srv, "_client", lambda: _FakePagePublishClient())
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: _FakePagePublishClient())
     got = srv.forge_publish(kind="page", flow_id="Page1", app_id=None)
     assert got["isError"] is True and "app_id" in got["error"]
 
 
 def test_forge_publish_page_kind_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakePagePublishClient()
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_publish(kind="page", flow_id="Page1", app_id="App1")
     assert got == {"kind": "page", "id": "Page1", "published": True, "isError": False}
     assert fake.page_publishes == [("App1", "Page1")]
@@ -264,14 +264,14 @@ def test_forge_publish_page_kind_happy_path(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_forge_publish_page_kind_propagates_publish_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakePagePublishClient(page_err=Err("http", "boom", 500))
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_publish(kind="page", flow_id="Page1", app_id="App1")
     assert got["isError"] is True
 
 
 def test_forge_publish_application_kind_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakePagePublishClient()
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_publish(kind="application", flow_id="App1")
     assert got == {"kind": "application", "id": "App1", "published": True, "isError": False}
     assert fake.app_publishes == ["App1"]
@@ -279,7 +279,7 @@ def test_forge_publish_application_kind_happy_path(monkeypatch: pytest.MonkeyPat
 
 def test_forge_publish_application_kind_propagates_publish_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakePagePublishClient(app_err=Err("http", "boom", 500))
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_publish(kind="application", flow_id="App1")
     assert got["isError"] is True
 
@@ -307,7 +307,7 @@ def test_kf_get_flow_schema_page_kind_requires_app_id(monkeypatch: pytest.Monkey
     # _client() runs BEFORE the app_id check, so it must succeed here (a fake with no methods
     # touched is enough -- the app_id validation fires before get_page_draft is ever called).
     fake = _FakePageDraftClient()
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.kf_get_flow_schema(flow_kind="page", flow_id="Page1", app_id=None)
     assert got["isError"] is True and "app_id" in got["error"]
     assert fake.page_draft_calls == []
@@ -317,7 +317,7 @@ def test_kf_get_flow_schema_page_kind_routes_through_page_draft_with_the_explici
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = _FakePageDraftClient(page_draft={"Root": "Pg1"})
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.kf_get_flow_schema(flow_kind="page", flow_id="Page1", app_id="App_Other")
     assert got == {"Root": "Pg1"}
     assert fake.page_draft_calls == [("App_Other", "Page1")], (
@@ -328,7 +328,7 @@ def test_kf_get_flow_schema_page_kind_routes_through_page_draft_with_the_explici
 
 def test_kf_get_flow_schema_page_kind_propagates_a_read_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakePageDraftClient(page_err=Err("http", "not found", 404))
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.kf_get_flow_schema(flow_kind="page", flow_id="Page1", app_id="App_Other")
     assert got["isError"] is True
 
@@ -337,7 +337,7 @@ def test_kf_get_flow_schema_non_page_kind_is_unchanged(monkeypatch: pytest.Monke
     """flow_kind != "page" keeps its original behavior -- app_id is accepted but ignored, and
     the generic get_draft path is still what runs."""
     fake = FakeClient(_bare_process_draft())
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.kf_get_flow_schema(flow_kind="process", flow_id="F1", app_id="ignored")
     assert got == fake.draft
 
@@ -347,7 +347,7 @@ def test_kf_get_flow_schema_non_page_kind_is_unchanged(monkeypatch: pytest.Monke
 
 def test_forge_create_app_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeClient(_bare_process_draft())
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_create_app(name="Sample App")
     assert got["verified"] is True and got["isError"] is False
     assert got["app_id"] in fake.applications
@@ -355,7 +355,7 @@ def test_forge_create_app_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_forge_share_report_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeClient(_bare_process_draft())
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     members = [{"_id": "m1", "Name": "Lead", "Kind": "AppRole", "Role": "Ro_lead", "Permission": ["Member"]}]
     got = srv.forge_share_report(flow_id="F1", report_id="Rep1", members=members)
     assert got["isError"] is False
@@ -368,7 +368,7 @@ def test_forge_share_report_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_forge_set_branch_conditions_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeClient(_process_with_branches())
     fake.list_items["List_Sample01"] = ["Alpha", "Beta"]
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_set_branch_conditions(
         flow_id="F1", field_name="Track", branch_literals={"Branch A": "Alpha", "Branch B": "Beta"})
     assert got["isError"] is False
@@ -380,7 +380,7 @@ def test_forge_set_branch_conditions_rejects_bad_literal_before_any_write(
 ) -> None:
     fake = FakeClient(_process_with_branches())
     fake.list_items["List_Sample01"] = ["Alpha", "Beta"]
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_set_branch_conditions(
         flow_id="F1", field_name="Track", branch_literals={"Branch A": "Not Real"})
     assert got["isError"] is True
@@ -396,7 +396,7 @@ def test_forge_add_goto_gate_branch_name_scopes_into_that_branch(monkeypatch: py
                           if isinstance(v, dict) and v.get("Kind") == "ProcessDef"
                           and v.get("Name") == "Branch A")
     fake = FakeClient(draft)
-    monkeypatch.setattr(srv, "_client", lambda: fake)
+    monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
 
     got = srv.forge_add_goto_gate(flow_id="F1", target_activity_name="Shared Step",
                                   field_name="Done Flag", branch_name="Branch A")

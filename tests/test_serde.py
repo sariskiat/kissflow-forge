@@ -375,6 +375,55 @@ def test_page_behavior_popup_and_open_popup_action_round_trips() -> None:
     assert rt_page.on_click[1].script and rt_page.on_click[1].target_popup is None
 
 
+def test_page_design_tree_round_trips() -> None:
+    """page.design.md: a page carrying a nested, styled DesignNode tree survives the wire exactly.
+    Serde is reflection-driven, so a recursive dataclass (`children: tuple[DesignNode, ...]`) plus a
+    `WidgetIntent | None` union round-trips with ZERO serde code change — this proves it, and that
+    the `token:`-prefixed style-string convention is preserved byte-for-byte."""
+    from kfforge.intake.schema import DesignNode, PageIntent, PersonaView, WidgetIntent
+
+    base = _full_spec()
+    design = DesignNode(
+        kind="container", name="page shell",
+        style=(("Container.Background", "#FCFAF2"), ("Container.Row.Gap", "16px"),
+               ("Container.Flex.Direction", "column")),
+        children=(
+            DesignNode(
+                kind="container", name="hero",
+                style=(("Container.Background", "#2E6B3B"), ("Container.Padding.Top", "32px")),
+                children=(
+                    DesignNode(kind="widget", name="hero title",
+                               style=(("Label.Color", "token:Color.White"),
+                                      ("Label.Font.Weight", "token:Font.Weight.SemiBold")),
+                               widget=WidgetIntent("general/label",
+                                                   config=(("title", "Submit your case"),))),
+                )),
+            DesignNode(
+                kind="container", name="card",
+                style=(("Container.Background", "#FFFFFF"),
+                       ("Container.Border.Top.Left.Radius", "14px")),
+                children=(
+                    DesignNode(kind="widget", name="form",
+                               widget=WidgetIntent("view/form",
+                                                   config=(("flow_type", "Process"),
+                                                           ("flow_id", "RepairJobs")))),
+                )),
+        ),
+    )
+    page = PageIntent(name="Submit", widgets=(), design=design)
+    view = PersonaView(role=base.roles.roles[0].name, pages=(page,), kpis=(), actions=())
+    spec = dataclasses.replace(base, personas=dataclasses.replace(base.personas, views=(view,)))
+
+    got = spec_from_dict(spec_to_dict(spec))
+    assert got == spec
+    rt_design = got.personas.views[0].pages[0].design
+    assert rt_design is not None
+    assert rt_design.children[0].children[0].style[0] == ("Label.Color", "token:Color.White")
+    assert rt_design.children[1].children[0].widget.slug == "view/form"
+    # a design-less page still round-trips with design=None (backward compatibility)
+    assert _full_spec().personas.views[0].pages[0].design is None
+
+
 def test_page_behavior_spec_compiles_and_is_now_governed() -> None:
     """#39 gave the vocabulary; #40 T2 governs it — a spec carrying popups + on-click wiring now
     compiles the behavior INTO the build_page op (no longer ignored), provided the wiring is legal

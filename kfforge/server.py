@@ -48,6 +48,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import hmac
+import os
 import re
 import secrets
 import tempfile
@@ -55,6 +56,7 @@ from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.server.middleware import Middleware
 
 from . import tools
 from .capabilities import search_capabilities
@@ -122,9 +124,18 @@ from .tools import _to_spec
 mcp = FastMCP("kissflow-forge")
 
 
-def _client() -> KfClient | Err:
-    cfg = KfConfig.from_env()
-    return cfg if isinstance(cfg, Err) else KfClient(cfg)
+def _client(app_id: str | None = None, require_app: bool = True) -> KfClient | Err:
+    # Which app this call targets: the per-call app_id (every app-scoped tool accepts one), else
+    # the KF_APP env as a single-app default. STATELESS by design — no server-side "current app"
+    # global, so one running process can serve many apps (and, under the multi-user HTTP model,
+    # many users) with zero risk of one call's app bleeding into another's.
+    cfg = KfConfig.from_env(app_id_override=app_id)
+    if isinstance(cfg, Err):
+        return cfg
+    if require_app and not cfg.app_id:
+        return Err("config", "no app selected — pass app_id (see forge_list_apps for valid ids), "
+                   "or set the KF_APP env var as a single-app default")
+    return KfClient(cfg)
 
 
 def _result(x: Any) -> dict[str, Any]:
@@ -162,7 +173,7 @@ def kf_get_flow_schema(flow_kind: str, flow_id: str, app_id: str | None = None) 
     `flow_id` is the page id — a page draft lives under its owning application, never a
     hard-coded KF_APP default; see CLAUDE.md Pages). `app_id` is ignored for every other kind.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     if flow_kind == "page":
@@ -180,13 +191,14 @@ def kf_apply_field_change(
     flow_id: str,
     changes: list[dict[str, Any]],
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only): add fields to a flow, verify by read-back, optionally publish.
 
     Idempotent — a field whose name already exists is skipped, never duplicated. Aborts with a
     conflict if the draft changed since it was read. Show kf_plan_field_change to a human first.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     specs = [_to_spec(ch) for ch in changes]
@@ -201,6 +213,7 @@ def kf_create_process(
     fields: list[dict[str, Any]],
     publish: bool = False,
     from_template: bool = True,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE (dev only): create a NEW process from zero — workflow steps + fields — and verify it.
 
@@ -210,7 +223,7 @@ def kf_create_process(
     `from_template=False` for the old behavior: Start, one UserTask per `steps` entry, Completed.
     A failed run cleans up after itself and leaves no half-built process behind.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     specs = [_to_spec(f) for f in fields]
@@ -230,6 +243,7 @@ def kf_set_step_visibility(
     flow_id: str,
     owners: dict[str, list[str]],
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only): rebuild a process's per-step section visibility.
 
@@ -237,7 +251,7 @@ def kf_set_step_visibility(
     no section-level permission, so this writes one Permission node per (field column x step).
     DESTRUCTIVE: every existing Permission on the flow is replaced. Snapshot the draft first.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     draft = c.get_draft("process", flow_id)
@@ -251,9 +265,13 @@ def kf_set_step_visibility(
 
 
 @mcp.tool()
-def kf_publish(flow_kind: str, flow_id: str) -> dict[str, Any]:
+def kf_publish(
+    flow_kind: str,
+    flow_id: str,
+    app_id: str | None = None,
+) -> dict[str, Any]:
     """LIVE publish (dev only): compile the flow's draft graph to its live version."""
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     got = c.publish(flow_kind, flow_id)  # type: ignore[arg-type]
@@ -269,9 +287,11 @@ def kf_publish(flow_kind: str, flow_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def forge_create_process(name: str, publish: bool = False, from_template: bool = True) -> dict[str, Any]:
-    """LIVE (dev only, KF_APP): create a new PROCESS shell — a scaffolded, publishable draft.
+def forge_create_process(name: str, publish: bool = False, from_template: bool = True,
+                         app_id: str | None = None) -> dict[str, Any]:
+    """LIVE (dev only): create a new PROCESS shell — a scaffolded, publishable draft.
 
+    `app_id` picks which application to build in (defaults to the session app / KF_APP env).
     `from_template=True` (default, issue #59 — "every process starts from a structure-clone")
     clones the process-template identity shell (shapes/process_template_identity_shell.json): the
     identity/initiate field block, layout, style chain, and a single "Manager Approve" step —
@@ -281,7 +301,7 @@ def forge_create_process(name: str, publish: bool = False, from_template: bool =
     run cleans up after itself (create_process archives+deletes the half-built shell rather than
     leaving it behind).
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(create_process(c, name, ("Draft",), [], publish=publish, from_template=from_template))
@@ -292,6 +312,7 @@ def forge_member_batch(
     target_flow_id: str,
     source_flow_id: str | None = None,
     kind: str = "process",
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE (dev only, KF_APP): grant AppRole members on `target_flow_id` — MEMBERS FIRST per
     CLAUDE.md Permissions (assignees cannot be written before members exist; publish then fails
@@ -307,7 +328,7 @@ def forge_member_batch(
     harvested=[]/role_ids=[] with an explanatory `note` rather than failing — a caller must be able
     to tell "nothing to grant yet" apart from a real error.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_member_batch(c, target_flow_id, source_flow_id, kind=kind))  # type: ignore[arg-type]
@@ -318,6 +339,7 @@ def forge_add_member_roles(
     target_flow_id: str,
     roles: dict[str, str],
     kind: str = "process",
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE (dev only, KF_APP): grant AppRoles onto `target_flow_id`, CREATING each role scoped to
     KF_APP first if it does not already exist there. `roles` is `{role_id: display_name}`; matching
@@ -329,7 +351,7 @@ def forge_add_member_roles(
     Returns `resolved` = `{display_name: a00_role_id}` so the caller can remap step->name onto
     step->a00_id for build_workflow's `roles=`/step assignees.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_member_roles(c, target_flow_id, roles, kind=kind))  # type: ignore[arg-type]
@@ -347,7 +369,7 @@ def forge_create_app_role(
     path prefer `forge_add_member_roles` (reuses an existing same-name role); this standalone is for
     explicit one-off creation. Returns the new role `_id`.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     rid = c.create_app_role(name, app_id)
@@ -357,14 +379,17 @@ def forge_create_app_role(
 
 
 @mcp.tool()
-def forge_delete_app_role(role_id: str) -> dict[str, Any]:
+def forge_delete_app_role(
+    role_id: str,
+    app_id: str | None = None,
+) -> dict[str, Any]:
     """LIVE (dev only): delete an AppRole by id. PROVEN live 2026-08-08: `DELETE /app_role/2/{acct}/
     {role_id}` -> 200 `{"status":"success"}`; re-GET 403s `RoleDoesNotExistsError`, confirming real
     deletion. Use to clean up throwaway roles from probes/failed builds. Verify deletion via the
     list route (`forge_list_app_roles`), never the delete response alone (CLAUDE.md Page DELETE
     warns the same soft-200 trap).
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     res = c.delete_app_role(role_id)
@@ -383,6 +408,7 @@ def forge_apply_fields(
     conditional_visibility: dict[str, dict[str, str]] | None = None,
     kind: str = "process",
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): add fields to a flow AND lay them out into named sections
     AND (optionally) attach validation/computed/conditional-visibility, in ONE guarded write — the
@@ -411,7 +437,7 @@ def forge_apply_fields(
     runtime toggle behavior is graph-verified only, not walked live). Every layer is independently
     read-back verified; a `missing` in any of them marks the whole result `isError`.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     specs = [_to_spec(f) for f in fields]
@@ -428,6 +454,7 @@ def forge_apply_layout(
     descriptions: dict[str, str] | None = None,
     kind: str = "process",
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): re-place every field at EXACT grid coordinates.
 
@@ -441,7 +468,7 @@ def forge_apply_layout(
     `descriptions` optionally sets each section's `Description` (plain string OR a serialized
     rich-text doc) in the SAME write — apply it together with the layout, not as a separate call.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     typed = {sec: [[tuple(t) for t in row] for row in rows] for sec, rows in layout.items()}
@@ -459,6 +486,7 @@ def forge_add_table(
     kind: str = "process",
     publish: bool = False,
     after_section: str | None = None,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): add a child table (a nested Model hosted by a Column, per
     CLAUDE.md "A TABLE is a nested Model, not a field type"). `columns` is `[[name, type], ...]` or
@@ -469,7 +497,7 @@ def forge_add_table(
     Section's root row — REQUIRED when the table has a banner section, or the stranded banner breaks
     the whole form's render (CLAUDE.md > Tables).
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     col_pairs = [(c[0], c[1], c[2] if len(c) > 2 else None) for c in columns]
@@ -482,6 +510,7 @@ def forge_compare_to_spec(
     flow_id: str,
     spec: dict[str, Any],
     kind: str = "process",
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE read-only (dev only, KF_APP): does the BUILT flow match what the INPUT asked for?
     (#16 — fidelity, not referential integrity: forge_doctor said `ok` on a build with wrong
@@ -492,7 +521,7 @@ def forge_compare_to_spec(
     inventory, stages/gateway-conditions/loop-gates. Wire this as its own build-order step after
     doctor — every mismatch is named, known-benign exclusions are declared in `ignored`.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     try:
@@ -509,6 +538,7 @@ def forge_compare_to_spec(
 def forge_create_list(
     name: str,
     values: list[str],
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): create-or-reuse a word list by NAME and SET its item
     values (#13, routes probed live 2026-08-12). A list is born LIVE — no publish step. Items
@@ -519,7 +549,7 @@ def forge_create_list(
     here). Lists holding personal data stay HUMAN-MADE (PDPA) — the spec path refuses to compile
     them into this tool; do not route one here by hand either.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_word_list(c, name, values))
@@ -537,6 +567,7 @@ def forge_add_sequence_number(
     end: int = 2,
     kind: str = "process",
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): add an auto-numbered item-id field (`Type:"SequenceNumber"`)
     in its own hidden row at the end of `section_name` (CLAUDE.md "SequenceNumber = auto-numbered
@@ -547,7 +578,7 @@ def forge_add_sequence_number(
     oracle's. `start`/`end` are the 6-unit grid coords of the hidden column. Idempotent. Call this
     AFTER forge_apply_layout so the section's rows are already placed.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_sequence_number(c, flow_id, field_name, section_name, prefix, padding,
@@ -561,6 +592,7 @@ def forge_add_field_validation(
     rules: dict[str, list[list[str]]],
     kind: str = "process",
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): attach per-field validation rules. `rules` is
     `{field_name: [[operator, value], ...]}`, e.g. `{"meeting link": [["CONTAINS", "microsoft"]]}`.
@@ -568,7 +600,7 @@ def forge_add_field_validation(
     (CLAUDE.md F7 — no formula/Expression AST, just a Condition per rule). Idempotent on
     (field, operator, value); a second rule on the same field appends to the existing Criteria.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     norm: dict[str, list[tuple[str, str]]] = {f: [(r[0], r[1]) for r in rs] for f, rs in rules.items()}
@@ -585,6 +617,7 @@ def forge_build_workflow(
     step_meta: dict[str, dict[str, Any]] | None = None,
     kind: str = "process",
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): replace the WHOLE workflow — Start -> steps ->
     [optional Parallel branches] -> End. `steps` is `[[name, role_id_or_null], ...]`. `roles` maps
@@ -600,7 +633,7 @@ def forge_build_workflow(
     (CLAUDE.md "build_workflow DELETES every Permission"). Callers MUST re-run
     forge_set_visibility immediately after this.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     step_tuples: list[tuple[str, str | None]] = [(s[0], s[1]) for s in steps]
@@ -621,6 +654,7 @@ def forge_add_goto_gate(
     branch_name: str | None = None,
     kind: str = "process",
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): add a backward-jump GotoTask targeting the step named
     `target_activity_name`, gated on the Boolean field named `field_name` (condition
@@ -636,7 +670,7 @@ def forge_add_goto_gate(
     whenever `target_activity_name` is not unique across branches; omit it for a plain root-chain
     (or otherwise unambiguous) target — unchanged from before this parameter existed.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_goto_gate(c, flow_id, target_activity_name, field_name,  # type: ignore[arg-type]
@@ -650,6 +684,7 @@ def forge_set_branch_conditions(
     branch_literals: dict[str, str],
     kind: str = "process",
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): make an existing Parallel's branches CONDITIONAL — each
     branch named in `branch_literals` fires only when the field named `field_name` equals that
@@ -674,7 +709,7 @@ def forge_set_branch_conditions(
     is never discovered later, exactly the failure mode Gate polarity already warns about for a
     loop, now for a switch.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_branch_conditions(c, flow_id, field_name, branch_literals,  # type: ignore[arg-type]
@@ -688,6 +723,7 @@ def forge_set_visibility(
     field_owners: dict[str, list[str]] | None = None,
     kind: str = "process",
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): rebuild a process's per-step visibility. `owners` maps a
     section NAME to the step names that own it — Editable there, Hidden before, ReadOnly after
@@ -702,7 +738,7 @@ def forge_set_visibility(
     matrix. Branch-aware: a branch-private field stays Hidden across a whole sibling branch, not
     ReadOnly-after-last-editable — the case the section rule alone gets wrong.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     draft = c.get_draft(kind, flow_id)  # type: ignore[arg-type]
@@ -723,13 +759,14 @@ def forge_set_events(
     events: dict[str, list[list[str]]],
     kind: str = "process",
     publish: bool = False,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): attach SDK field events (the formula-engine substitute — see
     CLAUDE.md Field events). `events` maps a field NAME to `[[trigger, script], ...]`. The editor's
     own two parse rules are enforced offline before any write: no top-level `await` (wrap in
     `(async () => {...})();`), and no `KFSDK` reference (only `kf` is injected).
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     conv = {name: [(t, s) for t, s in specs] for name, specs in events.items()}
@@ -744,6 +781,7 @@ def forge_set_styles(
     publish: bool = False,
     root_style: dict[str, Any] | None = None,
     hint_text_position: str | None = None,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): colour sections AND (optionally) the root Model's own
     Appearance/Style chain (#11). `styles` maps a section NAME to {property: value}; a value is
@@ -755,7 +793,7 @@ def forge_set_styles(
     wrong, so only pass one read off the live oracle (Color.Info.300, Color.Secondary.Ten.800,
     Color.Primary.500, Color.Transparent) or the builder's own dropdown.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_section_style(c, flow_id, styles, publish=publish, kind=kind,  # type: ignore[arg-type]
@@ -774,7 +812,7 @@ def forge_publish(kind: str, flow_id: str, app_id: str | None = None) -> dict[st
     — never trust the publish response alone (CLAUDE.md "THE RULE"); `isError` is set if the
     read-back status is not "Live".
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     if kind == "page":
@@ -807,6 +845,7 @@ def forge_publish(kind: str, flow_id: str, app_id: str | None = None) -> dict[st
 def forge_doctor(
     flow_id: str, kind: str = "process",
     visibility_role_claims: list[str] | None = None,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """Read-only health check (dev only, KF_APP): fetch the LIVE draft, harvest every Select
     field's REAL list options (CLAUDE.md: "never guess a literal — read it"), and run
@@ -815,7 +854,7 @@ def forge_doctor(
     dropped from the audit. Pass the plan's doctor-op `visibility_role_claims` through verbatim
     — each claim FAILs the audit (role-scoped visibility is API-impossible, #6/ADR-0004).
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(run_doctor(c, flow_id, kind=kind,  # type: ignore[arg-type]
@@ -829,7 +868,7 @@ def forge_create_page(app_id: str, name: str, publish: bool = False) -> dict[str
     response alone, per CLAUDE.md Page CRUD). Follow with forge_build_page to add content and
     forge_set_navigation to make it reachable.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(create_page_flow(c, app_id, name, publish=publish))
@@ -846,23 +885,26 @@ def forge_build_page(
     """LIVE write (dev only). TWO entries, exactly one required:
 
     `op` — the GOVERNED path (#41, ADR-0005): pass a compiled `build_page` op's args verbatim
-    (name/widgets/kpis/actions/popups/on_click from forge_plan_app). Creates-or-reuses the page
-    by name, builds widgets into the Body, popups with their own widgets, one button per action,
-    and the on-click EventMapping wiring (OpenPopup resolves the target popup id from this same
-    run). Every sub-item lands in built/skipped/refused + read-back verified/missing — a KPI is
-    skipped with its Known-Exclusion reason (#23), a dangling OpenPopup is refused (D6), never a
-    dead button.
+    (name/widgets/kpis/actions/popups/on_click/design from forge_plan_app). Creates-or-reuses the
+    page by name, builds its beautiful-page `design` tree into the Body (nested styled containers
+    wrapping the widgets — page.design.md), plus widgets, popups with their own widgets, one button
+    per action, and the on-click EventMapping wiring (OpenPopup resolves the target popup id from
+    this same run). Every sub-item lands in built/skipped/refused + read-back verified/missing — a
+    KPI is skipped with its Known-Exclusion reason (#23), a dangling OpenPopup or malformed design
+    is refused (D6), never a dead button or a silently-dropped design.
 
     `steps` + `page_id` — the raw primitive: each step is `{"kind": "container"|"widget"|
-    "popup"|"event"|"style"|"bind", "kwargs": {...}}` passed straight to the matching
+    "popup"|"event"|"style"|"bind"|"design", "kwargs": {...}}` passed straight to the matching
     kfforge.pages builder. A widget whose binding is load-bearing (view/*, report/*, metrics,
     masterdetail, repeater) REQUIRES its full config — THE RULE: a placeholder binding publishes
     clean and renders broken, so it is rejected offline, before any write. `"bind"` repairs an
     ALREADY-BUILT widget's FieldMapping Values in place (`{"host": <container id or name>,
     "config": {<FieldMapping Name>: <value>, ...}}`) — the primitive for fixing a live widget that
-    was added unbound (e.g. a `view/form` submit widget with no `flow_id` wired).
+    was added unbound (e.g. a `view/form` submit widget with no `flow_id` wired). `"design"`
+    (`{"parent_id": <container id>, "design": {<DesignNode tree>}}`) builds a whole nested styled
+    Container/Component tree from one design dict — the beautiful-page primitive (page.design.md).
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     if (op is None) == (steps is None):
@@ -891,7 +933,7 @@ def forge_set_navigation(
     ("same view for all roles", CLAUDE.md App pages — role -> Navigation binding lives OUTSIDE the
     app draft). `sweep=True` additionally drops any Menu no longer reachable from any Navigation.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_navigation(c, app_id, page_id, label, unify=unify, sweep=sweep,
@@ -899,7 +941,12 @@ def forge_set_navigation(
 
 
 @mcp.tool()
-def forge_share_report(flow_id: str, report_id: str, members: list[dict[str, Any]]) -> dict[str, Any]:
+def forge_share_report(
+    flow_id: str,
+    report_id: str,
+    members: list[dict[str, Any]],
+    app_id: str | None = None,
+) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): grant members on a flow REPORT (CLAUDE.md Permissions:
     "Flow REPORTS have the same member surface" as a flow — same member/batch body shape, Role
     "Member" ok). A report with zero members renders "You don't have access to this component" in
@@ -907,7 +954,7 @@ def forge_share_report(flow_id: str, report_id: str, members: list[dict[str, Any
     this is honestly reported as `verified: null` (not independently read-back checked), unlike
     every write-verifying tool above.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_report_members(c, flow_id, report_id, members))
@@ -920,6 +967,7 @@ def forge_simulate_case(
     poll: bool = True,
     poll_tries: int = 8,
     poll_delay: float = 0.9,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE (dev only, KF_APP): walk one item through the documented `/process` data-plane API —
     create, then per step fill-and-verify (never trusts a PUT 200 alone — a discarded/mismatched
@@ -942,7 +990,7 @@ def forge_simulate_case(
     does not always show a rolled-over activity context on the very next read. `poll_tries`/
     `poll_delay` mirror the proven reference implementation's own timing (8 tries, 0.9s apart).
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     plans = [
@@ -972,10 +1020,29 @@ def forge_create_app(name: str) -> dict[str, Any]:
     matrix). Deletion needs archive-first, same rule as a process; use
     forge_delete_flow(kind="application", ...).
     """
-    c = _client()
+    # Account-level create — needs NO app selected (this is how a user makes their FIRST app).
+    c = _client(require_app=False)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(create_application_verified(c, name))
+
+
+@mcp.tool()
+def forge_list_apps() -> dict[str, Any]:
+    """LIVE (dev only): list the applications this credential can see (`GET
+    /flow/2/{acct}/application`). Needs NO app selected — this is how a user discovers which
+    app_id to pass into the other app-scoped tools. Returns `apps` as a list of `{_id, Name}`.
+    """
+    c = _client(require_app=False)
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    got = c.list_applications()
+    if isinstance(got, Err):
+        return got.as_tool_result()
+    if not isinstance(got, list):
+        return Err("http", f"list_applications returned an unexpected shape: {got!r}").as_tool_result()
+    apps = [{"_id": a.get("_id"), "Name": a.get("Name")} for a in got]
+    return {"apps": apps, "count": len(apps), "isError": False}
 
 
 @mcp.tool()
@@ -986,7 +1053,10 @@ def forge_delete_flow(kind: str, flow_id: str, app_id: str | None = None) -> dic
     returns `{"status":"success"}` for ANY id, even a bogus one, and its draft GET still 200s
     afterward (storage lingers).
     """
-    c = _client()
+    # Deleting an APPLICATION is account-level (flow_id IS the app, routes are path-based) — it
+    # needs NO app selected, same as forge_create_app. Every other kind lives inside an app, so
+    # its delete route is app-scoped and an app must be resolvable (app_id / KF_APP).
+    c = _client(app_id, require_app=(kind != "application"))
     if isinstance(c, Err):
         return c.as_tool_result()
     return delete_anything(c, kind, flow_id, app_id=app_id)
@@ -1018,7 +1088,7 @@ def forge_add_role_users(
     `Members`/`UserCount`; `not_found` covers both a `user_query` with zero matches and a
     candidate that was written but failed to verify on read-back.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_add_role_users(c, role_id, user_query=user_query, user_ids=user_ids,
@@ -1026,7 +1096,13 @@ def forge_add_role_users(
 
 
 @mcp.tool()
-def forge_grant_tier(kind: str, flow_id: str, role_id: str, tier: str) -> dict[str, Any]:
+def forge_grant_tier(
+    kind: str,
+    flow_id: str,
+    role_id: str,
+    tier: str,
+    app_id: str | None = None,
+) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): grant an AppRole a named permission TIER on a flow
     (shapes/app_role_grant.json note 0, browser-proven 2026-08-12). `kind` is "process" (tiers:
     "No access" | "Initiate" | "Manage") or "case" (adds "Read-only" | "Edit"). "No access" is a
@@ -1034,21 +1110,26 @@ def forge_grant_tier(kind: str, flow_id: str, role_id: str, tier: str) -> dict[s
     itself the "Initiate" tier on a process. An unknown `(kind, tier)` pair is refused loudly,
     naming the valid set for that kind, rather than guessing the nearest tier.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_grant_tier(c, kind, flow_id, role_id, tier))  # type: ignore[arg-type]
 
 
 @mcp.tool()
-def forge_create_flow(kind: str, name: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+def forge_create_flow(
+    kind: str,
+    name: str,
+    extra: dict[str, Any] | None = None,
+    app_id: str | None = None,
+) -> dict[str, Any]:
     """LIVE (dev only, KF_APP): unified create for `kind` in process|form|list|dataset|case.
     process/form start Draft (build fields/workflow next); list/dataset/case are born LIVE, no
     publish step. `kind="case"` (a board) REQUIRES `extra={"item_type": "Board"|"Case", "prefix":
     <short string>}` — refused loudly before any write when either is missing (the write API
     itself 400s MissingRequiredFieldError on either omission).
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(create_flow_any(c, kind, name, extra))
@@ -1063,7 +1144,7 @@ def forge_publish_app(app_id: str) -> dict[str, Any]:
     note when absent, never guessed). Equivalent to `forge_publish(kind="application", ...)` plus
     this extra read-back.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(publish_application_verified(c, app_id))
@@ -1075,6 +1156,7 @@ def forge_dataset_records(
     op: str,
     record: dict[str, Any] | None = None,
     record_id: str | None = None,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE (dev only, KF_APP): the THIRD data-plane route family — dataform records (#50, #58).
     Distinct from the process item data plane and the word-list items route. Record KEYS accept a
@@ -1093,7 +1175,7 @@ def forge_dataset_records(
 
     No membership gate on a dataform (#50) — records work with zero members.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_dataset_records(c, flow_id, op, record, record_id))
@@ -1114,7 +1196,7 @@ def forge_set_role_preference(
     forge_add_role_users, so existing membership is never dropped by this call. Verified by
     re-reading the role's own `Preference` block.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_set_role_preference(c, role_id, default_page=default_page,
@@ -1131,7 +1213,7 @@ def forge_sweep(scope: str, app_id: str | None = None) -> dict[str, Any]:
     its item count + inventory), `error` (never swallowed), or `skipped` ("pages" only, when no
     app_id is available at all).
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return run_sweep(c, scope, app_id=app_id)
@@ -1180,7 +1262,7 @@ def forge_copilot_ask(
     caller's own bookkeeping — verification happens in forge_copilot_check, against a real graph
     read-back, never here.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_copilot_ask(c, app_id, message, expect=expect))
@@ -1204,7 +1286,7 @@ def forge_copilot_check(
     `landed_nodes` is a cheap top-level node-count per scattered flow, not a full semantic diff —
     follow up with kf_get_flow_schema/forge_compare_to_spec on a flagged flow id for that.
     """
-    c = _client()
+    c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_copilot_check(c, app_id, conversation_id,
@@ -1690,8 +1772,71 @@ def forge_plan_app(spec: dict[str, Any], approval_token: str) -> dict[str, Any]:
     }
 
 
+def _allowed_emails() -> frozenset[str]:
+    """Parse ALLOWED_EMAILS (comma/space-separated) into a lowercased set. Empty = allow ANY
+    authenticated org user (the domain lock from the OAuth consent screen is the only gate)."""
+    raw = os.environ.get("ALLOWED_EMAILS", "")
+    return frozenset(e.strip().lower() for e in re.split(r"[,\s]+", raw) if e.strip())
+
+
+class _EmailAllowlist(Middleware):
+    """App-level per-user gate on top of the OAuth domain lock. When ALLOWED_EMAILS is set,
+    every tool call is rejected unless the authenticated user's email is on the list. Empty
+    list = no-op (any user who passed OAuth is allowed). Defense in depth: even if the consent
+    screen is wider than intended, only listed users can invoke a tool."""
+
+    def __init__(self, allowed: frozenset[str]) -> None:
+        self._allowed = allowed
+
+    async def on_call_tool(self, context: Any, call_next: Any) -> Any:
+        if self._allowed:
+            from fastmcp.server.dependencies import get_access_token
+            from fastmcp.exceptions import AuthorizationError
+            tok = get_access_token()
+            email = str((tok.claims.get("email") if tok and tok.claims else "") or "").lower()
+            if email not in self._allowed:
+                raise AuthorizationError(
+                    f"{email or 'unknown user'} is not on the ALLOWED_EMAILS allowlist")
+        return await call_next(context)
+
+
+def _http_auth() -> Any:
+    """Google OAuth provider for HTTP transport — the identity gate claude.ai (Cowork)
+    authenticates each user against before the MCP touches the live Kissflow tenant. Lock
+    the org domain at the OAuth-client level (GCP Console consent screen = Internal). FAIL
+    CLOSED: this server WRITES to a live Kissflow tenant, so serving /mcp over HTTP without
+    auth = anyone can build/delete. If MCP_HTTP is set but the Google OAuth env is incomplete,
+    refuse to start rather than expose an unauthenticated write endpoint.
+    """
+    env = {k: os.environ.get(k) for k in
+           ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "SERVER_BASE_URL")}
+    missing = [k for k, v in env.items() if not v]
+    if missing:
+        raise SystemExit(
+            f"MCP_HTTP set but Google auth env missing: {', '.join(missing)} — refusing to "
+            "serve the live-tenant write API unauthenticated")
+    from fastmcp.server.auth.providers.google import GoogleProvider
+    return GoogleProvider(
+        client_id=env["GOOGLE_CLIENT_ID"],
+        client_secret=env["GOOGLE_CLIENT_SECRET"],
+        base_url=env["SERVER_BASE_URL"],
+        required_scopes=["openid", "email"],  # email = capture who logged in
+        # A stable signing key = FastMCP-issued JWTs survive a restart/redeploy (no forced
+        # re-login); unset = a fresh key each boot. Keep it in Secret Manager if set.
+        jwt_signing_key=os.environ.get("MCP_JWT_SIGNING_KEY"),
+        # ponytail: single Cloud Run instance (--min-instances=1 --session-affinity) so the
+        # default local token store is fine. Multi-instance needs a shared client_storage
+        # (Redis/GCS) or /authorize and /token can land on different instances and OAuth breaks.
+    )
+
+
 def main() -> None:
-    mcp.run()
+    if os.environ.get("MCP_HTTP"):
+        mcp.auth = _http_auth()
+        mcp.add_middleware(_EmailAllowlist(_allowed_emails()))
+        mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ from .schema import (
     TRIGGER_LIVE_CONFIRMED,
     AppSpec,
     ClickActionKind,
+    DesignNode,
     EventTrigger,
     FieldReq,
     OnClickAction,
@@ -45,6 +46,7 @@ from .schema import (
     WidgetIntent,
     trigger_for,
 )
+from .serde import to_wire
 
 # The proven build order (CLAUDE.md "Build order"), most foundational first. This is the ONE
 # place that ordering is encoded — `compile_spec` walks it to assemble `BuildPlan.ops`, so an op
@@ -679,16 +681,33 @@ def _api_impossible_row(slug: str) -> str | None:
     return None
 
 
+def _design_widgets(node: DesignNode) -> Iterable[WidgetIntent]:
+    """Every widget (a leaf `kind == "widget"` node's `WidgetIntent`) anywhere in a design tree,
+    depth-first. Used so a widget buried inside a beautiful-page design tree is governed by the
+    SAME slug/required-config/API-impossible cross-checks as a top-level or popup widget — a design
+    widget is not a loophole around them (page.design.md widgets are ordinary `view/*`/`general/*`
+    widgets, just wrapped in styled containers)."""
+    if node.kind == "widget" and node.widget is not None:
+        yield node.widget
+    for child in node.children:
+        yield from _design_widgets(child)
+
+
 def _page_widgets(page: PageIntent) -> Iterable[tuple[WidgetIntent, str]]:
-    """Every widget on a page — its top-level widgets AND every popup-hosted widget — each with a
-    human location string for a refusal message. #40 AC4: popup widgets are governed identically to
-    top-level ones, so an API-impossible or unknown-slug widget HIDDEN inside a popup is refused
-    naming its row, never escaping the cross-checks just because it sits one level deeper."""
+    """Every widget on a page — its top-level widgets, every popup-hosted widget, AND every widget
+    inside its beautiful-page `design` tree — each with a human location string for a refusal
+    message. #40 AC4: popup widgets are governed identically to top-level ones; the design tree gets
+    the same treatment (page.design.md), so an API-impossible or unknown-slug widget HIDDEN inside a
+    popup OR a design container is refused naming its row, never escaping the cross-checks just
+    because it sits one level deeper."""
     for w in page.widgets:
         yield w, f"page {page.name!r}"
     for popup in page.popups:
         for w in popup.widgets:
             yield w, f"popup {popup.name!r} on page {page.name!r}"
+    if page.design is not None:
+        for w in _design_widgets(page.design):
+            yield w, f"design on page {page.name!r}"
 
 
 def _check_no_api_impossible_widgets(spec: AppSpec) -> None:
@@ -739,6 +758,43 @@ def _check_widgets(spec: AppSpec) -> None:
                             f"{where} widget {w.slug!r} is missing required config "
                             f"{key!r} (kfforge.pages.WIDGET_REQUIRED_CONFIG)"
                         )
+
+
+def _check_page_design(spec: AppSpec) -> None:
+    """A page's beautiful-page `design` tree must be structurally well-formed BEFORE it reaches
+    `pages.build_design` at build time (which would otherwise fail loud only mid-build, after other
+    writes may have landed). Each node: `kind` in {"container","widget"}; a container carries no
+    `widget`; a widget carries a real `WidgetIntent` and no `children`. Widget SLUG / required-config
+    / API-impossible governance is already covered by `_check_widgets` / `_check_no_api_impossible_
+    widgets` via `_page_widgets` (which walks design widgets) — this check owns only the tree's own
+    container-vs-widget shape, named against the offending page and node."""
+    def walk(node: DesignNode, where: str) -> None:
+        if node.kind not in ("container", "widget"):
+            raise ValueError(
+                f"{where}: design node kind {node.kind!r} is not one of 'container'/'widget'"
+            )
+        if node.kind == "container":
+            if node.widget is not None:
+                raise ValueError(
+                    f"{where}: a design container ({node.name!r}) must not carry a widget — "
+                    "widgets are leaf 'widget' nodes"
+                )
+            for child in node.children:
+                walk(child, where)
+        else:  # widget
+            if node.children:
+                raise ValueError(
+                    f"{where}: a design widget ({node.name!r}) must not carry children — "
+                    "only 'container' nodes nest"
+                )
+            if node.widget is None:
+                raise ValueError(
+                    f"{where}: a design widget ({node.name!r}) has no WidgetIntent"
+                )
+    for view in spec.personas.views:
+        for page in view.pages:
+            if page.design is not None:
+                walk(page.design, f"page {page.name!r} design")
 
 
 def _check_on_click(spec: AppSpec) -> None:
@@ -894,6 +950,7 @@ _CROSS_CHECKS: tuple[Callable[[AppSpec], None], ...] = (
     _check_persona_roles,
     _check_no_api_impossible_widgets,   # B2 (#36) — ADR-0004, before the config check
     _check_widgets,
+    _check_page_design,                 # beautiful-page tree shape (page.design.md)
     _check_on_click,                    # #40 T2 — on-click referential integrity (the #39 gaps)
     _check_test_cases,
 )
@@ -1317,6 +1374,7 @@ def _op_build_page(spec: AppSpec) -> tuple[Op, ...]:
     widgets_by_page: dict[str, dict[tuple[str, tuple[tuple[str, str], ...]], WidgetIntent]] = {}
     popups_by_page: dict[str, dict[str, PopupIntent]] = {}
     events_by_page: dict[str, dict[tuple[Any, ...], OnClickAction]] = {}
+    designs_by_page: dict[str, DesignNode | None] = {}
     page_order: list[str] = []
     for view in spec.personas.views:
         for page in view.pages:
@@ -1333,6 +1391,10 @@ def _op_build_page(spec: AppSpec) -> tuple[Op, ...]:
             event_bucket = events_by_page.setdefault(page.name, {})
             for e in page.on_click:
                 event_bucket.setdefault((e.action, e.kind, e.target_popup, e.script), e)
+            # A shared page keeps the FIRST non-None design seen (mirrors how widgets dedupe): a
+            # page's beautiful-page tree is a property of the page, not of the role viewing it.
+            if designs_by_page.get(page.name) is None:
+                designs_by_page[page.name] = page.design
     return tuple(
         Op(kind="build_page",
            args={
@@ -1342,9 +1404,12 @@ def _op_build_page(spec: AppSpec) -> tuple[Op, ...]:
                "actions": tuple(sorted(actions_by_page.get(name, ()))),
                "popups": tuple(_popup_args(p) for p in popups_by_page[name].values()),
                "on_click": tuple(_event_args(e) for e in events_by_page[name].values()),
+               # The beautiful-page tree (page.design.md), as the plain wire dict pages.build_design
+               # consumes — None when the page declares no design (flat-widget build, unchanged).
+               "design": to_wire(designs_by_page[name]) if designs_by_page.get(name) else None,
            },
-           why=f"container/component graph for {name!r}'s widgets, KPIs, actions, popups, and "
-               f"on-click behavior (a button that opens a popup / runs a script)")
+           why=f"container/component graph for {name!r}'s widgets, KPIs, actions, popups, "
+               f"on-click behavior, and (if any) its beautiful-page design tree")
         for name in page_order
     )
 

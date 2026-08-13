@@ -34,14 +34,30 @@ def test_no_kfmcp_references():
 
 
 def test_client_requires_explicit_app(monkeypatch):
+    """App is no longer required at config load — it can be chosen per call (app_id) or at
+    runtime (forge_use_app). But an app IS still required to actually build: the guard moved to
+    the _client() chokepoint, which fails loud (require_app=True) when no app is resolvable."""
+    import kfforge.server as srv
     from kfforge.client import Err, KfConfig
     monkeypatch.setenv("KF_DEV_ACCESS_KEY_ID", "k")
     monkeypatch.setenv("KF_DEV_ACCESS_KEY_SECRET", "s")
     monkeypatch.setenv("KF_DEV_ACCOUNT_ID", "a")
     monkeypatch.setenv("KF_DEV_DOMAIN", "dev-example.test")
     monkeypatch.delenv("KF_APP", raising=False)
+
+    # config load now succeeds with an empty app_id (no boot-time lock)
     cfg = KfConfig.from_env()
-    assert isinstance(cfg, Err) and "KF_APP" in cfg.message
+    assert isinstance(cfg, KfConfig) and cfg.app_id == ""
+    # a per-call override flows through
+    overridden = KfConfig.from_env(app_id_override="App_X")
+    assert isinstance(overridden, KfConfig) and overridden.app_id == "App_X"
+    # but building a client for a build tool still refuses without a resolved app
+    guarded = srv._client()
+    assert isinstance(guarded, Err) and "app" in guarded.message.lower()
+    # the discovery path (list/use app) is allowed with no app selected
+    assert not isinstance(srv._client(require_app=False), Err)
+    # and a per-call app_id satisfies the guard
+    assert not isinstance(srv._client("App_X"), Err)
 
 
 def test_server_exposes_original_8_tools():
