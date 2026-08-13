@@ -1949,6 +1949,18 @@ def apply_changes(draft: Draft, changes: list[FieldSpec]) -> Draft:
             field_node.update(spec.options)  # opt-in per-type keys, written verbatim
         new[fid] = field_node
 
+        # A User field needs a sibling QueryDefinition or the whole batch fails to PUBLISH
+        # (KISSFLOW_ERROR_04211 — a BARE Field{Type:"User"} is the blocker, CLAUDE.md #59 /
+        # shapes/field_user_reference.json). LHSModel is "User" (account directory) by default;
+        # override to "_employee" (or another live source) via options["LHSModel"] — it belongs on
+        # the QueryDefinition, so it must NOT stay on the Field node.
+        if ft is FieldType.USER:
+            lhs = field_node.pop("LHSModel", "User")
+            qid = _new_id("QueryDefinition", model_id, i, spec.name)
+            new[qid] = {"Id": qid, "Kind": "QueryDefinition", "Field": fid,
+                        "FlowType": "User", "LHSModel": lhs, "LookupField": []}
+            field_node["Field::QueryDefinition"] = [qid]
+
         model.setdefault("Model::Field", []).append(fid)
 
     return new

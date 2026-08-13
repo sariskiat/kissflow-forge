@@ -58,6 +58,32 @@ def test_input_not_mutated():
     assert draft[MODEL_ID]["Model::Field"] == ["field_fullname_a001"], "apply_changes must not mutate its input"
 
 
+def test_user_field_gets_a_querydefinition_sibling():
+    """A bare Field{Type:"User"} blocks publish (KISSFLOW_ERROR_04211, #59). apply_changes must
+    mint the sibling QueryDefinition and cross-link it, so the batch publishes."""
+    new = apply_changes(_load(), [FieldSpec(name="Assigned To", type=FieldType.USER)])
+    fid = next(k for k, v in new.items()
+               if isinstance(v, dict) and v.get("Type") == "User")
+    field = new[fid]
+    qids = field["Field::QueryDefinition"]
+    assert len(qids) == 1
+    qd = new[qids[0]]
+    assert qd["Kind"] == "QueryDefinition"
+    assert qd["FlowType"] == "User" and qd["LHSModel"] == "User"
+    assert qd["Field"] == fid          # back-ref points home
+    assert "LHSModel" not in field     # LHSModel belongs on the QueryDefinition, not the Field
+
+
+def test_user_field_lhsmodel_override_lands_on_the_querydefinition():
+    new = apply_changes(_load(), [FieldSpec(
+        name="Employee", type=FieldType.USER, options={"LHSModel": "_employee"})])
+    fid = next(k for k, v in new.items()
+               if isinstance(v, dict) and v.get("Type") == "User")
+    qd = new[new[fid]["Field::QueryDefinition"][0]]
+    assert qd["LHSModel"] == "_employee"
+    assert "LHSModel" not in new[fid]
+
+
 def test_unknown_type_rejected_before_mutation():
     draft = _load()
     with pytest.raises((ValueError, TypeError, KeyError)):
@@ -916,6 +942,12 @@ def test_add_goto_task_can_pair_with_build_goto_gate_and_reads_clean() -> None:
     from kfforge.verify import doctor
 
     draft, _pd_id, review_id = _process_with_review_step()
+    # A real step needs an assignee or doctor (correctly) flags it as a submit-500 — wire one so
+    # this assertion tests the goto/gate loop, not the separately-covered assignee rule.
+    draft["Resource_ReviewAssignee"] = {
+        "Id": "Resource_ReviewAssignee", "Kind": "Resource", "ValueType": "AppRole",
+        "Value": "Role_Test", "Activity": review_id}
+    draft[review_id]["Activity::Resource"] = ["Resource_ReviewAssignee"]
     draft = apply_changes(draft, [FieldSpec(name="Done Flag", type=FieldType.BOOLEAN)])
     field_id = next(k for k, v in draft.items()
                     if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Done Flag")

@@ -48,6 +48,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -57,6 +58,8 @@ from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.tools.tool import ToolResult
 
 from . import tools
 from .capabilities import search_capabilities
@@ -122,6 +125,54 @@ from .pages_live import (
 from .tools import _to_spec
 
 mcp = FastMCP("kissflow-forge")
+
+
+# Some MCP clients (observed live: Cowork) serialize nested object/array tool args as a JSON
+# STRING instead of a native object, so Pydantic rejects them with `dict_type`/`list_type` before
+# our code ever runs — a client-compat bug, not a schema bug (our schemas are correct `anyOf
+# [object|null]`). This middleware json.loads a string arg back into structure when, and only when,
+# that param's schema actually wants an object or array. Covers every tool, present and future.
+def _wants_structured(schema: object) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    if schema.get("type") in ("object", "array"):
+        return True
+    for key in ("anyOf", "oneOf", "allOf"):
+        for sub in schema.get(key, []):
+            if _wants_structured(sub):
+                return True
+    return False
+
+
+class _CoerceJsonStringArgs(Middleware):
+    def __init__(self, server: FastMCP) -> None:
+        self._server = server  # explicit dep, not the module global — testable against a fake
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[Any],
+        call_next: CallNext[Any, ToolResult],
+    ) -> ToolResult:
+        args = getattr(context.message, "arguments", None)
+        if args:
+            try:
+                tool = await self._server.get_tool(context.message.name)
+                props: dict[str, Any] = (tool.parameters or {}).get("properties", {})
+            except Exception as e:  # noqa: BLE001 — degrade to no-coercion, but say so
+                print(f"[kfforge] arg-coerce: get_tool({context.message.name!r}) failed, "
+                      f"skipping coercion: {e!r}", file=sys.stderr, flush=True)
+                props = {}
+            for k, v in list(args.items()):
+                if isinstance(v, str) and v.strip()[:1] in ("{", "[") \
+                        and _wants_structured(props.get(k)):
+                    try:
+                        args[k] = json.loads(v)
+                    except ValueError:
+                        pass  # genuine string that merely looks like JSON — leave it
+        return await call_next(context)
+
+
+mcp.add_middleware(_CoerceJsonStringArgs(mcp))
 
 
 def _client(app_id: str | None = None, require_app: bool = True) -> KfClient | Err:

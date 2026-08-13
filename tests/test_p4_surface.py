@@ -485,6 +485,23 @@ def test_copilot_ask_no_match_yet_is_not_an_error() -> None:
     assert isinstance(rep, CopilotAskReport)
     assert rep.conversation_id is None and rep.immediate_reply is None
     assert rep.as_tool_result()["isError"] is False
+    # a null id must explain WHY — "pending" (normal), so a caller doesn't read it as broken
+    assert rep.status.startswith("pending")
+
+
+def test_copilot_ask_surfaces_a_read_failure_instead_of_a_silent_null() -> None:
+    """A copilot_conversations READ error must not read back identical to 'not registered yet' —
+    both were null/null before, which made a caller conclude the tool was broken. Fail loud."""
+    from kfforge.client import Err
+
+    class _ReadFails(CopilotClient):
+        def copilot_conversations(self, app_id):  # type: ignore[override]
+            return Err("http", "boom", status=500)
+
+    rep = apply_copilot_ask(_ReadFails(), "App1", "add a field")
+    assert isinstance(rep, CopilotAskReport)
+    assert rep.conversation_id is None
+    assert rep.status.startswith("read_failed") and "boom" in rep.status
 
 
 def test_copilot_ask_echoes_expect_hint() -> None:

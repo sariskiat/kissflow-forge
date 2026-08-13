@@ -251,8 +251,16 @@ class KfClient:
             page += 1
         if app_id is None:
             return out
-        return [r for r in out if isinstance(r, dict) and any(
-            isinstance(a, dict) and a.get("_id") == app_id for a in (r.get("Applications") or []))]
+        # Scope match on EITHER signal: the `Applications[]` list OR the top-level `_application_id`
+        # scalar (both are documented list-record keys). A role freshly created via `create_app_role`
+        # (POST with `_application_id`) carries the scalar but may not populate `Applications[]` —
+        # checking only the list dropped it, which made apply_member_roles create a DUPLICATE role
+        # on re-run and read the just-granted role back as falsely `missing` (Cowork bug report
+        # 2026-08-13; the scalar-only hypothesis is inferred from the symptom, live-recheck owed).
+        return [r for r in out if isinstance(r, dict) and (
+            r.get("_application_id") == app_id
+            or any(isinstance(a, dict) and a.get("_id") == app_id
+                   for a in (r.get("Applications") or [])))]
 
     def get_app_role(self, role_id: str) -> dict[str, Any] | Err:
         """One AppRole's own detail, including its `Members` list — which `list_app_roles` never
@@ -2826,15 +2834,18 @@ class CopilotAskReport:
     conversation_id: str | None
     immediate_reply: str | None
     expect: tuple[str, ...]
+    status: str = "matched"  # "matched" | "pending: ..." | "read_failed: ..." — WHY id is null
 
     def as_tool_result(self) -> dict[str, Any]:
         return {
             "app_id": self.app_id, "message": self.message,
             "conversation_id": self.conversation_id, "immediate_reply": self.immediate_reply,
             "expect": list(self.expect), "reply_is_proof": False,
+            "status": self.status,
             "note": "reply text is NEVER proof of success — structural builds land ~70s later, "
                    "not immediately; call forge_copilot_check after a real delay and diff the "
-                   "actual graph before trusting anything landed (THE RULE)",
+                   "actual graph before trusting anything landed (THE RULE). A null "
+                   "conversation_id with status 'pending' is EXPECTED, not a failure.",
             "isError": False,
         }
 
@@ -2863,15 +2874,23 @@ def apply_copilot_ask(
     convs = client.copilot_conversations(app_id)
     conversation_id: str | None = None
     reply: str | None = None
-    if not isinstance(convs, Err):
+    if isinstance(convs, Err):
+        # Fail loud, never a silent null: a READ failure must not read back identical to "message
+        # not registered yet" — that is exactly what made a caller conclude the tool was broken
+        # when it got null/null five times (Cowork bug report 2026-08-13).
+        status = f"read_failed: {convs.kind}: {convs.message}"
+    else:
         for c in convs:
             if isinstance(c, dict) and c.get("UserMessage") == message:
                 conversation_id = c.get("ConversationId")
                 reply = c.get("SystemMessage")
                 break
+        status = ("matched" if conversation_id else
+                  "pending: your message is not in the thread yet — this is NORMAL, the copilot "
+                  "lags ~70s; call forge_copilot_check after a real delay, do not retry the ask")
 
     return CopilotAskReport(app_id=app_id, message=message, conversation_id=conversation_id,
-                            immediate_reply=reply, expect=tuple(expect or ()))
+                            immediate_reply=reply, expect=tuple(expect or ()), status=status)
 
 
 def _flow_id_inventory(client: KfClient) -> dict[str, list[str]] | Err:

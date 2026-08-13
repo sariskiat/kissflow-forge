@@ -162,6 +162,56 @@ def test_goto_gate_on_optional_select_flagged(clean_draft: Draft) -> None:
     assert any("optional Select" in p for p in report.problems)
 
 
+def test_usertask_without_assignee_flagged(clean_draft: Draft) -> None:
+    """A UserTask with no assignee Resource 500s on submit (CLAUDE.md Members first). The clean
+    draft has assignees on every step; strip one and the doctor must catch it."""
+    d = copy.deepcopy(clean_draft)
+    tasks = _nodes_of(d, NodeType="UserTask")
+    assert tasks, "fixture must have at least one UserTask"
+    victim = tasks[0]
+    del victim["Activity::Resource"]
+
+    report = doctor(d)
+    assert any("no AppRole assignee" in p and victim["Name"] in p for p in report.problems)
+
+
+def test_usertask_with_user_typed_assignee_flagged(clean_draft: Draft) -> None:
+    """A Resource with ValueType:"User" publishes but is IGNORED at runtime (CLAUDE.md Members
+    first) — it reads as assigned yet still 500s on submit, so the doctor must still flag it."""
+    d = copy.deepcopy(clean_draft)
+    victim = _nodes_of(d, NodeType="UserTask")[0]
+    (res_id,) = victim["Activity::Resource"]
+    d[res_id]["ValueType"] = "User"          # persists + publishes, but runtime ignores it
+
+    report = doctor(d)
+    assert any("no AppRole assignee" in p and victim["Name"] in p for p in report.problems)
+
+
+def test_suspended_usertask_without_assignee_not_flagged(clean_draft: Draft) -> None:
+    """A suspended step is walked past at runtime, so its missing assignee never bites — the doctor
+    must NOT flag it (mirrors CLAUDE.md's IsSuspended semantics)."""
+    d = copy.deepcopy(clean_draft)
+    victim = _nodes_of(d, NodeType="UserTask")[0]
+    del victim["Activity::Resource"]
+    victim["IsSuspended"] = True
+
+    report = doctor(d)
+    assert not any("has no assignee" in p for p in report.problems)
+
+
+def test_bare_user_field_flagged(clean_draft: Draft) -> None:
+    """A Field{Type:"User"} with no QueryDefinition sibling blocks publish (#59). The doctor must
+    catch it before the publish 04211s."""
+    d = copy.deepcopy(clean_draft)
+    (field_id,) = [k for k, v in d.items()
+                   if isinstance(v, dict) and v.get("Kind") == "Field"][:1]
+    d[field_id]["Type"] = "User"                 # make an existing field a bare User field
+    d[field_id].pop("Field::QueryDefinition", None)
+
+    report = doctor(d)
+    assert any("no QueryDefinition sibling" in p for p in report.problems)
+
+
 # ---- 5. sparse matrix must ignore a table host column ------------------------
 
 def test_table_host_column_is_not_counted_sparse(clean_draft: Draft) -> None:

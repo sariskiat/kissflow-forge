@@ -13,6 +13,7 @@ Fully offline — NO live credentials, no network:
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -170,6 +171,34 @@ def test_kf_list_field_types_round_trips_through_the_real_mcp_protocol() -> None
 
     data = asyncio.run(_run())
     assert "Text" in data
+
+
+@pytest.mark.parametrize("tool_name, args", [
+    # every nested object/array param a client (Cowork) was seen to stringify — all 4 reported-broken
+    # calls (#1/#2/#8), not just `sections`. The VALUE is a JSON STRING, as Cowork sends it.
+    ("forge_apply_fields",
+     {"flow_id": "FAKE", "fields": [], "sections": json.dumps({"Case Info": ["A", "B"]})}),
+    ("forge_create_flow",
+     {"kind": "case", "name": "N", "extra": json.dumps({"item_type": "Board", "prefix": "CS"})}),
+    ("forge_build_page",
+     {"app_id": "A", "page_id": "P", "steps": json.dumps([{"kind": "container", "kwargs": {}}])}),
+    ("forge_build_page", {"app_id": "A", "op": json.dumps({"name": "P"})}),
+])
+def test_stringified_structured_arg_is_coerced_not_rejected(tool_name: str, args: dict) -> None:
+    """The _CoerceJsonStringArgs middleware must json.loads a stringified object/array arg back so
+    Pydantic doesn't reject it with `dict_type`/`list_type` before our own code runs. Proven for
+    EVERY affected tool through the real call_tool path (a plain function call bypasses middleware).
+    Coercion success = we reach our own graceful config path, never a schema-validation error."""
+    from fastmcp import Client
+
+    async def _run() -> str:
+        async with Client(srv.mcp) as client:
+            result = await client.call_tool(tool_name, args)
+        return str(result.content)
+
+    txt = asyncio.run(_run())
+    assert "dict_type" not in txt and "list_type" not in txt, txt
+    assert "missing env var" in txt  # reached our own code, not rejected at the schema boundary
 
 
 # ---- 3. every forge_* tool fails gracefully with no live credentials --------------------------

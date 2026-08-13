@@ -274,6 +274,38 @@ def doctor(
     if gaps:
         problems.append(f"permission matrix is sparse: {gaps} (unit, step) pairs unset")
 
+    # 6. a UserTask with no assignee  <- submit 500s with a generic, non-diagnostic processError
+    # (CLAUDE.md Members first: "membership alone is not enough — the step also needs a real
+    # ASSIGNEE"). Only UserTask takes an assignee — a StartEvent is gated by InitiateItems
+    # membership, an EndEvent is terminal, neither carries a Resource. A suspended step is walked
+    # past at runtime, so its missing assignee never bites; skip it. The assignee is a Resource with
+    # a real Value on the step's Activity::Resource.
+    real_steps = [(k, v) for k, v in N.items() if v.get("Kind") == "Activity"
+                  and v.get("NodeType") == "UserTask" and not v.get("IsSuspended")]
+    checked["step_assignees"] = len(real_steps)
+    for _aid, v in real_steps:
+        res_ids = v.get("Activity::Resource") or []
+        # Must be an AppRole assignee with a real Value. A ValueType:"User" Resource publishes but
+        # is SILENTLY IGNORED at runtime (CLAUDE.md Members first: "use AppRole for assignees, not
+        # User") — it reads as assigned but still 500s on submit, the exact class this rule catches.
+        if not any((N.get(r) or {}).get("Value")
+                   and (N.get(r) or {}).get("ValueType") == "AppRole" for r in res_ids):
+            problems.append(
+                f"step {v.get('Name')!r} has no AppRole assignee — submit will 500 (CLAUDE.md "
+                f"Members first: wire a Resource with ValueType 'AppRole' on every step)")
+
+    # 7. a bare User field with no sibling QueryDefinition  <- blocks PUBLISH outright
+    # (KISSFLOW_ERROR_04211, CLAUDE.md #59 / shapes/field_user_reference.json). apply_changes mints
+    # the sibling for engine-built User fields, but a template-cloned or hand-built one may lack it.
+    user_fields = [v for v in N.values() if v.get("Kind") == "Field" and v.get("Type") == "User"]
+    checked["user_fields"] = len(user_fields)
+    for f in user_fields:
+        qids = f.get("Field::QueryDefinition") or []
+        if not any((N.get(q) or {}).get("Kind") == "QueryDefinition" for q in qids):
+            problems.append(
+                f"User field {f.get('Name')!r} has no QueryDefinition sibling — publish will fail "
+                f"(KISSFLOW_ERROR_04211, CLAUDE.md #59)")
+
     return DoctorReport(
         problems=tuple(problems),
         checked=checked,

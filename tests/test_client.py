@@ -138,8 +138,12 @@ class FakeClient(KfClient):
     def list_app_roles(self, app_id=None):  # type: ignore[override]
         if app_id is None:
             return list(self.app_roles)
+        # mirror the REAL KfClient.list_app_roles scope match: either the top-level
+        # `_application_id` scalar OR an `Applications[]` entry (a created role may carry only the
+        # scalar — the bug apply_member_roles used to duplicate on).
         return [r for r in self.app_roles
-               if app_id in {a.get("_id") for a in (r.get("Applications") or [])}]
+                if r.get("_application_id") == app_id
+                or app_id in {a.get("_id") for a in (r.get("Applications") or [])}]
 
     def get_app_role(self, role_id):  # type: ignore[override]
         return next((r for r in self.app_roles if r.get("_id") == role_id), {"_id": role_id})
@@ -822,6 +826,25 @@ def test_apply_member_roles_reuses_existing_same_name_role_and_grants() -> None:
     assert rep.note is not None and "created 0" not in rep.note  # nothing created, reused instead
 
 
+def test_apply_member_roles_reuses_a_scalar_scoped_role_no_duplicate() -> None:
+    """The Cowork bug (#6) end to end: an existing same-name role scoped ONLY by the top-level
+    `_application_id` scalar (no `Applications[]` entry) must be REUSED, not duplicated, and it must
+    read back verified, not `missing`. Before the scope-filter fix, apply_member_roles never saw
+    its own role, created a second one, and reported the grant `missing`."""
+    c = FakeClient(_bare_process_draft())
+    c.app_roles = [{"_id": "RoScalar", "Name": "Admin", "_application_id": c._cfg.app_id,
+                    "Applications": []}]  # scalar-only scope, empty Applications
+    before = len(c.app_roles)
+
+    rep = apply_member_roles(c, "F_target", {"RoForeign": "Admin"})
+    assert isinstance(rep, MemberReport)
+    assert len(c.app_roles) == before, "must REUSE the scalar-scoped role, not create a duplicate"
+    assert rep.role_ids == ("RoScalar",)
+    assert rep.missing == () and "RoScalar" in rep.verified
+    assert rep.as_tool_result()["isError"] is False
+    assert rep.note is not None and "created 0" not in rep.note
+
+
 def test_apply_member_roles_creates_missing_role_scoped_to_app_then_grants() -> None:
     c = FakeClient(_bare_process_draft())
     c.app_roles = []  # nothing exists yet -> both must be created scoped to KF_APP
@@ -1068,6 +1091,21 @@ def test_list_app_roles_filters_on_applications_dict_id_not_bare_string() -> Non
     c = _AppRoleRouteClient([roles])
     got = c.list_app_roles("App1")
     assert [r["_id"] for r in got] == ["RoA"]
+
+
+def test_list_app_roles_matches_on_top_level_application_id_scalar() -> None:
+    """A role freshly created via create_app_role (POST with `_application_id`) may carry the
+    top-level `_application_id` scalar but an EMPTY `Applications[]`. The scope filter must still
+    match it — else apply_member_roles never sees its own just-created role, creates a DUPLICATE on
+    re-run, and reads the grant back as falsely `missing` (Cowork bug report 2026-08-13)."""
+    roles = [
+        {"_id": "RoScalar", "Name": "Admin", "_application_id": "App1", "Applications": []},
+        {"_id": "RoList", "Name": "B", "Applications": [{"_id": "App1", "Type": "Application"}]},
+        {"_id": "RoOther", "Name": "C", "_application_id": "App2", "Applications": []},
+    ]
+    c = _AppRoleRouteClient([roles])
+    got = c.list_app_roles("App1")
+    assert sorted(r["_id"] for r in got) == ["RoList", "RoScalar"]
 
 
 def test_list_app_roles_propagates_transport_err() -> None:
