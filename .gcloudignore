@@ -1,0 +1,28 @@
+# Controls what `gcloud run deploy --source .` uploads to Cloud Build.
+# gcloud ignores .dockerignore for the UPLOAD step — it reads THIS file — so the secret/blindness
+# exclusions must be repeated here or .env would be transmitted to Cloud Build. Keep in sync with
+# .dockerignore (which then controls what the image COPYs).
+
+# Secrets — never upload (Cloud Run injects env from Secret Manager at runtime).
+.env
+.env.*
+*.pem
+*.key
+
+# Blindness / local-only tenant traces.
+HANDOFF.md
+image*.png
+kissflowfield-info-gatherlist/
+.vscode/
+
+# Not needed for the build.
+.git/
+.github/
+tests/
+docs/adr/
+docs/research/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
