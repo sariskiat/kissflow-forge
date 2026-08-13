@@ -51,12 +51,12 @@ import hmac
 import os
 import re
 import secrets
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.server.middleware import Middleware
 
 from . import tools
 from .capabilities import search_capabilities
@@ -1772,68 +1772,14 @@ def forge_plan_app(spec: dict[str, Any], approval_token: str) -> dict[str, Any]:
     }
 
 
-def _allowed_emails() -> frozenset[str]:
-    """Parse ALLOWED_EMAILS (comma/space-separated) into a lowercased set. Empty = allow ANY
-    authenticated org user (the domain lock from the OAuth consent screen is the only gate)."""
-    raw = os.environ.get("ALLOWED_EMAILS", "")
-    return frozenset(e.strip().lower() for e in re.split(r"[,\s]+", raw) if e.strip())
-
-
-class _EmailAllowlist(Middleware):
-    """App-level per-user gate on top of the OAuth domain lock. When ALLOWED_EMAILS is set,
-    every tool call is rejected unless the authenticated user's email is on the list. Empty
-    list = no-op (any user who passed OAuth is allowed). Defense in depth: even if the consent
-    screen is wider than intended, only listed users can invoke a tool."""
-
-    def __init__(self, allowed: frozenset[str]) -> None:
-        self._allowed = allowed
-
-    async def on_call_tool(self, context: Any, call_next: Any) -> Any:
-        if self._allowed:
-            from fastmcp.server.dependencies import get_access_token
-            from fastmcp.exceptions import AuthorizationError
-            tok = get_access_token()
-            email = str((tok.claims.get("email") if tok and tok.claims else "") or "").lower()
-            if email not in self._allowed:
-                raise AuthorizationError(
-                    f"{email or 'unknown user'} is not on the ALLOWED_EMAILS allowlist")
-        return await call_next(context)
-
-
-def _http_auth() -> Any:
-    """Google OAuth provider for HTTP transport — the identity gate claude.ai (Cowork)
-    authenticates each user against before the MCP touches the live Kissflow tenant. Lock
-    the org domain at the OAuth-client level (GCP Console consent screen = Internal). FAIL
-    CLOSED: this server WRITES to a live Kissflow tenant, so serving /mcp over HTTP without
-    auth = anyone can build/delete. If MCP_HTTP is set but the Google OAuth env is incomplete,
-    refuse to start rather than expose an unauthenticated write endpoint.
-    """
-    env = {k: os.environ.get(k) for k in
-           ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "SERVER_BASE_URL")}
-    missing = [k for k, v in env.items() if not v]
-    if missing:
-        raise SystemExit(
-            f"MCP_HTTP set but Google auth env missing: {', '.join(missing)} — refusing to "
-            "serve the live-tenant write API unauthenticated")
-    from fastmcp.server.auth.providers.google import GoogleProvider
-    return GoogleProvider(
-        client_id=env["GOOGLE_CLIENT_ID"],
-        client_secret=env["GOOGLE_CLIENT_SECRET"],
-        base_url=env["SERVER_BASE_URL"],
-        required_scopes=["openid", "email"],  # email = capture who logged in
-        # A stable signing key = FastMCP-issued JWTs survive a restart/redeploy (no forced
-        # re-login); unset = a fresh key each boot. Keep it in Secret Manager if set.
-        jwt_signing_key=os.environ.get("MCP_JWT_SIGNING_KEY"),
-        # ponytail: single Cloud Run instance (--min-instances=1 --session-affinity) so the
-        # default local token store is fine. Multi-instance needs a shared client_storage
-        # (Redis/GCS) or /authorize and /token can land on different instances and OAuth breaks.
-    )
-
-
 def main() -> None:
     if os.environ.get("MCP_HTTP"):
-        mcp.auth = _http_auth()
-        mcp.add_middleware(_EmailAllowlist(_allowed_emails()))
+        # Google OAuth removed by request: this HTTP endpoint is UNAUTHENTICATED and writes to a
+        # live Kissflow tenant, so it MUST be protected at the network layer (private ingress /
+        # IAM / VPC). Anyone who can reach the URL can build or delete. Warn loudly, never silent.
+        print("WARNING: MCP_HTTP serving WITHOUT app auth — the live-tenant write API is open to "
+              "anyone who can reach this URL. Protect it at the network layer.",
+              file=sys.stderr, flush=True)
         mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
     else:
         mcp.run()
