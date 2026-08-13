@@ -387,10 +387,13 @@ def forge_apply_fields(
     """LIVE write (dev only, KF_APP): add fields to a flow AND lay them out into named sections
     AND (optionally) attach validation/computed/conditional-visibility, in ONE guarded write — the
     build-doctrine "offer the whole field", not bolted on afterward. `sections` maps a section
-    title to the field names it should hold; fields not named in any section land in a trailing
-    "Other" section — nothing is ever dropped from the layout. Idempotent on the fields (a name
-    that already exists is skipped, never duplicated); the section layout is re-applied every
-    call, even when no field was actually new.
+    title to the field names it should hold — a PARTIAL statement, not the whole layout: a field
+    already in an EXISTING section that you don't name here keeps its current section, so adding
+    one new field to one existing section never dumps every other field into a trailing "Other"
+    section. Only a field in no current section and named in no group falls to "Other" — nothing
+    is ever dropped from the layout. Idempotent on the fields (a name that already exists is
+    skipped, never duplicated); the section layout is re-applied every call, even when no field
+    was actually new.
 
     Each field dict in `fields` also accepts an optional `default_value` (folds into the Field's
     own `DefaultValue` key — a static literal, or the platform's relative-date keyword `"Today"`

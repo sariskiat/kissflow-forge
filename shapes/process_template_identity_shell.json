@@ -1030,7 +1030,7 @@
       "Type": "Section",
       "Start": 0,
       "End": 6,
-      "Name": "Request Info",
+      "Name": "Request Details",
       "Row": "Row_Sample27",
       "Column::Row": [
         "Row_Sample03",

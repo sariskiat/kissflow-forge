@@ -269,6 +269,15 @@ def regroup_into_sections(draft: Draft, groups: list[tuple[str, list[str]]]) -> 
     order and land in a trailing section so nothing is ever dropped from the layout.
 
     Columns re-tile the 6-unit grid at FIELD_SPAN each, so no row overflows. Pure.
+
+    A template-cloned form nests fields one layer deeper than an engine-built one (Section -> Row
+    -> Grid Column -> Row -> Field Column, vs. Section -> Row -> Field Column). Every layout
+    Column type OTHER than Field/Model/Button is scaffolding of this kind — Grid today, whatever
+    the builder invents tomorrow — and gets dropped along with the old Rows; a table host
+    (Type:"Model") and its own root Row/nested schema Row are never touched, since a table lives
+    outside every Section (CLAUDE.md > Tables). `_sweep_dangling` runs at the end so any reference
+    the rebuild left pointing at a deleted node — the old bug: an un-deleted Grid column still
+    pointing at its now-gone child Rows — is stripped rather than surviving into a corrupt draft.
     """
     new: Draft = copy.deepcopy(draft)
     model_id = _model_id(new)
@@ -288,12 +297,38 @@ def regroup_into_sections(draft: Draft, groups: list[tuple[str, list[str]]]) -> 
     if leftover:
         plan.append(("Other", leftover))
 
-    # drop the old scaffolding; Field and Column nodes are deliberately preserved
+    # drop the old scaffolding; Field and Column nodes are deliberately preserved, and so is
+    # anything belonging to a child table (its host Row, its own nested schema Row) — a table
+    # sits in its own root-level Row, outside every Section, and must survive a field regroup.
+    KEEP_COLUMN_TYPES = {"Field", "Model", "Button"}
+    table_ids = _table_model_ids(new)
+    protected_rows = {v.get("Row") for v in new.values()
+                      if isinstance(v, dict) and v.get("Kind") == "Column" and v.get("Type") == "Model"}
+    protected_rows |= {k for k, v in new.items()
+                       if isinstance(v, dict) and v.get("Kind") == "Row"
+                       and (v.get("Model") in table_ids or v.get("Button"))}
+
+    # Remember, BEFORE anything is deleted, which section title each protected root row (a table
+    # host) sat immediately after in the OLD Model::Row order — #10's "banner Section and its
+    # table host must be ADJACENT" invariant must survive a regroup, not just the original build.
+    # `None` means "before the first section" (or no section preceded it at all).
+    pending_after: dict[str | None, list[str]] = {}
+    _last_title: str | None = None
+    for _rid in model.get("Model::Row") or []:
+        if _rid in protected_rows:
+            pending_after.setdefault(_last_title, []).append(_rid)
+            continue
+        _row = new.get(_rid) or {}
+        _cols = _row.get("Row::Column") or []
+        _sec = new.get(_cols[0]) if _cols else None
+        if isinstance(_sec, dict) and _sec.get("Type") == "Section":
+            _last_title = _sec.get("Name")
+
     for nid in [k for k, v in new.items()
-                if isinstance(v, dict) and (v.get("Kind") == "Row"
-                                            or (v.get("Kind") == "Column" and v.get("Type") == "Section"))]:
-        if new[nid].get("Kind") == "Row" and new[nid].get("Button"):
-            continue  # Button::Row is not part of the field layout
+                if isinstance(v, dict) and (
+                    (v.get("Kind") == "Row" and k not in protected_rows)
+                    or (v.get("Kind") == "Column" and v.get("Type") not in KEEP_COLUMN_TYPES)
+                )]:
         del new[nid]
 
     top_rows: list[str] = []
@@ -322,7 +357,18 @@ def regroup_into_sections(draft: Draft, groups: list[tuple[str, list[str]]]) -> 
                                 "End": (slot + 1) * FIELD_SPAN})
             new[row]["Row::Column"].append(col_id)
 
-    model["Model::Row"] = top_rows
+    # splice the protected rows back in, immediately after the (new) row of whichever title
+    # anchored them before; a title that no longer exists in `plan` falls back to the end rather
+    # than being dropped.
+    final_rows: list[str] = list(pending_after.pop(None, []))
+    for title, top in zip((t for t, _ in plan), top_rows):
+        final_rows.append(top)
+        final_rows.extend(pending_after.pop(title, []))
+    for _leftover in pending_after.values():
+        final_rows.extend(_leftover)
+
+    model["Model::Row"] = final_rows
+    _sweep_dangling(new)
     return new
 
 
@@ -1156,11 +1202,18 @@ def set_section_style(
     return new
 
 
-_REF_KINDS = ("Activity_", "ProcessDef_", "Resource_", "Permission_")
-
-
 def _sweep_dangling(draft: Draft) -> None:
-    """Drop every reference to a workflow node that no longer exists. Mutates in place.
+    """Drop every reference to a node that no longer exists. Mutates in place.
+
+    A relation/back-reference list is keyed with "::" everywhere in this graph (Row::Column,
+    Column::Row, Model::Row, Activity::Permission, ...) — the SAME criterion verify.doctor's own
+    dangling-ref check uses (kfforge/verify.py). A plain key with no "::" holds data, never a node
+    id (e.g. a Permission node's own `"Permission": ["Editable"]`), so it is left alone. This used
+    to filter by a fixed set of id PREFIXES (Activity_/ProcessDef_/Resource_/Permission_) — narrow
+    enough that a caller deleting a different kind of node (Row/Column, from regroup_into_sections)
+    got no sweep at all and left orphaned refs behind (issue: template-shell regroup corruption).
+    Generalising to the same "::"-key rule as doctor closes that gap for every past and future
+    deletion, not just the four kinds this function originally knew about.
 
     Columns keep a `Column::Permission` back-reference list. Leaving one pointing at a deleted
     Permission still PUTs fine (200) but makes PUBLISH fail with a bare MetadataError.
@@ -1172,10 +1225,9 @@ def _sweep_dangling(draft: Draft) -> None:
         if not isinstance(node, dict):
             continue
         for key, val in list(node.items()):
-            if key == "Id" or not isinstance(val, list):
+            if key == "Id" or not isinstance(val, list) or "::" not in key:
                 continue
-            kept = [x for x in val
-                    if not (isinstance(x, str) and x.startswith(_REF_KINDS) and x not in draft)]
+            kept = [x for x in val if not (isinstance(x, str) and x not in draft)]
             if len(kept) == len(val):
                 continue
             if kept:
@@ -1517,6 +1569,95 @@ def _section_members(draft: Draft) -> dict[str, list[str]]:
         elif sec.get("Type") == "Model":
             out[sid] = [sid]
     return out
+
+
+def _leaf_field_columns(draft: Draft, row_ids: list[str]) -> list[str]:
+    """Walk a list of Row ids and return every FIELD-type Column reachable underneath, recursing
+    through any wrapper Column that isn't itself a Field or a table host (a template's Grid,
+    Section -> Row -> Grid -> Row -> Field) so a field several layers deep is still found."""
+    out: list[str] = []
+    for rid in row_ids:
+        for cid in (draft.get(rid) or {}).get("Row::Column") or []:
+            col = draft.get(cid) or {}
+            if col.get("Type") in ("Field", "Model"):
+                out.append(cid)
+            else:                                    # a wrapper column (Grid, ...) — recurse
+                out.extend(_leaf_field_columns(draft, col.get("Column::Row") or []))
+    return out
+
+
+def current_groups(draft: Draft) -> list[tuple[str, list[str]]]:
+    """The draft's CURRENT section -> [field name] layout, top-to-bottom, root-model fields only.
+
+    Recurses through any nested wrapper Column via `_leaf_field_columns` (a template's Grid, or
+    whatever the builder invents next), so a field several layers deep is still found —
+    `_section_members` deliberately stays one level shallow (it feeds the visibility matrix, which
+    permissions a Grid the same way it permissions any other column), so it is not reused here.
+
+    Feeds `merge_groups`: seeding the FULL current layout before overlaying a caller's partial
+    `groups` is what stops `regroup_into_sections` from dumping every untouched field into "Other".
+    """
+    model_id = _model_id(draft)
+    model = draft[model_id]
+    row_order = {rid: i for i, rid in enumerate(model.get("Model::Row") or [])}
+
+    id_to_name: dict[str, str] = {}
+    for node in draft.values():
+        if isinstance(node, dict) and node.get("Kind") == "Field" and node.get("Model") == model_id:
+            col = node.get("Column")
+            if isinstance(col, str):
+                id_to_name[col] = node.get("Name", "")
+
+    sections = [(sid, v) for sid, v in _kind(draft, "Column").items() if v.get("Type") == "Section"]
+    sections.sort(key=lambda sv: row_order.get(sv[1].get("Row"), len(row_order)))
+
+    out: list[tuple[str, list[str]]] = []
+    for sid, sec in sections:
+        cols = _leaf_field_columns(draft, sec.get("Column::Row") or [])
+        names = [id_to_name[cid] for cid in cols if cid in id_to_name]
+        out.append((sec.get("Name", ""), names))
+    return out
+
+
+def merge_groups(draft: Draft, groups: list[tuple[str, list[str]]]) -> list[tuple[str, list[str]]]:
+    """Overlay a caller's PARTIAL `groups` onto the draft's CURRENT section membership.
+
+    `regroup_into_sections` treats `groups` as the COMPLETE layout: anything not named collapses
+    into a trailing "Other" section. That is right for a caller who states the whole form, and
+    silently wrong for the common "add one field to an existing section" call — every OTHER field
+    the caller didn't mention would otherwise be dumped into "Other" (the template-shell regroup
+    corruption this fixes). This seeds the full map from `current_groups(draft)` first, then moves
+    only the fields the caller actually named into the caller's requested section; every other
+    field keeps its current section untouched. A field in NO current section AND named in NO group
+    still falls through to `regroup_into_sections`'s own "Other" handling.
+
+    A section drained to zero fields purely as a side effect of this overlay is dropped from the
+    result (nobody asked for a stray empty section); a section that was ALREADY an intentional
+    empty banner, or one the caller named directly (even with an empty list — an explicit "no new
+    fields here", or a fresh banner request), is kept.
+    """
+    plan: dict[str, list[str]] = {}
+    order: list[str] = []
+    originally_empty: set[str] = set()
+    for title, names in current_groups(draft):
+        plan[title] = list(names)
+        order.append(title)
+        if not names:
+            originally_empty.add(title)
+
+    for title, names in groups:
+        if title not in plan:
+            plan[title] = []
+            order.append(title)
+        for name in names:
+            for other in plan.values():
+                if name in other:
+                    other.remove(name)
+            plan[title].append(name)
+
+    caller_titles = {t for t, _ in groups}
+    return [(title, plan[title]) for title in order
+            if plan[title] or title in originally_empty or title in caller_titles]
 
 
 def _walk_workflow(draft: Draft) -> tuple[dict[str, int], dict[str, str | None]]:

@@ -34,6 +34,7 @@ from .graph import (
     clone_template_shell,
     ensure_process_def,
     field_names,
+    merge_groups,
     regroup_into_sections,
     set_conditional_visibility,
     set_field_computed,
@@ -783,9 +784,12 @@ def apply_fields_and_layout(
 ) -> ApplyReport | Err:
     """apply_fields, then optionally regroup into named sections — ONE guarded read-verify-write
     covering both, so a caller building a form's fields+layout together never leaves it
-    half-laid-out between two separate PUTs. `groups` is `graph.regroup_into_sections`'s own
-    `(section title, [field names])` list; fields not named in any group land in a trailing
-    "Other" section (regroup_into_sections's own behavior — nothing is ever dropped).
+    half-laid-out between two separate PUTs. `groups` is a PARTIAL `(section title, [field
+    names])` list: it is overlaid onto the draft's CURRENT section membership via
+    `graph.merge_groups` before the rebuild, so a field the caller doesn't name keeps its
+    current section instead of collapsing into `regroup_into_sections`'s own "Other" catch-all —
+    the common "add one field to an existing section" call used to dump every OTHER field already
+    in that section (all of them, on a template-cloned process) into "Other".
 
     Unlike plain `apply_fields` (which skips the PUT entirely when every requested field already
     exists — a genuine no-op), this ALWAYS writes when `groups` is given: a re-layout is a real
@@ -804,7 +808,7 @@ def apply_fields_and_layout(
     try:
         new = apply_changes(draft, specs)
         if groups:
-            new = regroup_into_sections(new, groups)
+            new = regroup_into_sections(new, merge_groups(new, groups))
     except (ValueError, NotImplementedError) as e:
         return Err("verify", f"offline apply rejected the change set: {e}")
 
@@ -3012,6 +3016,12 @@ def apply_fields_full(
     (`kfforge.tools._to_spec` folds a `default_value` key into `options["DefaultValue"]`), since
     it is just another per-type Field key, not a new node shape.
 
+    `groups` is a PARTIAL `(section title, [field names])` list, same as `apply_fields_and_layout`:
+    it is overlaid onto the draft's CURRENT section membership via `graph.merge_groups` before the
+    rebuild, so a field the caller doesn't name keeps its current section instead of collapsing
+    into `regroup_into_sections`'s own "Other" catch-all — the common "add one field to an
+    existing section" call used to dump every OTHER field already in that section into "Other".
+
     Every one of the four layers is independently read-back verified; `missing` in any of them
     marks the whole report `isError` (never publishes on a partial landing).
     """
@@ -3030,7 +3040,7 @@ def apply_fields_full(
     try:
         new = apply_changes(draft, specs)
         if groups:
-            new = regroup_into_sections(new, groups)
+            new = regroup_into_sections(new, merge_groups(new, groups))
         for fname, rules in validations.items():
             for rule in rules:
                 new = add_field_validation(new, fname, rule["operator"], rule["rhs"],

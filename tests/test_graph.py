@@ -1390,3 +1390,126 @@ def test_build_workflow_repoints_dangling_sequence_step_stamp() -> None:
     target2 = d2.get(step2.get("Value"))
     assert target2 is not None
     assert target2.get("NodeType") == "StartEvent"
+
+
+# ---- regroup_into_sections must not corrupt a template-cloned (nested Grid) form -------------
+#
+# The template shell's sections nest fields under Grid-type Columns (Section -> Row -> Grid
+# Column -> Row -> Field Column), unlike a plain engine-built form (Section -> Row -> Field
+# Column directly). Adding ONE field to an EXISTING template section via regroup_into_sections
+# used to (a) leave the old Grid columns behind, still pointing at deleted Rows -> dangling refs
+# 137 -> 286 live, and (b) dump every OTHER field in that section into a trailing "Other" section
+# since `groups` was treated as the complete layout. See CLAUDE.md's own repro write-up.
+
+def _dangling_refs(draft: dict) -> list[str]:
+    """Mirror verify.doctor's own dangling-ref rule exactly: every list value under a key
+    containing '::' must point at a node that still exists in the draft."""
+    problems: list[str] = []
+    for nid, node in draft.items():
+        if not isinstance(node, dict):
+            continue
+        for key, val in node.items():
+            if not (isinstance(val, list) and "::" in key):
+                continue
+            for ref in val:
+                if isinstance(ref, str) and ref not in draft:
+                    problems.append(f"{nid}.{key} -> {ref}")
+    return problems
+
+
+def test_regroup_on_template_shell_adds_one_field_with_no_dangling_refs_or_orphaned_grid() -> None:
+    """The most natural first build action on a template-cloned process: add ONE field to an
+    EXISTING template section, through the same two-step path forge_apply_fields uses
+    (apply the field, then regroup with a partial section map merged against current
+    membership)."""
+    from kfforge.graph import apply_changes, clone_template_shell, merge_groups, regroup_into_sections
+    from kfforge.types import FieldSpec, FieldType
+
+    draft = clone_template_shell(_bare_process())
+    new = apply_changes(draft, [FieldSpec(name="New Field", type=FieldType.TEXT)])
+    merged = merge_groups(new, [("Request Info", ["New Field"])])
+    got = regroup_into_sections(new, merged)
+
+    assert _dangling_refs(got) == [], "no reference may point at a node the rebuild deleted"
+
+    grid_columns = [k for k, v in got.items()
+                    if isinstance(v, dict) and v.get("Kind") == "Column" and v.get("Type") == "Grid"]
+    assert grid_columns == [], "the old nested Grid wrapper columns must not survive a regroup"
+
+    # every pre-existing Required field must still live in a REAL named section, never "Other"
+    required = {v["Name"] for v in draft.values()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Required")}
+    assert required, "sanity: the template ships Required fields"
+
+    section_of: dict[str, str] = {}
+    for sid, sec in got.items():
+        if isinstance(sec, dict) and sec.get("Kind") == "Column" and sec.get("Type") == "Section":
+            for rid in sec.get("Column::Row") or []:
+                for cid in got[rid]["Row::Column"]:
+                    for fid in got[cid].get("Column::Field") or []:
+                        section_of[got[fid]["Name"]] = sec.get("Name")
+
+    for name in required:
+        assert section_of.get(name) not in (None, "Other"), \
+            f"required field {name!r} must stay in a real section, not fall to Other"
+
+    # the new field landed exactly where the caller asked
+    assert section_of.get("New Field") == "Request Info"
+
+
+def test_regroup_on_a_plain_engine_built_form_is_unchanged() -> None:
+    """Regression guard: a non-nested engine-built form (no Grid wrapper columns) must regroup
+    exactly as it did before the template-shell fix."""
+    from kfforge.graph import regroup_into_sections
+
+    got = regroup_into_sections(_draft_with_fields("a", "b", "c", "d"),
+                                [("Step 1", ["a", "b"]), ("Step 2", ["c", "d"])])
+
+    assert _dangling_refs(got) == []
+    placed: dict[str, list[str]] = {}
+    for top in got["M1"]["Model::Row"]:
+        sec = got[got[top]["Row::Column"][0]]
+        names = []
+        for r in sec["Column::Row"]:
+            for c in got[r]["Row::Column"]:
+                names += [got[f]["Name"] for f in got[c]["Column::Field"]]
+        placed[sec["Name"]] = names
+    assert placed == {"Step 1": ["a", "b"], "Step 2": ["c", "d"]}
+
+
+def test_regroup_does_not_break_a_table_bearing_flow() -> None:
+    """A table host lives in its own root-level Row, outside every Section (CLAUDE.md > Tables).
+    regroup_into_sections rebuilds field-layout Rows/Sections; it must never delete the table's
+    own host Row or its nested schema Row, and the table host Column must survive untouched."""
+    from kfforge.graph import add_table, regroup_into_sections
+    from kfforge.types import FieldType
+
+    draft = regroup_into_sections(_draft_with_fields("A", "B"),
+                                  [("Head", ["A"]), ("Log Banner", []), ("Tail", ["B"])])
+    draft = add_table(draft, "Log", [("Round", FieldType.NUMBER)], after_section="Log Banner")
+
+    # add one more field to an existing section on the table-bearing draft, same call shape as
+    # the template-shell scenario above
+    from kfforge.graph import apply_changes, merge_groups
+    from kfforge.types import FieldSpec
+
+    new = apply_changes(draft, [FieldSpec(name="C", type=FieldType.TEXT)])
+    merged = merge_groups(new, [("Head", ["C"])])
+    got = regroup_into_sections(new, merged)
+
+    assert _dangling_refs(got) == []
+
+    table_hosts = [v for v in got.values()
+                  if isinstance(v, dict) and v.get("Kind") == "Column" and v.get("Type") == "Model"]
+    assert len(table_hosts) == 1, "the table host column must survive a regroup untouched"
+    host = table_hosts[0]
+    assert got.get(host["Row"]) is not None, "the table host's own root Row must survive"
+    table_id = host["Column::Model"][0]
+    table_model = got[table_id]
+    assert table_model["Model::Row"], "the table's own schema Row must survive"
+    schema_row_id = table_model["Model::Row"][0]
+    assert got.get(schema_row_id) is not None
+
+    # the table host column is still a live root-level row, not folded into any Section
+    root_rows = got["M1"]["Model::Row"]
+    assert host["Row"] in root_rows
