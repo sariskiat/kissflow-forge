@@ -1,45 +1,78 @@
-# Issue tracker: GitHub
+# Issue tracker: GitLab
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Issues and specs for this repo live as GitLab issues. Use the `glab` CLI for all operations.
+`glab` infers the project and host from the `origin` remote when run inside the clone
+(`cjexpress/tildi/infra/ai-coe/kissflow-forge` on `gitlab.cjexpress.io`), same as `gh` did for
+GitHub — no `-R`/`--host` needed in-repo.
+
+GitLab issues and merge requests have **separate** number spaces: `#42` is always an issue,
+`!42` is always a merge request. No cross-resolution needed (unlike GitHub's shared space).
 
 ## Conventions
 
-- **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
-- **Read an issue**: `gh issue view <number> --comments`, filtering comments by `jq` and also fetching labels.
-- **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
-- **Comment on an issue**: `gh issue comment <number> --body "..."`
-- **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Close**: `gh issue close <number> --comment "..."`
+- **Create an issue**: `glab issue create -t "..." -d "..."`. `-d -` opens an editor; for a
+  scripted multi-line body pass `-d "$(cat <<'EOF' … EOF)"` or `--no-editor -d "..."`.
+- **Read an issue**: `glab issue view <number> --comments` (labels + notes included).
+- **List issues**: `glab issue list --state opened -O json` (machine-readable), with `-l <label>`
+  (repeatable / comma-separated) and `--assignee`/`--milestone` filters. `--state` is
+  `opened`/`closed`/`all` (GitLab spelling, not `open`).
+- **Comment on an issue**: `glab issue note <number> -m "..."` (GitLab calls comments *notes*).
+- **Apply / remove labels**: `glab issue update <number> --label "a,b"` / `--unlabel "c"`.
+- **Close**: `glab issue close <number>` (add a closing comment first with `glab issue note`).
 
-Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
+## Blocking / dependencies — GitLab linked issues (native, first-class)
 
-## Pull requests as a triage surface
+GitLab has native, UI-visible issue links with a **direction**, which is the canonical DAG edge —
+better than GitHub's task-list hack:
 
-**PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
+- **At creation**: `glab issue create -t "child" --linked-issues <blocker-iid> --link-type blocks`.
+  `--link-type` is one of `relates_to` (default), `blocks`, `is_blocked_by`.
+- **After creation** (add an edge): `glab api --method POST \
+  "projects/:id/issues/<child-iid>/links" -f target_project_id=<numeric-project-id> \
+  -f target_issue_iid=<blocker-iid> -f link_type=is_blocked_by`. Get the numeric project id once
+  with `glab api "projects/cjexpress%2Ftildi%2Finfra%2Fai-coe%2Fkissflow-forge" -F output=json`
+  (`.id`).
+- **Read edges**: `glab api "projects/:id/issues/<iid>/links"` returns the linked issues with their
+  `link_type` and `state`. The blocker also carries `blocking_issues_count`. A ticket is unblocked
+  when every `is_blocked_by` link points at a `closed` issue.
 
-When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
+## Pull requests (merge requests) as a triage surface
 
-- **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>` for the diff.
-- **List external PRs for triage**: `gh pr list --state open --json number,title,body,labels,author,authorAssociation,comments` then keep only `authorAssociation` of `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, or `NONE` (drop `OWNER`/`MEMBER`/`COLLABORATOR`).
-- **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
+**MRs as a request surface: no.** _(Set to `yes` if this repo treats external MRs as feature
+requests; `/triage` reads this flag.)_
 
-GitHub shares one number space across issues and PRs, so a bare `#42` may be either — resolve with `gh pr view 42` and fall back to `gh issue view 42`.
+When set to `yes`, MRs run through the same labels and states as issues, using the `glab mr`
+equivalents:
+
+- **Read an MR**: `glab mr view <number> --comments` and `glab mr diff <number>`.
+- **List MRs for triage**: `glab mr list --state opened -O json`, then keep only MRs whose author
+  is not a project member (filter by `author.username` against the member list, or by the MR's
+  source being a fork).
+- **Comment / label / close**: `glab mr note`, `glab mr update --label`/`--unlabel`, `glab mr close`.
 
 ## When a skill says "publish to the issue tracker"
 
-Create a GitHub issue.
+Create a GitLab issue (`glab issue create`).
 
 ## When a skill says "fetch the relevant ticket"
 
-Run `gh issue view <number> --comments`.
+Run `glab issue view <number> --comments`.
 
 ## Wayfinding operations
 
 Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
 
-- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
-- **Child ticket**: an issue linked to the map as a GitHub sub-issue (`gh api` on the sub-issues endpoint). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
-- **Blocking**: GitHub's **native issue dependencies** — the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only — the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
-- **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
-- **Claim**: `gh issue edit <n> --add-assignee @me` — the session's first write.
-- **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog
+  body. `glab issue create --label wayfinder:map -t "..." -d "..."`.
+- **Child ticket**: an issue whose body starts with `Part of #<map-iid>` and which is linked to the
+  map (`--linked-issues <map-iid> --link-type relates_to`). Labels: `wayfinder:<type>`
+  (`research`/`prototype`/`grilling`/`task`). Once claimed, assign it to the driving dev.
+- **Blocking**: use the native linked-issue edges above — create the child with
+  `--link-type is_blocked_by --linked-issues <blocker-iid>`, or add the edge with the `links` API.
+  This is the live gate, UI-visible on the issue.
+- **Frontier query**: `glab issue list --state opened -l wayfinder:task -O json` scoped to the
+  map's children; drop any that still have an open `is_blocked_by` link (check
+  `projects/:id/issues/<iid>/links`) or an assignee; first in map order wins.
+- **Claim**: `glab issue update <n> --assignee @me` — the session's first write.
+- **Resolve**: `glab issue note <n> -m "<answer>"`, then `glab issue close <n>`, then append a
+  context pointer (snippet + link) to the map's Decisions-so-far.

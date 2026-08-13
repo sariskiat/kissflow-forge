@@ -1257,8 +1257,9 @@ file; deep wire shapes it references live in `forge_capabilities(<id>)`.
 
 ### Issue tracker
 
-GitHub Issues via the `gh` CLI, inferred from this repo's `origin` remote
-(`sariskiat/kissflow-forge`). See `docs/agents/issue-tracker.md`.
+GitLab Issues via the `glab` CLI, inferred from this repo's `origin` remote
+(`cjexpress/tildi/infra/ai-coe/kissflow-forge` on `gitlab.cjexpress.io`). Blocking edges use
+GitLab's native linked issues (`--link-type is_blocked_by`). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
