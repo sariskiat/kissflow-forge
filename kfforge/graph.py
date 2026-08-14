@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -1510,20 +1511,6 @@ Matrix = dict[str, dict[str, Visibility]]        # section name -> activity id -
 NO_PERMISSION_NODETYPES = ("Parallel", "SendBackToInitiator", "GotoTask")
 
 
-def _kind(draft: Draft, kind: str) -> dict[str, dict[str, Any]]:
-    return {k: v for k, v in draft.items() if isinstance(v, dict) and v.get("Kind") == kind}
-
-
-def _no_permission_columns(draft: Draft) -> set[str]:
-    """Columns the builder never permissions (CLAUDE.md > Visibility): any `IsHidden` column
-    (a hidden column has no per-step visibility to set) and any SequenceNumber field's column.
-    Property-based, not name-based, so the exclusion holds on any app and any call order."""
-    hidden = {k for k, v in _kind(draft, "Column").items() if v.get("IsHidden")}
-    seq = {c for f in _kind(draft, "Field").values()
-           if f.get("Type") == "SequenceNumber" and isinstance(c := f.get("Column"), str)}
-    return hidden | seq
-
-
 def _table_model_ids(draft: Draft) -> set[str]:
     """Ids of every NESTED table Model, detected two independent ways so a live read-back that
     drops one signal still resolves the table: (1) a Model that carries a host `Column` back-ref
@@ -1537,38 +1524,112 @@ def _table_model_ids(draft: Draft) -> set[str]:
     return by_backref | by_host
 
 
-def _table_host_columns(draft: Draft) -> set[str]:
-    """Host columns for a child table. A host is `Type:"Model"` carrying `Column::Model`, sits in
-    its OWN root-level Row (never a Section), and takes NO Permissions — Kissflow shows/hides the
-    whole table, not its host cell (CLAUDE.md > Tables, Visibility). Detected by either signal so a
-    read-back missing one still excludes it from the section-coverage rule."""
-    return {k for k, v in _kind(draft, "Column").items()
-            if v.get("Type") == "Model" or v.get("Column::Model")}
+@dataclass(frozen=True)
+class SectionLayout:
+    """One frozen fact base: everything the visibility machinery knows about a draft's
+    sections and columns, resolved ONCE per draft by `section_layout`.
 
+    Writer (`set_step_permissions`), auditor (`verify.doctor`) and preview
+    (`tools.plan_step_visibility`) all consume this same object, so a change to one
+    membership / no-Permission rule lands in one function instead of three copies of the
+    same graph walk.
 
-def _table_child_columns(draft: Draft) -> set[str]:
-    """Columns that live INSIDE a child table. They are `Type:"Field"` but belong to the nested
-    Model, not the form, so they are never step-permissioned individually — the table as a whole is."""
-    tables = _table_model_ids(draft)
-    return {c for f in _kind(draft, "Field").values()
-            if f.get("Model") in tables and isinstance(c := f.get("Column"), str)}
-
-
-def _section_members(draft: Draft) -> dict[str, list[str]]:
-    """Visibility unit id -> the column ids it governs.
-
-    A Section maps to the field columns it contains. A child TABLE maps to itself: its host column
-    (`Type:"Model"`) is one unit, because Kissflow shows or hides the whole table, not its columns.
+    - `section_id_of_name`: section NAME -> its Section Column id. A Section always beats a
+      same-named table-host Model (the golden banner-above-a-same-named-table pattern,
+      e23f8f2); a Model name is kept only as a fallback when no Section owns it.
+    - `members`: unit id -> the column ids it governs. A Section maps to the columns it
+      contains (a child TABLE maps to its own host column — Kissflow shows/hides the whole
+      table, not its columns).
+    - `no_permission_columns`: IsHidden and SequenceNumber columns — the builder writes zero
+      Permissions for them (#9).
+    - `table_host_columns` / `table_child_columns`: a table's host column and the field
+      columns inside the table take no Permissions either (CLAUDE.md > Tables, Visibility).
     """
-    out: dict[str, list[str]] = {}
-    for sid, sec in _kind(draft, "Column").items():
-        if sec.get("Type") == "Section":
-            out[sid] = [cid
-                        for rid in sec.get("Column::Row") or []
-                        for cid in (draft.get(rid) or {}).get("Row::Column") or []]
-        elif sec.get("Type") == "Model":
-            out[sid] = [sid]
-    return out
+
+    section_id_of_name: dict[str, str]
+    members: dict[str, tuple[str, ...]]
+    no_permission_columns: frozenset[str]
+    table_host_columns: frozenset[str]
+    table_child_columns: frozenset[str]
+
+    def owner_section(self, column_id: str) -> str | None:
+        """The NAME of the Section directly containing `column_id`, or None when the column
+        sits outside every Section (a table host's own root Row, a table child, ...). Any
+        column in a Section's rows belongs to it — a Model host nested inside a Section is
+        credited to that Section."""
+        for name, sid in self.section_id_of_name.items():
+            if column_id in self.members.get(sid, ()):
+                return name
+        return None
+
+
+def section_layout(draft: Draft) -> SectionLayout:
+    """Resolve the visibility fact base for one draft, once. Pure; O(nodes)."""
+    cols = _kind(draft, "Column")
+    fields = _kind(draft, "Field")
+
+    # A section-owner name resolves ONLY to its Section node. A table-host Model column can
+    # carry the SAME Name (a banner Section sitting above a same-named table, e.g. "FDE Log");
+    # Section always wins regardless of iteration order; a Model name is kept only as a
+    # fallback when no Section owns it.
+    section_id_of_name: dict[str, str] = {}
+    for cid, col in cols.items():
+        name = col.get("Name")
+        if not name:
+            continue
+        is_section = col.get("Type") == "Section"
+        is_model_fallback = (col.get("Type") == "Model"
+                             and name not in section_id_of_name)
+        if is_section or is_model_fallback:
+            section_id_of_name[name] = cid
+
+    # a Section maps to the columns it contains; a child TABLE maps to its own host column
+    members: dict[str, tuple[str, ...]] = {}
+    for cid, col in cols.items():
+        if col.get("Type") == "Section":
+            members[cid] = tuple(
+                c for rid in col.get("Column::Row") or []
+                for c in (draft.get(rid) or {}).get("Row::Column") or []
+            )
+        elif col.get("Type") == "Model":
+            members[cid] = (cid,)
+
+    # columns the builder never permissions (CLAUDE.md > Visibility): any `IsHidden` column
+    # and any SequenceNumber field's column. Property-based, not name-based, so the exclusion
+    # holds on any app and any call order.
+    no_permission = {cid for cid, col in cols.items() if col.get("IsHidden")}
+    no_permission |= {c for f in fields.values()
+                      if f.get("Type") == "SequenceNumber"
+                      and isinstance(c := f.get("Column"), str)}
+
+    # a host is `Type:"Model"` carrying `Column::Model`, sits in its OWN root-level Row
+    # (never a Section), and takes NO Permissions. Detected by either signal so a read-back
+    # missing one still excludes it from the section-coverage rule.
+    table_hosts = {cid for cid, col in cols.items()
+                   if col.get("Type") == "Model" or col.get("Column::Model")}
+
+    # nested table Models, detected two independent ways so a live read-back that drops one
+    # signal still resolves the table: (1) a Model that carries a host `Column` back-ref, and
+    # (2) any Model named in a host column's `Column::Model` list.
+    tables = _table_model_ids(draft)
+
+    # field columns INSIDE a child table: they are `Type:"Field"` but belong to the nested
+    # Model, not the form, so they are never step-permissioned individually.
+    table_children = {c for f in fields.values()
+                      if f.get("Model") in tables
+                      and isinstance(c := f.get("Column"), str)}
+
+    return SectionLayout(
+        section_id_of_name=section_id_of_name,
+        members=members,
+        no_permission_columns=frozenset(no_permission),
+        table_host_columns=frozenset(table_hosts),
+        table_child_columns=frozenset(table_children),
+    )
+
+
+def _kind(draft: Draft, kind: str) -> dict[str, dict[str, Any]]:
+    return {k: v for k, v in draft.items() if isinstance(v, dict) and v.get("Kind") == kind}
 
 
 def _leaf_field_columns(draft: Draft, row_ids: list[str]) -> list[str]:
@@ -1591,8 +1652,9 @@ def current_groups(draft: Draft) -> list[tuple[str, list[str]]]:
 
     Recurses through any nested wrapper Column via `_leaf_field_columns` (a template's Grid, or
     whatever the builder invents next), so a field several layers deep is still found —
-    `_section_members` deliberately stays one level shallow (it feeds the visibility matrix, which
-    permissions a Grid the same way it permissions any other column), so it is not reused here.
+    `_section_members`'s successor (`section_layout(...).members`) deliberately stays one level
+    shallow (it feeds the visibility matrix, which permissions a Grid the same way it permissions
+    any other column), so it is not reused here.
 
     Feeds `merge_groups`: seeding the FULL current layout before overlaying a caller's partial
     `groups` is what stops `regroup_into_sections` from dumping every untouched field into "Other".
@@ -1799,22 +1861,11 @@ def set_step_permissions(draft: Draft, matrix: Matrix, field_matrix: Matrix | No
         del new[nid]
     _sweep_dangling(new)
 
-    members = _section_members(new)
-    # A section-owner name resolves ONLY to its Section node. A table-host Model column can carry
-    # the SAME Name (a banner Section sitting above a same-named table, e.g. "FDE Log"); a plain
-    # last-wins name map would bind the empty Model host instead, leaving the real Section's field
-    # column covered by nothing -> a hard, wrong reject. Section always wins regardless of iteration
-    # order; a Model name is kept only as a fallback when no Section owns it, so non-colliding
-    # table names still resolve exactly as before.
-    sec_id_of_name: dict[str, str] = {}
-    for k, v in _kind(new, "Column").items():
-        name = v.get("Name")
-        if not name:
-            continue
-        if v.get("Type") == "Section":
-            sec_id_of_name[name] = k
-        elif v.get("Type") == "Model" and name not in sec_id_of_name:
-            sec_id_of_name[name] = k
+    layout = section_layout(new)   # one fact base: name resolution, membership, exclusions
+    members = layout.members
+    sec_id_of_name = layout.section_id_of_name
+    excluded = layout.no_permission_columns
+    table_hosts = layout.table_host_columns
 
     # field-level overrides: field NAME -> the single field column id they govern (a Field node's
     # Column; field columns themselves carry Name=None, so resolve through the Field node).
@@ -1831,8 +1882,8 @@ def set_step_permissions(draft: Draft, matrix: Matrix, field_matrix: Matrix | No
         if missing:
             raise ValueError(f"field_matrix names a field that does not exist: {missing}")
     overridden_cols = set(field_col_of_name.values())
-    excluded = _no_permission_columns(new)
-    table_hosts = _table_host_columns(new)  # a table host takes no Permission (CLAUDE.md > Tables)
+    excluded = layout.no_permission_columns
+    table_hosts = layout.table_host_columns  # a table host takes no Permission (CLAUDE.md > Tables)
     banned = [n for n, c in field_col_of_name.items() if c in excluded]
     if banned:
         raise ValueError(f"field_matrix targets columns that take no Permissions "
@@ -1845,7 +1896,7 @@ def set_step_permissions(draft: Draft, matrix: Matrix, field_matrix: Matrix | No
     # table and a step-visibility matrix; without it set_visibility and add_table were mutually
     # exclusive (a table-bearing flow rejected here as "columns outside every section").
     all_field_cols = ({k for k, v in _kind(new, "Column").items() if v.get("Type") == "Field"}
-                      - _table_child_columns(new) - table_hosts - excluded)
+                      - layout.table_child_columns - table_hosts - excluded)
     if all_field_cols - covered:
         # a sparse matrix means those fields silently keep their default visibility -> fail loud
         raise ValueError(f"field columns outside every matrix section: {sorted(all_field_cols - covered)}")

@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .graph import NO_PERMISSION_NODETYPES, _no_permission_columns, _table_child_columns
+from .graph import NO_PERMISSION_NODETYPES, section_layout
 
 Draft = dict[str, Any]
 
@@ -86,6 +86,7 @@ def doctor(
     unvalidated: list[str] = []
     checked: dict[str, int] = {}
     unvalidatable_scripts = 0
+    layout = section_layout(draft)   # the shared fact base rules 4/5 read (membership + exclusions)
 
     # 0. role-scoped visibility claims  <- API-impossible, refused here, never built best-effort
     checked["role_scoped_visibility_claims"] = len(visibility_role_claims)
@@ -210,12 +211,6 @@ def doctor(
 
     # 4. a section nobody can ever edit, and Required fields nobody can ever fill
     susp = {v.get("Name") for v in N.values() if v.get("Kind") == "Activity" and v.get("IsSuspended")}
-    secof: dict[str, str] = {}
-    for sv in N.values():
-        if sv.get("Type") == "Section":
-            for r in sv.get("Column::Row") or []:
-                for cc in (N.get(r) or {}).get("Row::Column") or []:
-                    secof[cc] = sv["Name"]
     editable: dict[str, set[str]] = {}
     for pm in N.values():
         if pm.get("Kind") != "Permission" or pm.get("Permission") != "Editable":
@@ -224,10 +219,12 @@ def doctor(
         if step in susp:                       # a suspended step never runs
             continue
         col = N.get(pm["Column"], {})
-        keys = {secof.get(pm["Column"], col.get("Name", "?"))}
+        # the column's owning Section (layout.owner_section), else its own name — the same
+        # attribution the old per-column walk computed, sourced from the shared fact base now
+        keys = {layout.owner_section(pm["Column"]) or col.get("Name", "?")}
         # A table host (Type:"Model") NESTED inside a section is reachable under two different
-        # names: the enclosing section's (via secof) and its own. A table sitting at the top
-        # level has no enclosing section, so the two names coincide there and the gap stays
+        # names: the enclosing section's (via owner_section) and its own. A table sitting at the
+        # top level has no enclosing section, so the two names coincide there and the gap stays
         # invisible until a table is built INSIDE a section. Credit the host's own name too, or a
         # section-nested table false-flags as "never editable".
         if col.get("Type") == "Model" and col.get("Name"):
@@ -252,7 +249,7 @@ def doctor(
     for f in [v for v in N.values() if v.get("Kind") == "Field"
               and v.get("Model") == root and v.get("Required")]:
         required_checked += 1
-        if not editable.get(secof.get(f.get("Column"), "?")):
+        if not editable.get(layout.owner_section(f.get("Column")) or "?"):
             problems.append(
                 f"field {f['Name']!r} is Required but never editable — that step cannot be submitted")
     checked["required_fields"] = required_checked
@@ -265,7 +262,7 @@ def doctor(
     # by design, so counting them here made a table-bearing flow's matrix read "sparse" by exactly
     # one host-column x every step, even when every real field was covered — must exclude them too.
     units = ({k for k, v in N.items() if v.get("Kind") == "Column" and v.get("Type") == "Field"}
-             - _table_child_columns(draft) - _no_permission_columns(draft))
+             - layout.table_child_columns - layout.no_permission_columns)
     acts = [k for k, v in N.items() if v.get("Kind") == "Activity"
             and v.get("NodeType") not in ROUTING_NODE_TYPES]
     have = {(p["Column"], p["Activity"]) for p in N.values() if p.get("Kind") == "Permission"}

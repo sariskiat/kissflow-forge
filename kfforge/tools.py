@@ -8,7 +8,7 @@ from collections import Counter
 from typing import Any
 
 from .engine import plan_change
-from .graph import _section_members, progressive_matrix
+from .graph import progressive_matrix, section_layout
 from .types import FieldSpec, FieldType, Visibility
 
 
@@ -51,11 +51,19 @@ def plan_step_visibility(draft: dict[str, Any], owners: dict[str, list[str]]) ->
             "editable_at": sorted(acts.get(a, a) for a, v in row.items() if v is Visibility.EDITABLE),
             **{k.lower(): c for k, c in tally.items()},
         }
-    members = _section_members(draft)
-    by_name = {v["Name"]: k for k, v in draft.items()
-               if isinstance(v, dict) and v.get("Kind") == "Column" and v.get("Type") == "Section"}
-    out["permission_nodes"] = sum(len(members.get(by_name[s], [])) * len(r)
-                                  for s, r in matrix.items() if s in by_name)
+    # the REAL pair count the writer will emit: per matrix row, the section's member columns
+    # minus the columns the writer skips (no-Permission columns and table hosts — #9, Tables).
+    # Field-level overrides would add their own rows, but this preview takes no field_matrix,
+    # so nothing is subtracted for them. Sharing section_layout with the writer is what keeps
+    # this count truthful (it used to count every member column, silently over-reporting by
+    # one column x every step whenever a section held a hidden or SequenceNumber column).
+    layout = section_layout(draft)
+    out["permission_nodes"] = sum(
+        len([c for c in layout.members.get(layout.section_id_of_name.get(s, ""), ())
+             if c not in layout.no_permission_columns and c not in layout.table_host_columns])
+        * len(r)
+        for s, r in matrix.items() if s in layout.section_id_of_name
+    )
     return out
 
 
