@@ -30,6 +30,7 @@ FORGE_TOOLS = {
     "forge_create_process", "forge_member_batch", "forge_apply_fields", "forge_add_table",
     "forge_build_workflow", "forge_add_goto_gate", "forge_set_branch_conditions",
     "forge_set_visibility", "forge_set_events",
+    "forge_delete_fields", "forge_rename_fields", "forge_set_required",
     "forge_set_styles", "forge_publish", "forge_doctor", "forge_create_page", "forge_build_page",
     "forge_set_navigation", "forge_share_report", "forge_simulate_case", "forge_create_app",
     "forge_delete_flow",
@@ -57,6 +58,9 @@ DUMMY_ARGS: dict[str, dict[str, Any]] = {
     "forge_set_branch_conditions": {"flow_id": "x", "field_name": "f", "branch_literals": {}},
     "forge_set_visibility": {"flow_id": "x", "owners": {}},
     "forge_set_events": {"flow_id": "x", "events": {}},
+    "forge_delete_fields": {"flow_id": "x", "fields": ["f"]},
+    "forge_rename_fields": {"flow_id": "x", "renames": {}},
+    "forge_set_required": {"flow_id": "x", "required": []},
     "forge_set_styles": {"flow_id": "x", "styles": {}},
     "forge_publish": {"kind": "process", "flow_id": "x"},
     "forge_doctor": {"flow_id": "x"},
@@ -188,12 +192,17 @@ def test_stringified_structured_arg_is_coerced_not_rejected(tool_name: str, args
     """The _CoerceJsonStringArgs middleware must json.loads a stringified object/array arg back so
     Pydantic doesn't reject it with `dict_type`/`list_type` before our own code runs. Proven for
     EVERY affected tool through the real call_tool path (a plain function call bypasses middleware).
-    Coercion success = we reach our own graceful config path, never a schema-validation error."""
+    Coercion success = we reach our own graceful config path, never a schema-validation error.
+
+    `raise_on_error=False` because reaching the config path is now a protocol ERROR result, not a
+    protocol success carrying an error payload (_PromoteIsErrorToProtocol) — the assertion below
+    is about WHICH error we reached, which is exactly what this test always meant.
+    """
     from fastmcp import Client
 
     async def _run() -> str:
         async with Client(srv.mcp) as client:
-            result = await client.call_tool(tool_name, args)
+            result = await client.call_tool(tool_name, args, raise_on_error=False)
         return str(result.content)
 
     txt = asyncio.run(_run())
@@ -431,3 +440,34 @@ def test_forge_add_goto_gate_branch_name_scopes_into_that_branch(monkeypatch: py
                                   field_name="Done Flag", branch_name="Branch A")
     assert got["isError"] is False and got["branch_name"] == "Branch A"
     assert got["goto_activity_id"] in fake.draft[branch_a_pd_id]["ProcessDef::Activity"]
+
+
+# ---- 5. Bundle B: the derived-trigger arg shape + the field-lifecycle tools --------------------
+# These go through the REAL MCP protocol, not a plain Python call: `forge_set_events` widened its
+# `trigger` slot to `str | None` so a caller can say "derive it", and a schema that rejects `null`
+# at the Pydantic boundary would never reach the derivation at all.
+
+@pytest.mark.parametrize("tool_name, args", [
+    ("forge_set_events", {"flow_id": "FAKE", "events": {"Route": [[None, "kf.x();"]]}}),
+    ("forge_set_events", {"flow_id": "FAKE", "events": {"Route": [["onClick", "kf.x();"]]}}),
+    ("forge_set_events", {"flow_id": "FAKE",
+                          "events": json.dumps({"Route": [[None, "kf.x();"]]})}),
+    ("forge_delete_fields", {"flow_id": "FAKE", "fields": ["a"], "tables": ["t"]}),
+    ("forge_rename_fields", {"flow_id": "FAKE", "renames": {"old": "new"}}),
+    ("forge_set_required", {"flow_id": "FAKE", "required": ["a"]}),
+])
+def test_bundle_b_arg_shapes_survive_the_real_protocol(tool_name: str, args: dict,
+                                                       no_kf_env: None) -> None:
+    """Reaching our own graceful config path (`missing env var`) is the proof: the argument was
+    accepted by the schema and by our own signature, and only the absent credentials stopped it.
+    `raise_on_error=False` — see test_stringified_structured_arg_is_coerced_not_rejected."""
+    from fastmcp import Client
+
+    async def _run() -> str:
+        async with Client(srv.mcp) as client:
+            result = await client.call_tool(tool_name, args, raise_on_error=False)
+        return str(result.content)
+
+    txt = asyncio.run(_run())
+    assert "dict_type" not in txt and "list_type" not in txt and "string_type" not in txt, txt
+    assert "missing env var" in txt, txt

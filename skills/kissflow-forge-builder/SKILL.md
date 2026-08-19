@@ -58,11 +58,17 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
    must exist before the fields that reference them. Both are born LIVE (no publish step); a
    dataform has NO members gate and NO workflow. A list `ReferredList` value outside the option
    set PUTs 200 and silently CLEARS the field — validate every option live.
+   Carry each new list's returned id forward: `forge_apply_fields` REQUIRES `referred_list=<list
+   id>` on every `"type": "Select"` field and refuses the write without it — a Select bound to no
+   list writes 200 and then dies on publish with a bare 500 MetadataError and zero diagnostics.
 
 **0. Create the flow — `forge_create_process` (default `from_template=True`), `forge_create_flow`, or `forge_create_app` + `forge_create_page`.**
    `from_template=True` (the default) clones a known-good identity/initiate shell with one
    "Manager Approve" step — `steps=` is IGNORED; rebuild the real workflow in step 5. Pass
-   `from_template=False` only for a bare scaffold. A board is flowtype `case` (status-lane
+   `from_template=False` only for a bare scaffold. ⚠️ THE DEFAULT IS NOT EMPTY: read the report's
+   `template_sections` / `template_required_fields` / `template_steps` and carry them into step 7 —
+   the shell adds sections you did not ask for, and an `owners` map that cannot name them leaves
+   them editable at no step. A board is flowtype `case` (status-lane
    tracker, no step workflow, born live); a dataform is `dataset`. Duplicate flow name 400s.
 
 **0.5. Roles + members BEFORE anything builds on top — `forge_create_app_role`, `forge_member_batch` / `forge_add_member_roles`, `forge_add_role_users`, `forge_grant_tier`.**
@@ -81,6 +87,11 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
    (`Model::Appearance → Appearance → Appearance::Style → Style`) must be COMPLETE on every flow;
    an Appearance with zero Style children renders "There was an error / Reload" while doctor,
    publish, and item-create all pass.
+   ⚠️ `forge_apply_fields` only ever CREATES. Re-sending an existing NAME with a different type or
+   required flag changes nothing — the result reports it under `changed_ignored` with `isError`,
+   never as verified. To CHANGE a field that already exists use `forge_rename_fields` (id, and so
+   its permissions/events/data, survives), `forge_set_required` (a SET — pass the whole required
+   list), or `forge_delete_fields` + re-add for a type change.
 
 **2. Offer the WHOLE field, not the skeleton.** Every field has four layers — build all four:
    - **Native config** — per-type keys (Number: `DefaultValue`+`Decimalpoint`; Textarea:
@@ -91,8 +102,10 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
      Wire-proven operators: MAX_LENGTH, CONTAINS, GREATER_THAN, AFTER. "Not empty" is `Required:true`,
      not a Condition. Always write an ErrorMessage.
    - **Computed** — `forge_set_events` for a field EVENT (a script on the SOURCE field; trigger is a
-     function of the source type — never guess it; six types can't be a source: Attachment, Image,
-     Rich text, Signature, Sequence number, Geolocation). A native formula also exists as a
+     function of the source type — **pass `null` and it is DERIVED off the live draft**; a stated
+     trigger that disagrees is refused, naming both, because a wrong one writes fine, publishes
+     fine and never fires. Six types can't be a source: Attachment, Image, Rich text, Signature,
+     Sequence number, Geolocation). A native formula also exists as a
      Field-owned Expression (`forge_capabilities("config.computed")`) — build the Node AST, not just
      the string mirror; validate every referenced field exists.
    - **Default + visibility** — a static default costs one key (`forge_apply_fields` `default_value=`;
@@ -155,7 +168,10 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
    lever when a whole section shares a rule (one Permission vs one-per-field). `StartEvent` is
    position 0 — the first section must list `Start` as an owning step or the submit form renders
    empty. A Required field Hidden at its own step is fatal (nothing can satisfy it). Rebuild this
-   after ANY workflow rebuild.
+   after ANY workflow rebuild. A section or step name that is not on the flow is REFUSED before
+   any write; check the result's `uncovered_sections` — every section left editable at no step,
+   stated but never an error. The result reports pair COUNTS plus per-section/per-step rollups by
+   NAME (`include_pairs=true` for the raw list); `missing` is always listed in full.
 
 **8. Events (computed) — `forge_set_events`.** See step 2's computed layer.
 
@@ -200,6 +216,7 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
 | Create board (case) / dataform (dataset) | `forge_create_flow(kind="case"|"dataset")` |
 | Create list + fill records | `forge_create_list`, `forge_dataset_records` |
 | Fields / layout / validation / seq-number / table | `forge_apply_fields`, `forge_apply_layout`, `forge_add_field_validation`, `forge_add_sequence_number`, `forge_add_table` |
+| Fix a WRONG field (rename / re-flag / remove) | `forge_rename_fields`, `forge_set_required`, `forge_delete_fields` |
 | Workflow | `forge_build_workflow` |
 | Branch conditions / rework gate | `forge_set_branch_conditions`, `forge_add_goto_gate` |
 | Roles / members / add users / tier / role default | `forge_create_app_role`, `forge_delete_app_role`, `forge_member_batch`, `forge_add_member_roles`, `forge_add_role_users`, `forge_grant_tier`, `forge_set_role_preference` |

@@ -15,7 +15,8 @@ order, compile.py's error messages): 1 problem/goal, 2 roles, 3 stages, 4 routin
 loops, 6 data model, 7 master data, 8 visibility matrix, 9 timing, 10 personas, 11 test cases.
 Three fields reuse the engine's own closed wire-string catalogs rather than re-inventing them:
 `FieldReq.type`/`TableColumnReq.type` are `kfforge.types.FieldType`, `VisibilityEntry.permission`
-is `kfforge.types.Visibility`, and `ComputedReq.trigger` is this module's own `EventTrigger` — a
+is `kfforge.types.Visibility`, and `ComputedReq.trigger` is `kfforge.types.EventTrigger` (born
+here, moved there so the LIVE write path derives from the same table — re-exported below) — a
 data-model field, a visibility entry, or a computed-field trigger in this spec is always headed
 toward becoming a real Kissflow node, so none of them should be able to name something the engine
 doesn't understand. `compile.py` re-checks every one of these at runtime too (`isinstance`),
@@ -114,7 +115,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from ..types import FieldType, Visibility
+# EventTrigger/TRIGGER_LIVE_CONFIRMED/trigger_for were BORN here and now live in
+# `kfforge.types` — the neutral module both this spec layer and the live write path
+# (`client.apply_field_events`, which derives a source field's trigger off the LIVE draft)
+# can import without the engine depending on intake. Re-exported, not re-declared: every
+# existing `from kfforge.intake.schema import EventTrigger` still resolves to the one enum.
+from ..types import (
+    TRIGGER_LIVE_CONFIRMED,
+    EventTrigger,
+    FieldType,
+    Visibility,
+    trigger_for,
+)
 
 # Canonical 1..11 dimension names, used to prefix every gap sentence so a caller can tell at a
 # glance which of the 11 a given sentence is about (also doubles as documentation of the numbering
@@ -139,46 +151,6 @@ ADVISORY_DIMENSIONS: frozenset[int] = frozenset({9})
 # stage (never appears in `Stages.stages`) but IS a legal `VisibilityEntry.stage` value: the very
 # first section a user sees must list it as an owner, or the submission form renders empty.
 START_STAGE: str = "Start"
-
-
-class EventTrigger(StrEnum):
-    """The field-event trigger string (CLAUDE.md Field events). All three wire strings are now
-    LIVE-OBSERVED on a published flow (2026-08-10 eval-case-1 read, issue #12 — replacing the
-    earlier "per-docs guess" belief outright): a Select source fires `onClick`, Date and Number
-    sources fire `onSelect`, Text/Textarea sources fire `onChange`. The trigger is a FUNCTION of
-    the SOURCE field's type — derive it with `trigger_for`, never pick it by hand: a wrong
-    trigger writes fine, publishes fine, and simply never fires.
-    """
-    ON_CHANGE = "onChange"  # live: Text, Textarea
-    ON_SELECT = "onSelect"  # live: Date, Number · family-inferred, unverified: User
-    ON_CLICK = "onClick"    # live: Select        · family-inferred, unverified: Boolean
-
-
-# The (source type -> trigger) pairs actually observed on a live published flow. A derivation for
-# a type OUTSIDE this set still compiles, but the plan flags it UNVERIFIED so the uncertainty
-# travels with the op instead of getting silently smoothed over.
-TRIGGER_LIVE_CONFIRMED: frozenset[FieldType] = frozenset({
-    FieldType.TEXT, FieldType.TEXTAREA, FieldType.DATE, FieldType.NUMBER, FieldType.SELECT,
-})
-
-
-def trigger_for(t: FieldType) -> EventTrigger:
-    """The event trigger a SOURCE field of type `t` actually fires (issue #12: defaulting every
-    event to `onChange` gave Select/Date/Number sources a trigger that never fires, with no error
-    anywhere). Attachment takes no events at all (CLAUDE.md Field events) — refused loudly here,
-    never downgraded."""
-    match t:
-        case FieldType.TEXT | FieldType.TEXTAREA:
-            return EventTrigger.ON_CHANGE
-        case FieldType.DATE | FieldType.NUMBER | FieldType.USER:
-            return EventTrigger.ON_SELECT
-        case FieldType.SELECT | FieldType.BOOLEAN:
-            return EventTrigger.ON_CLICK
-        case FieldType.ATTACHMENT:
-            raise ValueError(
-                "Attachment fields take no events at all (CLAUDE.md Field events) — an event "
-                "cannot be wired onto an Attachment source"
-            )
 
 
 # ---- 1. problem / goal -------------------------------------------------------------------------

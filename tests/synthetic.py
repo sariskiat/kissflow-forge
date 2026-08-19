@@ -19,25 +19,32 @@ BASE = pathlib.Path(__file__).parent / "fixtures" / "empty_form_draft.json"
 
 ROLE_FRONT, ROLE_TECH, ROLE_LEAD = "Ro_front_001", "Ro_tech_0002", "Ro_lead_0003"
 
-FIELDS: list[tuple[str, FieldType, bool]] = [
-    ("Ticket No", FieldType.TEXT, False),
-    ("Contact Date", FieldType.DATE, False),
-    ("Unit Serial", FieldType.TEXT, True),
-    ("Problem", FieldType.TEXTAREA, True),
-    ("Urgency", FieldType.SELECT, False),
-    ("Assessment Notes", FieldType.TEXTAREA, False),
-    ("Route Choice", FieldType.SELECT, True),
-    ("Self-help Doc", FieldType.ATTACHMENT, False),
-    ("Self-help Result", FieldType.TEXT, False),
-    ("Bench Notes", FieldType.TEXTAREA, False),
-    ("Bench Done", FieldType.BOOLEAN, False),
-    ("Specialist", FieldType.TEXT, False),
-    ("Session Notes", FieldType.TEXTAREA, False),
-    ("Deep Done", FieldType.BOOLEAN, False),
-    ("Wrap Summary", FieldType.TEXTAREA, True),
-    ("Outcome", FieldType.SELECT, False),
-    ("Handoff Owner", FieldType.TEXT, False),
-    ("Extra Note", FieldType.TEXT, False),          # deliberately unowned -> "Other"
+# A Select's OPTIONS live in a SEPARATE list flow, never in this graph — so every Select below
+# names one (neutral ids, no real list on any tenant). A bare Select is a dropdown bound to
+# nothing: `apply_changes` refuses to mint one, and `verify.doctor` rule 7b flags any that arrives
+# from a template or a hand-built draft.
+LIST_URGENCY, LIST_ROUTE, LIST_OUTCOME = "List_Sample01", "List_Sample02", "List_Sample03"
+
+# (name, type, required, referred_list) — the list id is None for every type that is not a Select.
+FIELDS: list[tuple[str, FieldType, bool, str | None]] = [
+    ("Ticket No", FieldType.TEXT, False, None),
+    ("Contact Date", FieldType.DATE, False, None),
+    ("Unit Serial", FieldType.TEXT, True, None),
+    ("Problem", FieldType.TEXTAREA, True, None),
+    ("Urgency", FieldType.SELECT, False, LIST_URGENCY),
+    ("Assessment Notes", FieldType.TEXTAREA, False, None),
+    ("Route Choice", FieldType.SELECT, True, LIST_ROUTE),
+    ("Self-help Doc", FieldType.ATTACHMENT, False, None),
+    ("Self-help Result", FieldType.TEXT, False, None),
+    ("Bench Notes", FieldType.TEXTAREA, False, None),
+    ("Bench Done", FieldType.BOOLEAN, False, None),
+    ("Specialist", FieldType.TEXT, False, None),
+    ("Session Notes", FieldType.TEXTAREA, False, None),
+    ("Deep Done", FieldType.BOOLEAN, False, None),
+    ("Wrap Summary", FieldType.TEXTAREA, True, None),
+    ("Outcome", FieldType.SELECT, False, LIST_OUTCOME),
+    ("Handoff Owner", FieldType.TEXT, False, None),
+    ("Extra Note", FieldType.TEXT, False, None),          # deliberately unowned -> "Other"
 ]
 
 SECTIONS: list[tuple[str, list[str]]] = [
@@ -74,7 +81,8 @@ OWNERS: dict[str, list[str]] = {
 
 def synthetic_process_draft() -> Draft:
     draft: Draft = json.loads(BASE.read_text())
-    draft = apply_changes(draft, [FieldSpec(name=n, type=t, required=r) for n, t, r in FIELDS])
+    draft = apply_changes(draft, [FieldSpec(name=n, type=t, required=r, referred_list=l)
+                                  for n, t, r, l in FIELDS])
     draft = regroup_into_sections(draft, SECTIONS)
     draft = build_workflow(draft, STEPS, parallel=("Repair paths", BRANCHES),
                            parallel_after=3,

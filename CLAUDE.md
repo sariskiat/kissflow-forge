@@ -143,6 +143,20 @@ requires.
   and end units along a 6-wide row, at most 3 columns per row. Overflow one
   Row (say, columns all pinned at `Start=0`, or more than 3 columns crammed
   in) and it breaks rendering for the *whole* flow, not just that row.
+  ⚠️ **"At most 3" is the consequence of a field column spanning 2 units, NOT
+  a platform-enforced count** — and there is a live capture AGAINST reading it
+  as one: `shapes/process_template_identity_shell.json`, de-identified off a
+  real published production template, carries a Row with FOUR field columns at
+  `(0,2) (2,4) (4,5) (5,6)` — fully packed, non-overlapping, rendering. So the
+  count is enforced where it belongs, on what this engine WRITES
+  (`graph.validate_layout_spans` refuses a caller-stated row of more than 3,
+  matching its own auto-tiler), and `verify.doctor` deliberately asserts NO
+  count bound on drafts it did not build — a rule that fires on every
+  `from_template=True` flow is worse than no rule. What is invariant either
+  way, and what both sides DO enforce: in-grid, non-overlapping, and **one
+  column belongs to exactly ONE Row** — the same field named twice in a layout
+  leaves a Column in two Rows' `Row::Column` while its own `Row` back-ref
+  names only the last.
 
 ```
 Field  { Id:"Field_Sample01", Type:"Text", Model:<root model id>, CreatedAt:"<timestamp>" }
@@ -661,6 +675,35 @@ Any full workflow rebuild deletes every Permission node (see Workflow) — treat
 "just rebuilt the workflow" as an automatic cue to rebuild the visibility
 matrix next, every time, not just when something looks visibly wrong.
 
+⚠️ **A section or step name in `owners` that does not resolve is REFUSED before
+any write (2026-08-19), not dropped.** `graph.progressive_matrix` used to
+silently ignore both: a mistyped section key matched no Section and simply
+never appeared, and a mistyped step name matched no Activity, which read as
+"nobody owns this section" and quietly emitted ReadOnly everywhere — on a
+rebuild that has already deleted every Permission. A name the caller supplied
+that lands in no counted bucket is the output-invariant bug, restated for
+visibility; the refusal now names both the bad names and the real set. Leaving
+a section OUT of `owners` entirely is still legal and still means ReadOnly
+everywhere — that is the documented unowned case, not an unresolved name.
+
+⚠️ **`forge_set_visibility` reports `uncovered_sections`: every section the
+matrix leaves editable at NO step.** Never folded into `isError` (a caller may
+genuinely want a read-only section) — stated, the same way
+`forge_set_branch_conditions` states `uncovered` for the fail-open switch
+hazard. It exists because `forge_create_process(from_template=True)` — the
+DEFAULT — injects sections the caller never asked for and therefore cannot
+name in `owners`, so the matrix is incomplete from the very first write and
+`verify.doctor` only says so two steps later. Read the create report's
+`template_sections` first, then write `owners` to cover all of them.
+
+The result of one visibility rebuild is one `(column, activity)` pair per field
+per step, and the audit keeps every one of them — but the PAYLOAD states counts
+plus per-section/per-step rollups and every `missing` pair in full, all resolved
+to field/section/step NAMES, with `summarised` saying how many entries the
+counts stand in for. Pass `include_pairs=true` for the raw list. Measured on the
+live 37-column x 6-step case: 18,396 bytes of opaque `Column_x@Activity_y` pairs
+(each listed twice, once under `added` and again under `verified`) down to 1,022.
+
 ## Members first
 
 **An API-created flow has zero members**, so the acting user has no
@@ -721,10 +764,21 @@ generalised from one sample — the same "absence in one sample is not absence i
 this file already records twice.) Harvesting from an existing flow's member
 list (still below) remains a valid, still-working path; this account-level
 route is simply the ADDITIONAL one that also works when no sibling flow has
-ever been granted membership yet — as long as a human created at least one
-AppRole for the app at some point (the account-level list only ever shows
-roles a human already made in the builder UI; there is still no route that
-creates one from nothing, see below).
+ever been granted membership yet.
+
+⚠️ **A SECOND CORRECTED BELIEF, same subject (proven live 2026-08-08,
+re-proven 2026-08-19).** This paragraph used to end "there is still no route
+that creates one from nothing" — WRONG, and it is the exact claim that made
+`forge_member_batch` tell an agent to go find a human. `POST /app_role/2/
+{acct}` body `{"Name": ..., "_application_id": <app>}` → 200 `{_id, Name}`
+creates an AppRole scoped to the app in ONE call (`KfClient.create_app_role`,
+tool `forge_create_app_role`); without `_application_id` the role is created
+UNSCOPED and `member/batch` still rejects it with 00051. So the empty-app case
+is self-serve end to end: create a role, then re-run `forge_member_batch`
+(`forge_add_member_roles` does both at once). **A refusal a caller cannot act
+on is just a dead end** — any message here that routes an agent to the builder
+UI for something a tool already does is a bug in the message, not a platform
+limit.
 
 - **`member/batch` Role names differ by flowtype.** A process flow accepts
   the role name `DataAdmin`; a list flow rejects it and expects `Admin` or
@@ -740,10 +794,12 @@ creates one from nothing, see below).
   builder-UI-created AppRoles anywhere (confirmed live on the app under test
   as of 2026-08-06 — no longer this app's state as of 2026-08-07, see the
   corrected belief above and the member/batch grant recipe further below),
-  `member/batch` is FUNCTIONALLY BLOCKED end to end — there is still no API
-  route that creates an AppRole, so this can only ever re-grant a role a
-  human already set up somewhere, harvested either from a flow's member list
-  or from the account-level AppRole list above.
+  `member/batch` had nothing to name. That is NO LONGER a dead end (see the
+  corrected belief above): `forge_create_app_role` mints an app-scoped role in
+  one call, and `member/batch` binds it — so the recovery is create-then-grant,
+  never "wait for a human". Harvesting a role a human already set up (from a
+  flow's member list, or from the account-level AppRole list above) stays a
+  valid path, it is just no longer the ONLY one.
 - ⚠️ **The grant that actually lets the INITIATOR submit their own draft,
   proven live 2026-08-07 (two-arm control on a throwaway flow):**
   `"Permission"` must be `["InitiateItems"]`, not just any non-empty list and
@@ -842,6 +898,18 @@ creates one from nothing, see below).
   PUTs 200 and silently CLEARS the field (the Select discard rule, one
   notch worse than "discards" — it wipes what was there). Lists flagged as
   holding personal data stay human-made (PDPA, D2/D9).
+  ⚠️ **`ReferredList` is MANDATORY on every list-backed field, not optional
+  decoration (2026-08-19).** A `Select`/`Multiselect`/`Checkbox`/`Checklist`
+  takes its options from that separate list flow, so one written WITHOUT the
+  key is a dropdown bound to nothing: `PUT` 200s, and publish then dies
+  `500 MetadataError` with the generic "An unexpected error has occurred" and
+  zero diagnostic content — the same zero-diagnostic fingerprint as the
+  stranded Step stamp above, one field type over. `graph.apply_changes` now
+  REFUSES to mint a bare Select (create the list with `forge_create_list`,
+  pass `referred_list=<list id>`), the same way it already auto-repairs a bare
+  `Field{Type:"User"}`, and `verify.doctor` rule 7b flags any that arrive from
+  a template or a hand-built draft. The rule never resolves the target id
+  against the draft — a list is a SEPARATE FLOW, never a node in this graph.
 - **Style tokens are not validated by the write API.** A completely bogus
   token name PUTs 200, publishes 200, and reads back verbatim — and then
   fails silently at render, with no error anywhere in the chain to tell you
@@ -932,8 +1000,13 @@ reads, or later writes against an id sourced from, a DIFFERENT app's list.
   write is not how you delete rows; deleting the child schema is the only
   proven way to purge orphaned ones.
 - Submit permission follows the step's AppRole assignment — the acting API
-  user must actually be a member of that role (see Members first); there is
-  no API route that grants role membership itself, only the builder UI does.
+  user must actually be a member of that role (see Members first). ⚠️ A
+  CORRECTED BELIEF: this bullet used to end "there is no API route that grants
+  role membership itself, only the builder UI does" — wrong on both halves.
+  Creating the role is `POST /app_role/2/{acct}` (Members first), and adding a
+  USER to it is `PUT /app_role/2/{acct}/{role_id}?_application_id={app}` with
+  the WRITE key `Users` (Pages) — the read key is `Members`, and a `Members`
+  write 200s and is silently ignored, which is what fooled the earlier probes.
 - A handful of routes are confirmed dead ends, worth knowing so nobody
   re-probes them: a legacy list-flow path is pure front-end with no
   API behind it; per-field lookup/reverse-lookup routes 500 on any editable
@@ -1183,6 +1256,12 @@ The proven end-to-end sequence, most foundational first:
    "Manager Approve" step arrive pre-built; callers add their own
    fields/workflow on top. Pass `from_template=False` for the old bare
    scaffold. See docs/capabilities/process-template.md.
+   ⚠️ **The default is not empty, and the report says what it brought in**
+   (2026-08-19): `template_sections`, `template_required_fields` and
+   `template_steps` are read back off the live draft after the scaffold write.
+   Cover every listed section in step 8's `owners` map, and make sure every
+   listed Required field is Editable somewhere, or that step can never be
+   submitted.
 2. **Members** — before anything else gets built on top, or every later
    publish involving assignees fails (see Members first).
 3. **Fields and sections** — the node-graph invariants apply from the first

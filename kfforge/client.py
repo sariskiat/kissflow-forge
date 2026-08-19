@@ -16,13 +16,16 @@ import json
 import os
 import urllib.error
 import urllib.request
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from .expr import build_branch_condition, build_goto_gate, remove_condition
 from .graph import (
+    NO_PERMISSION_NODETYPES,
     Matrix,
+    _kind,
     _style_wire_value,
     add_field_validation,
     add_goto_task,
@@ -32,17 +35,31 @@ from .graph import (
     apply_exact_layout,
     build_workflow,
     clone_template_shell,
+    delete_closure,
+    delete_nodes,
     ensure_process_def,
+    field_delete_blockers,
     field_names,
     merge_groups,
     regroup_into_sections,
+    rename_fields,
+    section_layout,
     set_conditional_visibility,
     set_field_computed,
     set_field_events,
+    set_required,
     set_section_style,
     set_step_permissions,
+    validate_layout_spans,
 )
-from .types import FieldSpec
+from .types import (
+    NO_EVENT_FIELD_TYPES,
+    TRIGGER_LIVE_CONFIRMED,
+    FieldSpec,
+    FieldType,
+    Visibility,
+    trigger_for,
+)
 from .verify import doctor
 
 Draft = dict[str, Any]
@@ -73,7 +90,9 @@ class KfConfig:
 
     @staticmethod
     def from_env(app_id_override: str | None = None) -> KfConfig | Err:
-        # app_id_override (a runtime-selected app, e.g. via forge_use_app) wins over the KF_APP env.
+        # app_id_override (the per-call `app_id` every app-scoped tool accepts) wins over the
+        # KF_APP env. There is no "select an app" tool and deliberately so — a server-side current
+        # app would be shared state, and this surface is stateless by design (server.py header).
         # Empty app_id is allowed here on purpose — the "an app must be chosen" guard now lives at
         # the _client() chokepoint (server.py) so a tool carrying its own app_id, plus the
         # list/use-app tools, can run before any app is selected. See CLAUDE.md Members/Pages.
@@ -108,12 +127,30 @@ class KfConfig:
 
 @dataclass(frozen=True)
 class ApplyReport:
-    """What a live apply actually did — every field lands in exactly one bucket (output audit)."""
+    """What a live apply actually did — every field lands in exactly one bucket (output audit).
+
+    Two axes, each a PARTITION of the requested records:
+      * what we planned to do  — added | skipped | changed_ignored
+      * what the read-back saw — verified | missing | changed_ignored
+
+    `changed_ignored` is terminal on BOTH axes and is the only bucket that is neither a plan nor a
+    read-back statement: the record exists live, so it is not `missing`, and it was not written,
+    so it is not `verified` — the caller asked for something that did not happen. It used to be
+    counted under `skipped` AND `verified` at once, which is how a silently-dropped type change
+    read as a clean success (F2). See `_changed_ignored`.
+
+    `collateral` is the OTHER half of the same honesty: what this write DESTROYED or MOVED that
+    the caller never named. `remediation` is the machine-readable list of tool names the caller
+    now owes because of it — never a rollback, just the damage made visible (A4).
+    """
     flow_id: str
     added: tuple[str, ...]
-    skipped: tuple[str, ...]      # already present -> idempotent no-op
+    skipped: tuple[str, ...]      # already present AND identical -> idempotent no-op
     verified: tuple[str, ...]     # confirmed present by post-write read-back
     missing: tuple[str, ...]      # requested, written, but ABSENT on read-back -> loud failure
+    changed_ignored: tuple[str, ...]  # present by name but DIFFERENT -> the change never happened
+    collateral: tuple[str, ...]   # what this write destroyed/moved that the caller never named
+    remediation: tuple[str, ...]  # tool names the caller now owes because of `collateral`
     meta_version: str | None
     published: bool
 
@@ -124,9 +161,12 @@ class ApplyReport:
             "skipped": list(self.skipped),
             "verified": list(self.verified),
             "missing": list(self.missing),
+            "changed_ignored": list(self.changed_ignored),
+            "collateral": list(self.collateral),
+            "remediation": list(self.remediation),
             "meta_version": self.meta_version,
             "published": self.published,
-            "isError": bool(self.missing),
+            "isError": bool(self.missing or self.changed_ignored),
         }
 
 
@@ -595,6 +635,89 @@ class KfClient:
             lambda: self.get_draft(kind, flow_id), self._draft_url(kind, flow_id), new, expect_version)
 
 
+@dataclass(frozen=True)
+class ScaffoldInventory:
+    """What a freshly scaffolded process ACTUALLY contains, read back off the live draft.
+
+    `from_template=True` is the DEFAULT, and it silently injects a whole identity shell: on the
+    2026-08-19 live run, four sections ("In-Kissflow Template", "Public Form Template", "Request
+    Info", "System") and three Required fields ("Manager Display Name", "Requestor Employee Id
+    Alt", "Department") the caller never asked for. The report was all empty tuples, so an
+    `owners` map written against the caller's own design could not name sections it did not know
+    existed — the visibility matrix was incomplete from the first write, and doctor only said so
+    two steps later ("section 'System' is never editable at any live step", "field 'Department'
+    is Required but never editable — that step cannot be submitted").
+    """
+    sections: tuple[str, ...]
+    required_fields: tuple[str, ...]
+    steps: tuple[str, ...]
+
+
+def scaffold_inventory(draft: Draft) -> ScaffoldInventory:
+    """Sections, Required root fields and workflow step names on `draft`. Pure, read-only.
+
+    Sections are `Column{Type:"Section"}` by NAME — the exact population `forge_set_visibility`'s
+    `owners` map has to cover. A table-host `Column{Type:"Model"}` is deliberately excluded: it is
+    not a section a caller can own (CLAUDE.md > Tables). Steps exclude the nodes that render no
+    form and take no Permission, so the list is exactly the set of names an `owners` VALUE may
+    use — StartEvent and EndEvent included, since `Start` is a legal (and, for the first section,
+    mandatory) owner. All three buckets are sorted: this is a set to cover, not a sequence to
+    walk, and a stable order is what makes it diffable between runs.
+    """
+    sections = tuple(sorted(
+        n for v in _kind(draft, "Column").values()
+        if v.get("Type") == "Section" and isinstance(n := v.get("Name"), str) and n
+    ))
+    required = tuple(sorted(n for n, node in _root_field_nodes(draft).items()
+                            if n and node.get("Required")))
+    steps = tuple(sorted(
+        n for a in _kind(draft, "Activity").values()
+        if a.get("NodeType") not in NO_PERMISSION_NODETYPES
+        and isinstance(n := a.get("Name"), str) and n
+    ))
+    return ScaffoldInventory(sections=sections, required_fields=required, steps=steps)
+
+
+@dataclass(frozen=True)
+class ProcessCreateReport(ApplyReport):
+    """`ApplyReport` plus a statement of what the SCAFFOLD brought in that the caller never asked
+    for (S4a). Every bucket of the base report is unchanged and still covers the caller's own
+    `specs`; these three are about the OTHER content that is now on the flow.
+
+    `template_read_error` exists so an unreadable read-back can never masquerade as an empty
+    template: the buckets are honestly `()` and the error says why, rather than reporting a shell
+    that brought in nothing.
+    """
+    from_template: bool = False
+    template_sections: tuple[str, ...] = ()
+    template_required_fields: tuple[str, ...] = ()
+    template_steps: tuple[str, ...] = ()
+    template_read_error: str | None = None
+
+    def as_tool_result(self) -> dict[str, Any]:
+        out = super().as_tool_result()
+        out.update({
+            "from_template": self.from_template,
+            "template_sections": list(self.template_sections),
+            "template_required_fields": list(self.template_required_fields),
+            "template_steps": list(self.template_steps),
+            "template_read_error": self.template_read_error,
+        })
+        if self.template_read_error:
+            out["note"] = (f"could not read the scaffold back to inventory it: "
+                           f"{self.template_read_error} — the three template_* buckets are empty "
+                           f"because nothing was READ, not because the shell brought nothing in")
+        elif self.from_template:
+            out["note"] = (
+                f"the process template shell brought in {len(self.template_sections)} section(s) "
+                f"and {len(self.template_required_fields)} Required field(s) you did not ask for. "
+                f"forge_set_visibility's `owners` must cover EVERY section listed above or that "
+                f"section is editable at no step; a Required field that is never editable makes "
+                f"its step permanently unsubmittable. Pass from_template=False for a bare shell."
+            )
+        return out
+
+
 def create_process(
     client: KfClient,
     name: str,
@@ -618,6 +741,10 @@ def create_process(
     Either way the scaffold is mandatory, not decoration: a bare process draft is rejected with
     HTTP 500 until it has a ProcessDef (FINDINGS.md). On any failure after the shell exists, the
     half-built process is archived+deleted so a failed run leaves no junk behind in the tenant.
+
+    The report STATES what the scaffold put on the flow — every section name, every Required
+    field name, every step name — read back off the live draft, never off the template file
+    (THE RULE: judge the read-back). See `ProcessCreateReport` for the live trap that motivates it.
     """
     flow_id = client.create_flow("process", name)
     if isinstance(flow_id, Err):
@@ -644,16 +771,474 @@ def create_process(
         return _abandon(written)
 
     report = apply_fields(client, "process", flow_id, specs, publish=publish)
-    return _abandon(report) if isinstance(report, Err) else report
+    if isinstance(report, Err):
+        return _abandon(report)
+
+    # One more READ, deliberately: `apply_fields` already read the draft back, but it reports only
+    # the caller's own field specs and does not surface the graph. The scaffold's own content is
+    # exactly what the caller cannot see and has to cover next, so it is read from the live flow
+    # rather than derived from the template file that was sent.
+    final = client.get_draft("process", flow_id)
+    if isinstance(final, Err):
+        inventory, read_error = ScaffoldInventory((), (), ()), final.message
+    else:
+        inventory, read_error = scaffold_inventory(final), None
+
+    return ProcessCreateReport(
+        flow_id=report.flow_id, added=report.added, skipped=report.skipped,
+        verified=report.verified, missing=report.missing,
+        changed_ignored=report.changed_ignored, collateral=report.collateral,
+        remediation=report.remediation, meta_version=report.meta_version,
+        published=report.published,
+        from_template=from_template,
+        template_sections=inventory.sections,
+        template_required_fields=inventory.required_fields,
+        template_steps=inventory.steps,
+        template_read_error=read_error,
+    )
+
+
+def _permission_nodes(draft: Draft) -> list[tuple[str, dict[str, Any]]]:
+    """(node id, node) for every Permission node in a graph, well-formed or not."""
+    return [(k, v) for k, v in draft.items()
+            if isinstance(v, dict) and v.get("Kind") == "Permission"]
 
 
 def _permission_pairs(draft: Draft) -> dict[tuple[str, str], str]:
-    """(column id, activity id) -> visibility, for every Permission node in a graph."""
+    """(column id, activity id) -> visibility, for every WELL-FORMED Permission node in a graph.
+
+    A Permission node missing `Column` or `Activity` is not a pair and is SKIPPED, never a
+    KeyError. This runs inside `apply_workflow`'s damage count — before any write — so an
+    unguarded subscript here escapes forge_build_workflow as a bare traceback rather than as
+    data, which is the one thing no function in this module is allowed to do. What is skipped is
+    not swallowed: `_malformed_permissions` counts the same nodes by id, and every caller reports
+    them, so a Permission node still lands in exactly one bucket.
+    """
     return {
         (n["Column"], n["Activity"]): n.get("Permission", "")
-        for n in draft.values()
-        if isinstance(n, dict) and n.get("Kind") == "Permission"
+        for _k, n in _permission_nodes(draft)
+        if isinstance(n.get("Column"), str) and isinstance(n.get("Activity"), str)
     }
+
+
+def _malformed_permissions(draft: Draft) -> tuple[str, ...]:
+    """Node ids of every Permission that `_permission_pairs` could not read as a (column, step)
+    pair — no `Column`, no `Activity`, or one of them not a string.
+
+    Nothing in this engine mints one; a draft carrying one came from the builder UI, a template,
+    or a half-applied write, and it is exactly the shape that used to KeyError the pair walk.
+    Reported as collateral rather than refused: it is a pre-existing deviation the caller did not
+    cause, and `verify.doctor` — not a write path — is where a draft is judged.
+    """
+    return tuple(sorted(
+        k for k, n in _permission_nodes(draft)
+        if not (isinstance(n.get("Column"), str) and isinstance(n.get("Activity"), str))
+    ))
+
+
+def _sequence_step_stamps(draft: Draft) -> dict[str, str | None]:
+    """SequenceNumber field NAME -> the NAME of the activity its `Step` stamp points at.
+
+    `None` means the stamp is DANGLING (the activity id it holds is not a node in this draft) —
+    which is #18, THE deterministic publish-500: `Property{Name:"Step", Value:<activity id>}` is
+    a SCALAR reference the list-only dangling sweep never touches. Reported by name, not by id,
+    because a workflow rebuild changes every activity id — comparing ids across a rebuild would
+    call every stamp "moved" whether it moved or not.
+    """
+    act_names = {k: v.get("Name") for k, v in draft.items()
+                 if isinstance(v, dict) and v.get("Kind") == "Activity"}
+    out: dict[str, str | None] = {}
+    for node in draft.values():
+        if not (isinstance(node, dict) and node.get("Kind") == "Field"
+                and node.get("Type") == "SequenceNumber"):
+            continue
+        for pid in node.get("Field::Property") or []:
+            prop = draft.get(pid) or {}
+            if prop.get("Name") == "Step":
+                out[node.get("Name", "")] = act_names.get(prop.get("Value"))
+    return out
+
+
+def _section_field_names(draft: Draft, section_name: str) -> tuple[str, ...]:
+    """The field NAMES currently laid out in one section, in the section's own row/column order.
+
+    Deliberately the SAME walk `graph.apply_exact_layout` does (`Column::Row` -> `Row::Column`)
+    rather than draft insertion order, because it is that walk which decides what counts as a
+    leftover — read it any other way and the collateral report describes a different set of
+    fields than the one the rebuild actually moves. An unknown section name is `()`, not a raise:
+    `apply_exact_layout` owns that refusal and states it better.
+    """
+    name_of_col = {n["Column"]: n.get("Name", "")
+                   for n in draft.values()
+                   if isinstance(n, dict) and n.get("Kind") == "Field"
+                   and isinstance(n.get("Column"), str)}
+    sid = next((k for k, v in draft.items()
+                if isinstance(v, dict) and v.get("Kind") == "Column"
+                and v.get("Type") == "Section" and v.get("Name") == section_name), None)
+    if sid is None:
+        return ()
+    out: list[str] = []
+    seen: set[str] = set()
+    for rid in draft[sid].get("Column::Row") or []:
+        for cid in (draft.get(rid) or {}).get("Row::Column") or []:
+            if cid in name_of_col and cid not in seen:
+                seen.add(cid)
+                out.append(name_of_col[cid])
+    return tuple(out)
+
+
+def _field_placements(draft: Draft) -> dict[str, tuple[str, int, int, int]]:
+    """field NAME -> (section title, row index within that section, Start, End) — where the field
+    actually sits on the 6-unit form grid.
+
+    The fact base for the layout collateral `regroup_into_sections` owes its callers. That
+    transform is a REBUILD, not a patch: it drops every Row above the Field/Column layer and
+    re-tiles every section at a uniform `FIELD_SPAN`, in `merge_groups`' order. So a custom grid
+    an earlier `forge_apply_layout` wrote — `[[0-3, 3-6], [0-6], [0-6]]` — comes back
+    `[[0-2, 2-4, 4-6], [0-2, 2-4]]`: nothing is lost (the Field and Column nodes, their ids and
+    their Permission/Event back-refs all survive), but every pre-existing field MOVED, and the
+    form the user sees is not the one they laid out.
+
+    Recurses through nested wrapper Columns (a template's Grid, or whatever the builder invents
+    next) the way `graph.current_groups` does, and reports the LEAF column's own Start/End — a
+    template-cloned field really does move when the regroup flattens its Grid away, and reporting
+    the wrapper's coordinates would hide exactly that. The row index stays the SECTION's own row,
+    the wrapper's, so two fields inside one Grid can share a row index at different depths; that
+    is an approximation only INSIDE a wrapper, and it never hides a move (flattening changes the
+    leaf Start/End too). A field in no section at all is absent from the map rather than given a
+    fake placement, and a name is recorded once — its first placement in section order.
+    """
+    name_of_col = {n["Column"]: n.get("Name", "")
+                   for n in draft.values()
+                   if isinstance(n, dict) and n.get("Kind") == "Field"
+                   and isinstance(n.get("Column"), str)}
+
+    def _leaves(row_ids: list[str], title: str, ri: int, out: dict[str, tuple[str, int, int, int]]) -> None:
+        for rid in row_ids:
+            for cid in (draft.get(rid) or {}).get("Row::Column") or []:
+                col = draft.get(cid) or {}
+                if cid in name_of_col:
+                    out.setdefault(name_of_col[cid],
+                                   (title, ri, int(col.get("Start", 0)), int(col.get("End", 0))))
+                elif col.get("Column::Row"):
+                    _leaves(list(col["Column::Row"]), title, ri, out)
+
+    out: dict[str, tuple[str, int, int, int]] = {}
+    for sec in draft.values():
+        if not (isinstance(sec, dict) and sec.get("Kind") == "Column"
+                and sec.get("Type") == "Section"):
+            continue
+        title = sec.get("Name", "")
+        for ri, rid in enumerate(sec.get("Column::Row") or []):
+            _leaves([rid], title, ri, out)
+    return out
+
+
+def _layout_collateral(before: Draft, after: Draft, exclude: Iterable[str] = ()) -> tuple[str, ...]:
+    """Every field whose grid placement CHANGED across a write, named with both coordinates.
+
+    Counted on the real read-back against the pre-write draft, never on the offline graph — a
+    count taken from what we hoped to write would prove nothing (same rule `apply_workflow`'s
+    `permissions_deleted` follows). `exclude` is the names this call ADDED: a field that did not
+    exist before did not move, and calling it collateral would drown the real signal.
+
+    A field that was placed before and is in NO section afterwards is reported too — that is a
+    field dropped off the form entirely, which no bucket here would otherwise carry.
+    """
+    was = _field_placements(before)
+    now = _field_placements(after)
+    skip = set(exclude)
+    out: list[str] = []
+    for name in sorted(was):
+        if name in skip or was[name] == now.get(name):
+            continue
+        if name not in now:
+            out.append(f"{name!r} was laid out in section {was[name][0]!r} and is now in no "
+                       "section at all — the rebuild dropped it off the form")
+            continue
+        (ws, wr, wa, wb), (ns, nr, na, nb) = was[name], now[name]
+        out.append(f"{name!r} moved: {ws!r} row {wr} cols {wa}-{wb} -> {ns!r} row {nr} "
+                   f"cols {na}-{nb} — regroup_into_sections re-tiles every section at a uniform "
+                   "width, so any custom grid an earlier forge_apply_layout wrote is gone")
+    return tuple(out)
+
+
+def _field_nodes_by_name(draft: Draft) -> dict[str, list[dict[str, Any]]]:
+    """field NAME -> every live Field node carrying it. A LIST, not one node: names are not
+    unique across a form and its child tables (CLAUDE.md Tables), and `graph.apply_changes`
+    matches against `field_names(draft)`, which is exactly this key set."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for node in draft.values():
+        if isinstance(node, dict) and node.get("Kind") == "Field":
+            out.setdefault(node.get("Name", ""), []).append(node)
+    return out
+
+
+def _spec_diff(spec: FieldSpec, node: dict[str, Any]) -> list[tuple[str, Any, Any]]:
+    """(attribute, requested, live) for every way `spec` disagrees with one live Field node.
+
+    Compares ONLY what a caller actually stated: Type and Required always (both are on every
+    FieldSpec), `ReferredList` and each `options` key only when the caller named them. A blind
+    key-by-key diff would flag every Number field, because `graph._TYPE_DEFAULTS` writes keys
+    (`Decimalpoint`, `DefaultValue`) no FieldSpec ever mentions.
+    """
+    diffs: list[tuple[str, Any, Any]] = []
+    want_type = FieldType(spec.type).value
+    if node.get("Type") != want_type:
+        diffs.append(("Type", want_type, node.get("Type")))
+    if bool(node.get("Required", False)) != bool(spec.required):
+        diffs.append(("Required", bool(spec.required), bool(node.get("Required", False))))
+    if spec.referred_list is not None and node.get("ReferredList") != spec.referred_list:
+        diffs.append(("ReferredList", spec.referred_list, node.get("ReferredList")))
+    for key, value in (spec.options or {}).items():
+        if key in _RELOCATED_OPTION_KEYS:
+            continue  # see _RELOCATED_OPTION_KEYS — not on the Field node by design
+        if node.get(key) != value:
+            diffs.append((key, value, node.get(key)))
+    return diffs
+
+
+# `options` keys the offline builder deliberately moves OFF the Field node onto a sibling in the
+# field's configuration cluster. Diffing them against the Field node reads `None` on a field that
+# was written exactly as asked, so a re-apply — which CLAUDE.md and every apply_* docstring
+# promise is idempotent — would report the field as changed-and-ignored and advise deleting it.
+# `LHSModel` is the proven case: graph.apply_changes pops it off the Field and writes it to the
+# User field's mandatory `QueryDefinition` sibling (graph.py, "it belongs on the QueryDefinition,
+# so it must NOT stay on the Field node"). Add a key here only with the graph-side pop to cite.
+_RELOCATED_OPTION_KEYS = frozenset({"LHSModel"})
+
+
+@dataclass(frozen=True)
+class _IgnoredChanges:
+    """The F2 fact base: which requested specs the create-only apply path silently drops."""
+    entries: tuple[str, ...]      # one loud sentence per record, for the report bucket
+    names: frozenset[str]         # the same records by NAME, so the other buckets can exclude them
+    remediation: tuple[str, ...]  # tool names that CAN make the requested change happen
+
+
+def _changed_ignored(draft: Draft, specs: list[FieldSpec]) -> _IgnoredChanges:
+    """The F2 bucket: every requested spec that matched a live field BY NAME but asked for
+    something different from what is actually there.
+
+    `graph.apply_changes` only ever CREATES — a spec whose name already exists is skipped
+    outright, and a spec carrying a `field_id` raises NotImplementedError. So requesting a
+    different Type or Required flag for an EXISTING name is a silent no-op that used to be
+    counted under `skipped` and `verified` at once, reporting success for a change that never
+    happened. Naming it here is doctrine: the record was landing in the wrong bucket.
+
+    A name matching several Field nodes (a form field and a table child can share one) counts as
+    satisfied when ANY of them already matches the spec — that is the same "already present"
+    apply_changes itself sees — and otherwise reports every live candidate, so the caller can
+    tell which node it actually collided with.
+    """
+    live = _field_nodes_by_name(draft)
+    entries: list[str] = []
+    names: list[str] = []
+    remediation: list[str] = []
+    for spec in specs:
+        nodes = live.get(spec.name)
+        if not nodes:
+            continue                                   # a real create — apply_changes will add it
+        per_node = [_spec_diff(spec, n) for n in nodes]
+        if any(not d for d in per_node):
+            continue                                   # one live node already matches -> skipped
+        attrs = {a for diffs in per_node for a, _w, _l in diffs}
+        want = ", ".join(f"{a}={w!r}" for a, w, _l in per_node[0])
+        seen = ", ".join(
+            " ".join(f"{a}={live_v!r}" for a, _w, live_v in diffs) for diffs in per_node
+        )
+        entries.append(f"{spec.name}: requested {want}, live {seen} — NOT applied "
+                       "(apply_changes only creates; an existing name is never edited)")
+        names.append(spec.name)
+        # what the caller can actually DO about it: a Required flag has its own live op, a Type
+        # change has none — the field has to go and come back.
+        if attrs == {"Required"}:
+            remediation.append("forge_set_required")
+        else:
+            remediation.extend(("forge_delete_fields", "forge_apply_fields"))
+    return _IgnoredChanges(tuple(entries), frozenset(names), tuple(dict.fromkeys(remediation)))
+
+
+@dataclass(frozen=True)
+class _PairNames:
+    """Id -> human NAME resolution for one draft's (column, activity) permission pairs.
+
+    The audit unit of `apply_step_permissions` is `Column_13Hw6YCM9B@Activity_3c29a1abe0`, which
+    is unreadable to the agent that has to act on it — 222 such strings, listed twice, were
+    measured at ~15k tokens for ONE call that conveyed "222 pairs written, 0 missing". Names cost
+    one extra walk of a draft this function already holds.
+    """
+    field_of_column: dict[str, str]
+    section_of_column: dict[str, str]
+    step_of_activity: dict[str, str]
+
+    def column(self, cid: str) -> str:
+        return self.field_of_column.get(cid, cid)
+
+    def section(self, cid: str) -> str:
+        return self.section_of_column.get(cid, "(no section)")
+
+    def step(self, aid: str) -> str:
+        return self.step_of_activity.get(aid, aid)
+
+    def pair(self, cid: str, aid: str) -> str:
+        """`Intake / Ticket No @ Ticket arrives` — the section, the field, the step. Falls back to
+        the raw id for anything that does not resolve, so nothing is ever silently unnameable."""
+        return f"{self.section(cid)} / {self.column(cid)} @ {self.step(aid)}"
+
+
+def _pair_names(draft: Draft) -> _PairNames:
+    """Resolve every column and activity id in `draft` to the name a human uses for it. Pure."""
+    layout = section_layout(draft)
+    cols = _kind(draft, "Column")
+    field_of_column: dict[str, str] = {}
+    for f in _kind(draft, "Field").values():
+        cid, fname = f.get("Column"), f.get("Name")
+        if isinstance(cid, str) and isinstance(fname, str):
+            field_of_column[cid] = fname
+    # a SECTION column is itself a legal Permission target (CLAUDE.md Visibility: "Column may be a
+    # SECTION column") and carries its own Name — a field column carries None, hence the walk above
+    for cid, col in cols.items():
+        if cid not in field_of_column and isinstance(col.get("Name"), str):
+            field_of_column[cid] = col["Name"]
+    section_of_column = {cid: s for cid in cols if (s := layout.owner_section(cid)) is not None}
+    step_of_activity = {aid: n for aid, a in _kind(draft, "Activity").items()
+                        if isinstance(n := a.get("Name"), str)}
+    return _PairNames(field_of_column, section_of_column, step_of_activity)
+
+
+def _uncovered_sections(draft: Draft, matrix: Matrix, field_matrix: Matrix | None) -> tuple[str, ...]:
+    """Every section on the form that this matrix leaves editable at NO step (S4b).
+
+    The trap this exists for, hit live: `forge_create_process(from_template=True)` — the DEFAULT —
+    injects four sections the caller never asked for, so an `owners` map written against the
+    caller's own design cannot name them. progressive_matrix maps an unnamed section to ReadOnly
+    everywhere, which writes cleanly and publishes, and the gap only surfaces two steps later as
+    doctor's "section 'System' is never editable at any live step". Stating it here surfaces it on
+    the FIRST call.
+
+    Deliberately NOT folded into `isError` — a caller may legitimately leave a section alone. This
+    mirrors `forge_set_branch_conditions`' `uncovered` (the fail-open switch hazard): stated so it
+    is never discovered later, never an error on its own.
+
+    Two exclusions, both to keep it free of false positives:
+      * a section covered by a FIELD-level override — `field_matrix` expresses editability per
+        field, so a section that only HIDES is fully intentional and is not uncovered;
+      * a section that governs no permissionable column at all (an empty banner Section above a
+        table, a table-host Model column) — there is nothing there to cover.
+    """
+    layout = section_layout(draft)
+    editable_cols: set[str] = set()
+    for fname, row in (field_matrix or {}).items():
+        for f in _kind(draft, "Field").values():
+            if f.get("Name") == fname and isinstance(f.get("Column"), str) \
+                    and any(Visibility(v) is Visibility.EDITABLE for v in row.values()):
+                editable_cols.add(f["Column"])
+    covered_by_field = {s for cid in editable_cols if (s := layout.owner_section(cid)) is not None}
+
+    out: list[str] = []
+    for name, row in matrix.items():
+        if any(Visibility(v) is Visibility.EDITABLE for v in row.values()):
+            continue
+        if name in covered_by_field:
+            continue
+        sid = layout.section_id_of_name.get(name)
+        governed = [c for c in layout.members.get(sid or "", ())
+                    if c not in layout.no_permission_columns
+                    and c not in layout.table_host_columns
+                    and c not in layout.table_child_columns]
+        if not governed:
+            continue
+        out.append(name)
+    return tuple(sorted(out))
+
+
+@dataclass(frozen=True)
+class StepPermissionReport(ApplyReport):
+    """`ApplyReport` with the (column, activity) pair audit kept WHOLE and its PRESENTATION bounded.
+
+    The audit is unchanged and must stay that way (doctrine 2): every pair still lands in exactly
+    one of added / skipped / verified / missing, and those tuples are still complete on the
+    dataclass. What changed is `as_tool_result`: one live `forge_set_visibility` call over 37
+    columns x 6 activities emitted all 222 pairs TWICE (once under `added`, once under `verified`),
+    every entry an opaque `Column_13Hw6YCM9B@Activity_3c29a1abe0` with no field or step name
+    anywhere — ~15k tokens to convey "222 pairs written, 0 missing".
+
+    The default payload states COUNTS plus the names that actually matter:
+      * `missing` in FULL, resolved to names — it is the failure bucket and is never summarised;
+      * `by_section` / `by_step` — one line each, so a caller can see WHERE the work landed;
+      * `uncovered_sections` — S4b, see `_uncovered_sections`;
+      * `summarised` + `note` — exactly how many entries the counts stand in for, so nothing is
+        ever silently withheld ("no silent caps"), and the parameter that returns them.
+    Pass `include_pairs=True` (forge_set_visibility / kf_set_step_visibility take it through) and
+    the full lists come back under `pairs`, named, alongside everything above.
+    """
+    by_section: tuple[str, ...] = ()
+    by_step: tuple[str, ...] = ()
+    uncovered_sections: tuple[str, ...] = ()
+    missing_named: tuple[str, ...] = ()
+    added_named: tuple[str, ...] = ()
+    skipped_named: tuple[str, ...] = ()
+    verified_named: tuple[str, ...] = ()
+    include_pairs: bool = False
+
+    def as_tool_result(self) -> dict[str, Any]:
+        summarised = len(self.added) + len(self.skipped) + len(self.verified) + len(self.collateral)
+        out: dict[str, Any] = {
+            "flow_id": self.flow_id,
+            "pair_counts": {
+                "added": len(self.added), "skipped": len(self.skipped),
+                "verified": len(self.verified), "missing": len(self.missing),
+                "collateral": len(self.collateral),
+            },
+            "missing": list(self.missing_named),
+            "by_section": list(self.by_section),
+            "by_step": list(self.by_step),
+            "uncovered_sections": list(self.uncovered_sections),
+            "remediation": list(self.remediation),
+            "summarised": 0 if self.include_pairs else summarised,
+            "meta_version": self.meta_version,
+            "published": self.published,
+            "isError": bool(self.missing),
+        }
+        if self.include_pairs:
+            out["pairs"] = {
+                "added": list(self.added_named), "skipped": list(self.skipped_named),
+                "verified": list(self.verified_named), "missing": list(self.missing_named),
+            }
+            out["collateral"] = list(self.collateral)
+            out["note"] = (f"{summarised} pair entries listed in full (include_pairs=True). "
+                           f"`missing` is always listed in full either way.")
+        else:
+            out["note"] = (
+                f"{summarised} pair entries summarised into `pair_counts` / `by_section` / "
+                f"`by_step` — nothing was dropped; re-run with include_pairs=true for the full "
+                f"(column, activity) list. `missing` is ALWAYS listed in full and is empty here."
+                if not self.missing else
+                f"{summarised} written/skipped/verified/collateral entries summarised into "
+                f"`pair_counts` / `by_section` / `by_step`; the {len(self.missing)} FAILED pairs "
+                f"are listed in full above. Re-run with include_pairs=true for everything."
+            )
+        return out
+
+
+def _permission_rollup(pairs: Iterable[tuple[str, str]], names: _PairNames,
+                       verified: set[tuple[str, str]], missing: set[tuple[str, str]],
+                       by: str) -> tuple[str, ...]:
+    """One summary line per section (`by="section"`) or per step (`by="step"`) over `pairs`.
+
+    Counts are derived FROM the same pair sets the audit uses, never tracked alongside them, so
+    the rollup can never disagree with `pair_counts` (the same rule `BuildPlan.summary` follows).
+    """
+    buckets: dict[str, list[int]] = {}
+    for cid, aid in pairs:
+        key = names.section(cid) if by == "section" else names.step(aid)
+        row = buckets.setdefault(key, [0, 0, 0])
+        row[0] += 1
+        row[1] += (cid, aid) in verified
+        row[2] += (cid, aid) in missing
+    return tuple(f"{key}: {n} pair(s) written, {ok} verified, {bad} missing"
+                 for key, (n, ok, bad) in sorted(buckets.items()))
 
 
 def apply_step_permissions(
@@ -663,13 +1248,25 @@ def apply_step_permissions(
     publish: bool = False,
     kind: FlowKind = "process",
     field_matrix: Matrix | None = None,
-) -> ApplyReport | Err:
+    include_pairs: bool = False,
+) -> StepPermissionReport | Err:
     """Rebuild a process's per-step visibility matrix live. GET -> apply offline -> guarded PUT
     -> read-back audit -> optional publish.
 
     The audit unit is one (column, activity) PAIR, not a field: every pair we intended to write is
     reported as verified or `missing`, so a partially-applied matrix can never read as success.
     `skipped` counts pairs that already carried the exact visibility we wanted (idempotent re-run).
+
+    DESTRUCTIVE (A4): `graph.set_step_permissions` DELETES every existing Permission node before
+    it writes — it rebuilds the matrix, it does not merge into it. A pair that was live before and
+    is not in the new matrix is therefore gone, and used to be absent from every counted bucket.
+    It is now reported in `collateral`, with its old visibility, so a matrix that quietly stopped
+    covering a column is visible in the audit instead of being discovered at render time.
+
+    The RESULT is bounded, the AUDIT is not: `include_pairs=False` (the default) returns counts,
+    per-section/per-step rollups, every `missing` pair in full, and a `summarised` count of what
+    the rollups stand in for. See `StepPermissionReport` for why, and what `include_pairs=True`
+    adds back.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
@@ -683,9 +1280,19 @@ def apply_step_permissions(
     except ValueError as e:
         return Err("verify", f"offline apply rejected the matrix: {e}")
 
+    names = _pair_names(draft)
     wanted = _permission_pairs(new)
     skipped = tuple(sorted(f"{c}@{a}" for (c, a), v in wanted.items() if before.get((c, a)) == v))
     added = tuple(sorted(f"{c}@{a}" for (c, a), v in wanted.items() if before.get((c, a)) != v))
+    collateral = tuple(sorted(
+        f"deleted Permission {c}@{a} ({names.pair(c, a)}) (was {v!r}) — the rebuild covers this "
+        f"pair no longer"
+        for (c, a), v in before.items() if (c, a) not in wanted
+    )) + tuple(
+        f"deleted malformed Permission {nid} (no readable Column/Activity pair) — it was never "
+        "in the before-matrix and no rebuilt pair replaces it"
+        for nid in _malformed_permissions(draft)
+    )
 
     written = client.put_draft(kind, flow_id, new, expect_version=version)
     if isinstance(written, Err):
@@ -695,8 +1302,10 @@ def apply_step_permissions(
     if isinstance(read_back, Err):
         return read_back
     live = _permission_pairs(read_back)
-    verified = tuple(sorted(f"{c}@{a}" for (c, a), v in wanted.items() if live.get((c, a)) == v))
-    missing = tuple(sorted(f"{c}@{a}" for (c, a), v in wanted.items() if live.get((c, a)) != v))
+    verified_pairs = {(c, a) for (c, a), v in wanted.items() if live.get((c, a)) == v}
+    missing_pairs = {(c, a) for (c, a), v in wanted.items() if live.get((c, a)) != v}
+    verified = tuple(sorted(f"{c}@{a}" for c, a in verified_pairs))
+    missing = tuple(sorted(f"{c}@{a}" for c, a in missing_pairs))
 
     published = False
     if publish and not missing:
@@ -705,14 +1314,31 @@ def apply_step_permissions(
             return pub
         published = True
 
-    return ApplyReport(
+    # Names come off the PRE-write draft, which is the graph both `before` and `wanted` were read
+    # from — the read-back can no longer name a column the rebuild dropped, and `collateral` is
+    # exactly the bucket that needs those names.
+    def _named(keys: Iterable[tuple[str, str]]) -> tuple[str, ...]:
+        return tuple(sorted(names.pair(c, a) for c, a in keys))
+
+    return StepPermissionReport(
         flow_id=flow_id,
         added=added,
         skipped=skipped,
         verified=verified,
         missing=missing,
+        changed_ignored=(),   # a matrix is rebuilt wholesale — nothing to silently ignore
+        collateral=collateral,
+        remediation=("forge_set_visibility",) if collateral else (),
         meta_version=read_back.get(_META_VERSION),
         published=published,
+        by_section=_permission_rollup(wanted, names, verified_pairs, missing_pairs, "section"),
+        by_step=_permission_rollup(wanted, names, verified_pairs, missing_pairs, "step"),
+        uncovered_sections=_uncovered_sections(draft, matrix, field_matrix),
+        missing_named=_named(missing_pairs),
+        added_named=_named((c, a) for (c, a), v in wanted.items() if before.get((c, a)) != v),
+        skipped_named=_named((c, a) for (c, a), v in wanted.items() if before.get((c, a)) == v),
+        verified_named=_named(verified_pairs),
+        include_pairs=include_pairs,
     )
 
 
@@ -728,6 +1354,11 @@ def apply_fields(
     Idempotent: names already on the flow are skipped, never duplicated. The read-back is the
     output invariant audit — a requested field that is not present afterwards is reported as
     `missing`, never silently dropped.
+
+    A name that already exists but whose spec DIFFERS (a different Type, Required flag,
+    ReferredList or stated option) is not idempotent and is not a success: `graph.apply_changes`
+    only creates, so nothing happens at all. Those land in `changed_ignored`, which sets
+    `isError` — see `_changed_ignored`.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
@@ -736,7 +1367,8 @@ def apply_fields(
     before = field_names(draft)
     version = draft.get(_META_VERSION)
     requested = [s.name for s in specs]
-    skipped = tuple(n for n in requested if n in before)
+    ignored = _changed_ignored(draft, specs)
+    skipped = tuple(n for n in requested if n in before and n not in ignored.names)
 
     try:
         new = apply_changes(draft, specs)
@@ -753,11 +1385,11 @@ def apply_fields(
     if isinstance(read_back, Err):
         return read_back
     live_names = field_names(read_back)
-    verified = tuple(n for n in requested if n in live_names)
+    verified = tuple(n for n in requested if n in live_names and n not in ignored.names)
     missing = tuple(n for n in requested if n not in live_names)
 
     published = False
-    if publish and not missing:
+    if publish and not (missing or ignored.entries):
         pub = client.publish(kind, flow_id)
         if isinstance(pub, Err):
             return pub
@@ -769,6 +1401,9 @@ def apply_fields(
         skipped=skipped,
         verified=verified,
         missing=missing,
+        changed_ignored=ignored.entries,
+        collateral=(),
+        remediation=ignored.remediation,
         meta_version=read_back.get(_META_VERSION),
         published=published,
     )
@@ -805,6 +1440,12 @@ def apply_fields_and_layout(
     exists — a genuine no-op), this ALWAYS writes when `groups` is given: a re-layout is a real
     change even with zero new fields, and silently skipping it would leave sections wherever an
     earlier write left them.
+
+    Collateral (A4): the regroup is a REBUILD — it re-tiles every section at a uniform width, so a
+    custom grid an earlier `forge_apply_layout` wrote is destroyed by a call that only meant to add
+    one field. Every pre-existing field whose placement actually moved is named in `collateral`,
+    measured on the read-back against the pre-write draft (`_layout_collateral`), with
+    `forge_apply_layout` in `remediation`.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
@@ -813,7 +1454,8 @@ def apply_fields_and_layout(
     before = field_names(draft)
     version = draft.get(_META_VERSION)
     requested = [s.name for s in specs]
-    skipped = tuple(n for n in requested if n in before)
+    ignored = _changed_ignored(draft, specs)
+    skipped = tuple(n for n in requested if n in before and n not in ignored.names)
 
     try:
         new = apply_changes(draft, specs)
@@ -832,11 +1474,12 @@ def apply_fields_and_layout(
     if isinstance(read_back, Err):
         return read_back
     live_names = field_names(read_back)
-    verified = tuple(n for n in requested if n in live_names)
+    verified = tuple(n for n in requested if n in live_names and n not in ignored.names)
     missing = tuple(n for n in requested if n not in live_names)
+    collateral = _layout_collateral(draft, read_back, exclude=added)
 
     published = False
-    if publish and not missing:
+    if publish and not (missing or ignored.entries):
         pub = client.publish(kind, flow_id)
         if isinstance(pub, Err):
             return pub
@@ -844,6 +1487,8 @@ def apply_fields_and_layout(
 
     return ApplyReport(
         flow_id=flow_id, added=added, skipped=skipped, verified=verified, missing=missing,
+        changed_ignored=ignored.entries, collateral=collateral,
+        remediation=ignored.remediation + (("forge_apply_layout",) if collateral else ()),
         meta_version=read_back.get(_META_VERSION), published=published,
     )
 
@@ -864,11 +1509,36 @@ def apply_layout(
     section named in `layout` but absent from the draft is a hard error (the offline
     `apply_exact_layout` raises before any write), so a stale layout spec never silently drops a
     field off the form. Always writes: a re-layout is a real change even with no new fields.
+
+    Collateral (A4): `apply_exact_layout` REBUILDS every named section's rows, so a field already
+    in one of those sections that the spec does not name is MOVED — re-tiled into trailing rows
+    after the stated ones. Nothing is lost (Field/Column ids and their Permission/Event back-refs
+    survive, which is why this is not `missing`), but the form the user sees changes, and a
+    partial spec is the documented, encouraged usage. Every such field is now named in
+    `collateral` instead of moving silently.
+
+    The span/crowding/duplicate refusals are PURE — they read the spec and nothing else — so they
+    run BEFORE the GET: a caller with an impossible layout is refused without paying for a live
+    round trip. `apply_exact_layout` still re-runs them on the far side, so the pure transform
+    stays independently safe for any other caller.
     """
+    try:
+        validate_layout_spans(layout)
+    except ValueError as e:
+        return Err("verify", f"offline apply_exact_layout rejected the spec: {e}")
+
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
         return draft
     version = draft.get(_META_VERSION)
+
+    collateral = tuple(
+        f"{title!r}: {fname!r} was not named in the layout — re-tiled into a trailing row "
+        "after the stated rows"
+        for title, rows_spec in layout.items()
+        for fname in _section_field_names(draft, title)
+        if fname not in {f for row in rows_spec for f, _s, _e in row}
+    )
 
     try:
         new = apply_exact_layout(draft, layout, descriptions=descriptions)
@@ -893,7 +1563,9 @@ def apply_layout(
 
     return ApplyReport(
         flow_id=flow_id, added=(), skipped=wanted_sections, verified=wanted_sections,
-        missing=(), meta_version=read_back.get(_META_VERSION), published=published,
+        missing=(), changed_ignored=(), collateral=collateral,
+        remediation=("forge_apply_layout",) if collateral else (),
+        meta_version=read_back.get(_META_VERSION), published=published,
     )
 
 
@@ -1059,13 +1731,23 @@ def apply_table(
 class WorkflowReport:
     """Output-invariant audit for forge_build_workflow. DESTRUCTIVE — see apply_workflow's
     docstring: `unassigned` is not a failure, it is an honest report of which steps got no
-    Resource wired (role=None, e.g. because forge_member_batch harvested nothing to assign)."""
+    Resource wired (role=None, e.g. because forge_member_batch harvested nothing to assign).
+
+    `permissions_deleted` / `collateral` / `remediation` are the A4 half: this tool destroys
+    things it was never asked to touch (a live rebuild measured 234 Permission nodes -> 0), and a
+    report that says nothing about that is how a wiped visibility matrix reaches production. They
+    are NOT folded into `isError` — the destruction is documented, intended behavior; what was
+    missing is the audit trail, not a rollback.
+    """
     flow_id: str
     steps: tuple[str, ...]
     verified_steps: tuple[str, ...]
     missing_steps: tuple[str, ...]
     assigned: tuple[str, ...]            # step names that got a real Resource/assignee wired
     unassigned: tuple[str, ...]          # step names with role=None -- no assignee to wire
+    permissions_deleted: int             # Permission nodes the rebuild destroyed (was live, now gone)
+    collateral: tuple[str, ...]          # everything else this rebuild destroyed or relocated
+    remediation: tuple[str, ...]         # tool names the caller now OWES because of the above
     meta_version: str | None
     published: bool
 
@@ -1074,6 +1756,8 @@ class WorkflowReport:
             "flow_id": self.flow_id, "steps": list(self.steps),
             "verified_steps": list(self.verified_steps), "missing_steps": list(self.missing_steps),
             "assigned": list(self.assigned), "unassigned": list(self.unassigned),
+            "permissions_deleted": self.permissions_deleted,
+            "collateral": list(self.collateral), "remediation": list(self.remediation),
             "meta_version": self.meta_version, "published": self.published,
             "isError": bool(self.missing_steps),
         }
@@ -1098,11 +1782,21 @@ def apply_workflow(
     Callers MUST re-run forge_set_visibility straight after this: the wiped Permission matrix is
     graph.build_workflow's own documented behavior, not a bug this function should paper over by
     re-deriving a matrix on its own (it has no basis to guess section ownership).
+
+    What it CAN do, and now does, is state the damage (A4). The report carries
+    `permissions_deleted` counted before-vs-after on the REAL read-back (not on the offline
+    graph — a count taken from what we hoped to write would prove nothing), every relocated
+    SequenceNumber Step stamp, and a machine-readable `remediation` list naming the tools the
+    caller now owes. No rollback is attempted; a rebuild is not undoable, and pretending
+    otherwise would be worse than saying so.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
         return draft
     version = draft.get(_META_VERSION)
+    permissions_before = len(_permission_pairs(draft))
+    malformed_before = _malformed_permissions(draft)
+    stamps_before = _sequence_step_stamps(draft)
 
     try:
         new = build_workflow(draft, steps, parallel=parallel, parallel_after=parallel_after,
@@ -1126,6 +1820,37 @@ def apply_workflow(
     assigned = tuple(name for name, role in steps if role)
     unassigned = tuple(name for name, role in steps if not role)
 
+    # THE RULE: the damage is counted on what came BACK, never on what we sent.
+    permissions_deleted = permissions_before - len(_permission_pairs(read_back))
+    stamps_after = _sequence_step_stamps(read_back)
+    relocated = tuple(
+        f"SequenceNumber {fname!r}: Step stamp relocated from step {was!r} to "
+        f"{stamps_after.get(fname)!r} — build_workflow repoints a stranded stamp by NAME, "
+        "falling back to StartEvent (#18: a dangling stamp is THE deterministic publish-500)"
+        for fname, was in stamps_before.items() if stamps_after.get(fname) != was
+    )
+    collateral: list[str] = []
+    remediation: list[str] = []
+    if permissions_deleted > 0:
+        collateral.append(
+            f"{permissions_deleted} Permission node(s) deleted — build_workflow replaces every "
+            "Activity, so the WHOLE per-step visibility matrix is gone (CLAUDE.md Workflow, "
+            "Visibility)")
+        remediation.append("forge_set_visibility")
+    if relocated:
+        collateral.extend(relocated)
+        remediation.append("forge_add_sequence_number")
+    if malformed_before:
+        # These never counted as pairs, so `permissions_deleted` cannot describe them — and the
+        # rebuild destroyed them all the same. Named, not counted into the pair total, so the two
+        # numbers stay honest and no Permission node lands in zero buckets.
+        collateral.append(
+            f"{len(malformed_before)} malformed Permission node(s) deleted, outside the "
+            f"{permissions_deleted} counted pair(s) (no readable Column/Activity): "
+            f"{', '.join(malformed_before)}")
+        if "forge_set_visibility" not in remediation:
+            remediation.append("forge_set_visibility")
+
     published = False
     if publish and not missing:
         pub = client.publish(kind, flow_id)
@@ -1135,7 +1860,9 @@ def apply_workflow(
 
     return WorkflowReport(
         flow_id=flow_id, steps=wanted, verified_steps=verified, missing_steps=missing,
-        assigned=assigned, unassigned=unassigned, meta_version=read_back.get(_META_VERSION),
+        assigned=assigned, unassigned=unassigned,
+        permissions_deleted=max(permissions_deleted, 0), collateral=tuple(collateral),
+        remediation=tuple(remediation), meta_version=read_back.get(_META_VERSION),
         published=published,
     )
 
@@ -1514,27 +2241,146 @@ class EventReport:
     fields: tuple[str, ...]
     verified: tuple[str, ...]
     missing: tuple[str, ...]
+    triggers: tuple[str, ...]      # "<field> (<Type>) -> <trigger>" — what actually got written
+    derived: tuple[str, ...]       # field names whose trigger this call derived (caller omitted it)
+    unverified: tuple[str, ...]    # triggers whose (type -> trigger) pair is NOT live-confirmed
     meta_version: str | None
     published: bool
 
     def as_tool_result(self) -> dict[str, Any]:
         return {
             "flow_id": self.flow_id, "fields": list(self.fields), "verified": list(self.verified),
-            "missing": list(self.missing), "meta_version": self.meta_version,
+            "missing": list(self.missing), "triggers": list(self.triggers),
+            "derived": list(self.derived), "unverified": list(self.unverified),
+            "meta_version": self.meta_version,
             "published": self.published, "isError": bool(self.missing),
         }
+
+
+@dataclass(frozen=True)
+class _EventPlan:
+    """What `_resolve_event_triggers` worked out, before a single byte is written."""
+    events: dict[str, list[tuple[str, str]]]   # ready for graph.set_field_events — no None left
+    triggers: tuple[str, ...]
+    derived: tuple[str, ...]
+    unverified: tuple[str, ...]
+
+
+def _resolve_event_triggers(
+    draft: Draft, events: dict[str, list[tuple[str | None, str]]],
+) -> _EventPlan:
+    """Resolve every event's trigger against the SOURCE field's real type in the LIVE draft.
+
+    CLAUDE.md Field events: **the trigger is a FUNCTION of the source field's type** — Select
+    fires `onClick`, Date and Number fire `onSelect`, Text/Textarea fire `onChange`. A hand-picked
+    wrong trigger writes fine, publishes fine, and simply never fires, so it is invisible to every
+    check this engine has (THE RULE, in its purest form). `types.trigger_for` is the one table.
+
+    Three refusals, all raised BEFORE any write, all naming what they saw:
+      * the source field's type takes no event at all (`types.NO_EVENT_FIELD_TYPES` — the builder
+        offers no Event tab, so there is no trigger string to find);
+      * the caller stated a trigger that DISAGREES with the derived one — both are named;
+      * the type is real but outside `trigger_for`'s table AND the caller stated nothing, so
+        there is nothing to derive from and nothing to guess with (doctrine: never invent a wire
+        value that is not captured).
+
+    A field name absent from the draft is deliberately NOT refused here: `set_field_events` owns
+    that message, and duplicating it would only make the two drift.
+    """
+    by_name = {v.get("Name"): v for v in draft.values()
+               if isinstance(v, dict) and v.get("Kind") == "Field"}
+    resolved: dict[str, list[tuple[str, str]]] = {}
+    triggers: list[str] = []
+    derived: list[str] = []
+    unverified: list[str] = []
+
+    for fname, specs in events.items():
+        node = by_name.get(fname)
+        if node is None:
+            # not this function's refusal to make — `set_field_events` says "no field named X"
+            # better than anything derived from a type we could not read. Pass through verbatim,
+            # unless there is nothing to pass through, in which case say exactly that.
+            if any(t in (None, "") for t, _s in specs):
+                raise ValueError(f"cannot derive a trigger for {fname!r}: no field of that name "
+                                 "is on this flow")
+            resolved[fname] = [(t, sc) for t, sc in specs if t]
+            continue
+        raw = node.get("Type")
+        want: str | None = None
+        if isinstance(raw, str):
+            if raw in NO_EVENT_FIELD_TYPES:
+                raise ValueError(
+                    f"{fname!r} is a {raw} field: it can never carry an event — the builder "
+                    f"offers no Event tab for it, so no trigger string exists (CLAUDE.md Field "
+                    f"events). This engine refuses {len(NO_EVENT_FIELD_TYPES)}: "
+                    f"{sorted(NO_EVENT_FIELD_TYPES)}. CLAUDE.md names a SIXTH event-less type on "
+                    "the platform, Rich text, which is deliberately absent from that set: its "
+                    "wire shape is uncaptured and its inferred shape is Textarea+AllowFormatting, "
+                    "indistinguishable from a plain Textarea, which legitimately fires onChange "
+                    "(types.NO_EVENT_FIELD_TYPES)")
+            try:
+                ftype = FieldType(raw)
+            except ValueError:
+                ftype = None                      # a real type this engine has no mapping for
+            if ftype is not None:
+                want = trigger_for(ftype).value
+                if ftype not in TRIGGER_LIVE_CONFIRMED:
+                    unverified.append(
+                        f"{fname} ({raw}) -> {want}: family-inferred from the field type, NOT "
+                        "live-confirmed on a published flow (CLAUDE.md Field events)")
+
+        out: list[tuple[str, str]] = []
+        for given, script in specs:
+            given = given or None                 # "" from a wire caller means "derive it"
+            if want is None:
+                if given is None:
+                    raise ValueError(
+                        f"{fname!r} is of type {raw!r}, which is not in `types.trigger_for` — "
+                        "this engine has no captured trigger for it and will not guess one; "
+                        "state the trigger explicitly, or capture it off the builder first")
+                unverified.append(
+                    f"{fname} ({raw}) -> {given}: taken from the caller — {raw!r} is outside "
+                    "`types.trigger_for`, so nothing here could confirm or contradict it")
+                out.append((given, script))
+                triggers.append(f"{fname} ({raw}) -> {given}")
+                continue
+            if given is None:
+                derived.append(fname)
+            elif given != want:
+                raise ValueError(
+                    f"{fname!r} is a {raw} field: it fires {want!r}, but the spec asks for "
+                    f"{given!r} — a wrong trigger writes fine, publishes fine, and simply never "
+                    "fires (CLAUDE.md Field events). Omit it and it is derived for you")
+            out.append((want, script))
+            triggers.append(f"{fname} ({raw}) -> {want}")
+        resolved[fname] = out
+
+    return _EventPlan(resolved, tuple(triggers), tuple(dict.fromkeys(derived)),
+                      tuple(dict.fromkeys(unverified)))
 
 
 def apply_field_events(
     client: KfClient,
     flow_id: str,
-    events: dict[str, list[tuple[str, str]]],
+    events: dict[str, list[tuple[str | None, str]]],
     publish: bool = False,
     kind: FlowKind = "process",
 ) -> EventReport | Err:
-    """GET draft -> graph.set_field_events offline (rejects a top-level `await` or a `KFSDK`
-    reference before any write — the editor's own two parse rules, CLAUDE.md Field events) ->
-    guarded PUT -> read-back verify each named field carries a Field::Event -> optional publish.
+    """GET draft -> DERIVE each source field's trigger from its live type (`_resolve_event_triggers`
+    — the trigger is a FUNCTION of the source type, CLAUDE.md Field events) -> graph.set_field_events
+    offline (rejects a top-level `await` or a `KFSDK` reference before any write — the editor's own
+    two parse rules) -> guarded PUT -> read-back verify each named field carries a Field::Event ->
+    optional publish.
+
+    A trigger of `None` (or `""`) means DERIVE IT, which is the recommended call: the draft is
+    already in hand, so there is no reason to make a caller guess. A stated trigger that
+    disagrees with the derived one is refused outright rather than written — that combination is
+    invisible afterwards, because the event lands, publishes, and never fires.
+
+    The report carries the uncertainty rather than hiding it: `unverified` names every
+    (type -> trigger) pair that is family-inferred rather than live-confirmed (User->onSelect and
+    Boolean->onClick, per CLAUDE.md), so a caller reading the audit knows which triggers still owe
+    a live capture.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
@@ -1542,7 +2388,12 @@ def apply_field_events(
     version = draft.get(_META_VERSION)
 
     try:
-        new = set_field_events(draft, events)
+        plan = _resolve_event_triggers(draft, events)
+    except ValueError as e:
+        return Err("verify", f"field-event trigger check refused the spec: {e}")
+
+    try:
+        new = set_field_events(draft, plan.events)
     except ValueError as e:
         return Err("verify", f"offline set_field_events rejected the spec: {e}")
 
@@ -1567,6 +2418,7 @@ def apply_field_events(
         published = True
 
     return EventReport(flow_id=flow_id, fields=wanted, verified=verified, missing=missing,
+                       triggers=plan.triggers, derived=plan.derived, unverified=plan.unverified,
                        meta_version=read_back.get(_META_VERSION), published=published)
 
 
@@ -1843,6 +2695,16 @@ def run_doctor(
 
     `visibility_role_claims` (from the plan's doctor op — see compile's `_op_doctor`) FAILs the
     audit per claim: role-scoped visibility is API-impossible (#6, ADR-0004).
+
+    One check lives HERE rather than in `verify.doctor`, and only because it cannot live there:
+    MEMBERSHIP is not in the draft at all. CLAUDE.md > Members first — "assignees cannot be
+    written before members exist — publish fails with a metadata error if you try" — so a flow
+    whose steps carry AppRole assignees while its live roster is EMPTY is a documented,
+    zero-diagnostic publish failure that the pure offline module can only ever see half of (rule 6
+    proves a Resource exists, never that anyone is in the role). The tool has the network, so it
+    reads `GET .../member` and folds the verdict into the same `problems` list, its own `members`
+    bucket, and `members_found`. A roster this tool could not READ is recorded in
+    `member_fetch_error` and never counted as populated.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
@@ -1869,16 +2731,40 @@ def run_doctor(
     except ValueError as e:
         return Err("verify", f"doctor could not run: {e}")
 
+    problems = list(report.problems)
+    checked = dict(report.checked)
+
+    # the blind spot the graph cannot close: an AppRole assignee with nobody in the role
+    assignees = [v for v in draft.values()
+                 if isinstance(v, dict) and v.get("Kind") == "Resource"
+                 and v.get("ValueType") == "AppRole" and v.get("Value")]
+    checked["members"] = len(assignees)
+    members_found: int | None = None
+    member_error: str | None = None
+    if assignees:
+        roster = client.get_members(kind, flow_id)
+        if isinstance(roster, Err):
+            member_error = roster.message
+        else:
+            members_found = len(roster)
+            if not roster:
+                problems.append(
+                    f"flow has {len(assignees)} AppRole assignee(s) but ZERO members — publish "
+                    f"fails with a bare metadata error (CLAUDE.md > Members first: members before "
+                    f"assignees, every time; grant them with forge_member_batch)")
+
     return {
         "flow_id": flow_id,
-        "ok": report.ok(),
-        "problems": list(report.problems),
-        "checked": report.checked,
+        "ok": not problems,
+        "problems": problems,
+        "checked": checked,
         "unvalidated": list(report.unvalidated),
         "unvalidatable_scripts": report.unvalidatable_scripts,
         "list_ids_checked": sorted(list_options),
         "list_fetch_errors": list_errors,
-        "isError": not report.ok(),
+        "members_found": members_found,
+        "member_fetch_error": member_error,
+        "isError": bool(problems),
     }
 
 
@@ -1925,6 +2811,15 @@ class MemberReport:
                                           # caller can remap a step->name table onto step->a00_id for
                                           # build_workflow's `roles=`/step assignees. Empty on the
                                           # sibling-harvest path (which carries ids in role_ids).
+    roles_seen: int = 0                  # app-scoped AppRole records the ACCOUNT list returned on
+                                          # this call -- the discovery population, reported next to
+                                          # `applied` so "granted 1 of the 2 roles that exist" can
+                                          # never be silent (live 2026-08-19: it was). 0 on any
+                                          # path that discovers nothing -- the sibling harvest,
+                                          # and apply_member_roles' caller-named set.
+    roles_unusable: tuple[str, ...] = ()  # seen by discovery, NOT grantable (no `_id` or no
+                                          # `Name` on the list record) -- the bucket that keeps
+                                          # `roles_seen` == len(applied) + len(roles_unusable).
 
     def as_tool_result(self) -> dict[str, Any]:
         return {
@@ -1933,6 +2828,8 @@ class MemberReport:
             "verified": list(self.verified), "missing": list(self.missing), "note": self.note,
             "role_ids": list(self.role_ids),
             "resolved": {name: rid for name, rid in self.resolved},
+            "roles_seen": self.roles_seen, "roles_granted": len(self.applied),
+            "roles_unusable": list(self.roles_unusable),
             "isError": bool(self.missing),
         }
 
@@ -1983,14 +2880,26 @@ def _apply_own_app_roles(client: KfClient, target_flow_id: str, kind: FlowKind) 
     roles = client.list_app_roles(app_id)
     if isinstance(roles, Err):
         return roles
-    usable = [r for r in roles if isinstance(r, dict) and r.get("_id") and r.get("Name")]
+    scoped = [r for r in roles if isinstance(r, dict)]
+    usable = [r for r in scoped if r.get("_id") and r.get("Name")]
+    # Every app-scoped record the account list returned lands in exactly one bucket: usable ->
+    # granted, or unusable -> named here. A record with no `_id` or no `Name` cannot be posted to
+    # member/batch at all, and dropping it silently is how "granted 1 of 2" reads as success.
+    unusable = tuple(sorted(
+        f"{r.get('_id') or r.get('Name') or '<blank>'} "
+        f"(no {'Name' if r.get('_id') else '_id'} on the account list record)"
+        for r in scoped if not (r.get("_id") and r.get("Name"))
+    ))
     if not usable:
         return MemberReport(
             target_flow_id=target_flow_id, source_flow_id=None, harvested=(), applied=(),
-            verified=(), missing=(),
-            note=f"no existing flow with members found in KF_APP to harvest from, AND the "
-                 f"account-level AppRole list has no role scoped to app {app_id!r} either — a "
-                 f"human must create at least one AppRole for this app in the builder UI first",
+            verified=(), missing=(), roles_seen=len(scoped), roles_unusable=unusable,
+            note=f"no existing flow with members found in KF_APP to harvest from, and the "
+                 f"account-level AppRole list has no usable role scoped to app {app_id!r} either "
+                 f"(saw {len(scoped)} app-scoped record(s)) — this is NOT a dead end and needs no "
+                 f"human: call forge_create_app_role to create one (POST /app_role/2/{{acct}}, "
+                 f"PROVEN live 2026-08-08 — it scopes the role to KF_APP in a single call), then "
+                 f"re-run forge_member_batch. forge_add_member_roles does both in one call.",
         )
 
     members = [
@@ -2015,9 +2924,20 @@ def _apply_own_app_roles(client: KfClient, target_flow_id: str, kind: FlowKind) 
     return MemberReport(
         target_flow_id=target_flow_id, source_flow_id=None, harvested=names, applied=role_ids,
         verified=verified, missing=missing, role_ids=role_ids,
-        note=f"granted {len(members)} AppRole(s) discovered at the account level for app "
-             f"{app_id!r} (no sibling flow had members to harvest) — Role={_ACCOUNT_GRANT_ROLE!r} "
-             f"Permission={list(_ACCOUNT_GRANT_PERMISSION)!r}: {', '.join(names)}",
+        roles_seen=len(scoped), roles_unusable=unusable,
+        # SAW vs GRANTED, always both, even when they agree. Live 2026-08-19 this path granted 1
+        # of 2 AppRoles created minutes earlier against the same app and said nothing about the
+        # second — with only a granted count in the note there is no way to tell a discovery gap
+        # (the account list returned one role) from a grant gap (it returned two and one was
+        # dropped). The two numbers make that unambiguous from the report alone.
+        note=f"saw {len(scoped)} AppRole(s) scoped to app {app_id!r} at the account level, "
+             f"granted {len(members)} (no sibling flow had members to harvest) — "
+             f"Role={_ACCOUNT_GRANT_ROLE!r} "
+             f"Permission={list(_ACCOUNT_GRANT_PERMISSION)!r}: {', '.join(names)}"
+             + (f"; {len(unusable)} seen but NOT granted: {', '.join(unusable)}"
+                if unusable else "")
+             + ("; a role you created and do not see counted here was not on the account list "
+                "when this ran — re-run forge_member_batch" if not unusable else ""),
     )
 
 
@@ -2056,6 +2976,14 @@ def apply_member_batch(
 
     normalized = [n for r in raw if (n := _normalize_member(r)) is not None]
     harvested = tuple(str(n.get("Role")) for n in normalized)
+    # SAW vs GRANTED on this path too. `_normalize_member` drops any record with no `Role` key,
+    # and until now it dropped it into nothing at all — the same silent gap the account-level
+    # path showed live on 2026-08-19, one source of members over.
+    unusable = tuple(sorted(
+        f"{(r.get('_id') or r.get('Name') or '<blank>') if isinstance(r, dict) else r!r} "
+        "(no Role on the harvested member record)"
+        for r in raw if _normalize_member(r) is None
+    ))
     # role_ids: the harvested AppRole `_id`s -- _normalize_member already keeps `_id` (one of the
     # 5 documented member/batch keys), so this is populated on BOTH paths apply_member_batch can
     # take, not just the account-level fallback (_apply_own_app_roles). A caller (e.g. a workflow
@@ -2065,7 +2993,12 @@ def apply_member_batch(
         return MemberReport(
             target_flow_id=target_flow_id, source_flow_id=source_flow_id, harvested=(),
             applied=(), verified=(), missing=(),
-            note=f"source flow {source_flow_id!r} has no AppRole members to harvest",
+            roles_seen=len(raw), roles_unusable=unusable,
+            note=f"source flow {source_flow_id!r} has no AppRole members to harvest "
+                 f"(saw {len(raw)} member record(s), none usable)"
+                 + (f": {', '.join(unusable)}" if unusable else "")
+                 + " — forge_create_app_role then forge_member_batch, or forge_add_member_roles, "
+                   "grants one without a source flow at all",
         )
 
     posted = client.post_member_batch(kind, target_flow_id, normalized)
@@ -2081,7 +3014,11 @@ def apply_member_batch(
 
     return MemberReport(
         target_flow_id=target_flow_id, source_flow_id=source_flow_id, harvested=harvested,
-        applied=harvested, verified=verified, missing=missing, role_ids=role_ids, note=None,
+        applied=harvested, verified=verified, missing=missing, role_ids=role_ids,
+        roles_seen=len(raw), roles_unusable=unusable,
+        note=(f"saw {len(raw)} member record(s) on {source_flow_id!r}, granted "
+              f"{len(harvested)}; {len(unusable)} seen but NOT granted: {', '.join(unusable)}"
+              if unusable else None),
     )
 
 
@@ -2200,11 +3137,18 @@ def create_application_verified(client: KfClient, name: str) -> dict[str, Any] |
 def delete_anything(
     client: KfClient, kind: str, flow_id: str, app_id: str | None = None,
 ) -> dict[str, Any]:
-    """Archive+delete a flow (process/form/case), a PAGE, or an APPLICATION, verifying deletion
-    via the appropriate LIST route — never the delete response alone (CLAUDE.md Page CRUD: a page
-    DELETE returns `{"status":"success"}` for ANY id, even a bogus one, and its draft GET still
-    200s afterward — storage lingers — so the list route is the only proof). `app_id` is required
-    when `kind == "page"`.
+    """Archive+delete a flow (process/form/case/list/dataset), a PAGE, or an APPLICATION, verifying
+    deletion via the appropriate LIST route — never the delete response alone (CLAUDE.md Page CRUD:
+    a page DELETE returns `{"status":"success"}` for ANY id, even a bogus one, and its draft GET
+    still 200s afterward — storage lingers — so the list route is the only proof). `app_id` is
+    required when `kind == "page"`.
+
+    `list` and `dataset` take the SAME final branch as process/form/case: they are ordinary
+    `/flow/2/{acct}/{kind}/{id}` records (the family their own `create_list`/`create_dataset` and
+    `run_sweep`'s `_SWEEP_FLOW_KINDS` already read), and `KfClient.delete_flow` archives only a
+    `process`. They cannot be PUBLISHED — born live, no publish route — but "no publish route" was
+    never the same statement as "no delete route", and reading it that way is what removed the only
+    way to clean up a dataform (D7).
 
     For process/form/case there is no documented caveat that the delete response itself is
     unreliable (unlike page/application, both proven live 2026-08-06 to need it) — this still
@@ -2464,17 +3408,39 @@ _BORN_LIVE_KINDS = ("list", "dataset", "case")
 
 @dataclass(frozen=True)
 class FlowCreateReport:
+    """What `create_flow_any` made. The three `template_*` buckets are populated only on the
+    `process` branch, which is the one that clones the identity shell (S4a — the same blindness
+    `ProcessCreateReport` fixes for create_process, on the other tool that runs that clone). They
+    stay empty for every born-live kind, which has no scaffold to inventory."""
     kind: str
     flow_id: str
     name: str
     status: str | None
     born_live: bool
+    from_template: bool = False
+    template_sections: tuple[str, ...] = ()
+    template_required_fields: tuple[str, ...] = ()
+    template_steps: tuple[str, ...] = ()
 
     def as_tool_result(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "kind": self.kind, "flow_id": self.flow_id, "name": self.name,
-            "status": self.status, "born_live": self.born_live, "isError": not self.flow_id,
+            "status": self.status, "born_live": self.born_live,
+            "from_template": self.from_template,
+            "template_sections": list(self.template_sections),
+            "template_required_fields": list(self.template_required_fields),
+            "template_steps": list(self.template_steps),
+            "isError": not self.flow_id,
         }
+        if self.from_template:
+            out["note"] = (
+                f"the process template shell brought in {len(self.template_sections)} section(s) "
+                f"and {len(self.template_required_fields)} Required field(s) you did not ask for. "
+                f"forge_set_visibility's `owners` must cover EVERY section listed above or that "
+                f"section is editable at no step. Pass extra={{'from_template': False}} for a "
+                f"bare shell."
+            )
+        return out
 
 
 def create_flow_any(
@@ -2529,8 +3495,15 @@ def create_flow_any(
         if isinstance(written, Err):
             client.delete_flow("process", fid)
             return written
+        # what the scaffold ACTUALLY landed, off the write's own read-back (`put_draft` returns
+        # the server's copy) — never off the template file that was sent.
+        inv = scaffold_inventory(written if isinstance(written, dict) else scaffolded)
         return FlowCreateReport(kind="process", flow_id=fid, name=name, status="Draft",
-                                born_live=False)
+                                born_live=False,
+                                from_template=bool(extra.get("from_template", True)),
+                                template_sections=inv.sections,
+                                template_required_fields=inv.required_fields,
+                                template_steps=inv.steps)
 
     if kind == "list":
         got = client.create_list(name)
@@ -2980,12 +3953,26 @@ class FullFieldsReport:
     layer capabilities — validation/computed/conditional-visibility offered alongside the field
     itself, not as bolt-ons). Every requested field, validation rule, computed formula, and
     conditional-visibility rule lands in its own verified/missing pair — never silently
-    unaccounted for, same discipline as every other Report in this module."""
+    unaccounted for, same discipline as every other Report in this module.
+
+    `changed_ignored`/`remediation` carry the same F2 meaning they do on `ApplyReport`: a
+    requested field that already exists under a DIFFERENT type/required flag was not applied, is
+    not a success, and sets `isError`.
+
+    `collateral` carries the same A4 meaning it does on `ApplyReport`, and this report had no such
+    field at all until D5: passing `groups` runs `graph.regroup_into_sections`, which REBUILDS
+    every section's rows at a uniform width — one forge_apply_fields call silently re-tiled a
+    custom grid an earlier forge_apply_layout had written, and the report said nothing. It does
+    not set `isError` (nothing was lost — ids, Permissions and Events all survive), it is the
+    damage made visible."""
     flow_id: str
     added: tuple[str, ...]
     skipped: tuple[str, ...]
     verified: tuple[str, ...]
     missing: tuple[str, ...]
+    changed_ignored: tuple[str, ...]
+    collateral: tuple[str, ...]
+    remediation: tuple[str, ...]
     validations_verified: tuple[str, ...]
     validations_missing: tuple[str, ...]
     computed_verified: tuple[str, ...]
@@ -2999,6 +3986,9 @@ class FullFieldsReport:
         return {
             "flow_id": self.flow_id, "added": list(self.added), "skipped": list(self.skipped),
             "verified": list(self.verified), "missing": list(self.missing),
+            "changed_ignored": list(self.changed_ignored),
+            "collateral": list(self.collateral),
+            "remediation": list(self.remediation),
             "validations_verified": list(self.validations_verified),
             "validations_missing": list(self.validations_missing),
             "computed_verified": list(self.computed_verified),
@@ -3006,8 +3996,8 @@ class FullFieldsReport:
             "conditional_verified": list(self.conditional_verified),
             "conditional_missing": list(self.conditional_missing),
             "meta_version": self.meta_version, "published": self.published,
-            "isError": bool(self.missing or self.validations_missing or self.computed_missing
-                            or self.conditional_missing),
+            "isError": bool(self.missing or self.changed_ignored or self.validations_missing
+                            or self.computed_missing or self.conditional_missing),
         }
 
 
@@ -3045,6 +4035,13 @@ def apply_fields_full(
 
     Every one of the four layers is independently read-back verified; `missing` in any of them
     marks the whole report `isError` (never publishes on a partial landing).
+
+    Collateral (A4, D5): `groups` runs `graph.regroup_into_sections`, a REBUILD that re-tiles
+    every section at a uniform width — a custom grid an earlier `forge_apply_layout` wrote does
+    not survive one call here. Every pre-existing field that actually moved is named in
+    `collateral`, measured on the read-back against the pre-write draft (`_layout_collateral`),
+    with `forge_apply_layout` in `remediation`. This is why forge_apply_fields is annotated
+    `destructiveHint: True`; until D5 the tool carried the hint and reported none of the damage.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
@@ -3053,7 +4050,8 @@ def apply_fields_full(
     before = field_names(draft)
     version = draft.get(_META_VERSION)
     requested = [s.name for s in specs]
-    skipped = tuple(n for n in requested if n in before)
+    ignored = _changed_ignored(draft, specs)
+    skipped = tuple(n for n in requested if n in before and n not in ignored.names)
     validations = validations or {}
     computed = computed or {}
     conditional = conditional or {}
@@ -3084,8 +4082,9 @@ def apply_fields_full(
     if isinstance(read_back, Err):
         return read_back
     live_names = field_names(read_back)
-    verified = tuple(n for n in requested if n in live_names)
+    verified = tuple(n for n in requested if n in live_names and n not in ignored.names)
     missing = tuple(n for n in requested if n not in live_names)
+    collateral = _layout_collateral(draft, read_back, exclude=added)
 
     by_name = {v.get("Name"): v for v in read_back.values()
               if isinstance(v, dict) and v.get("Kind") == "Field"}
@@ -3116,7 +4115,7 @@ def apply_fields_full(
         (cond_verified if col.get("ColumnVisibility::Criteria") else cond_missing).append(fname)
 
     published = False
-    all_ok = not (missing or val_missing or computed_missing or cond_missing)
+    all_ok = not (missing or ignored.entries or val_missing or computed_missing or cond_missing)
     if publish and all_ok:
         pub = client.publish(kind, flow_id)
         if isinstance(pub, Err):
@@ -3125,8 +4124,367 @@ def apply_fields_full(
 
     return FullFieldsReport(
         flow_id=flow_id, added=added, skipped=skipped, verified=verified, missing=missing,
+        changed_ignored=ignored.entries, collateral=collateral,
+        remediation=ignored.remediation + (("forge_apply_layout",) if collateral else ()),
         validations_verified=tuple(val_verified), validations_missing=tuple(val_missing),
         computed_verified=computed_verified, computed_missing=computed_missing,
         conditional_verified=tuple(cond_verified), conditional_missing=tuple(cond_missing),
         meta_version=read_back.get(_META_VERSION), published=published,
+    )
+
+
+# =====================================================================================
+# FIELD LIFECYCLE (F2). `graph.delete_nodes`, `graph.rename_fields` and `graph.set_required` have
+# been pure, tested ops since the first wave and had ZERO callers — the live field surface was
+# add-only, so one wrong field NAME meant rebuilding the whole flow. These three wrappers are the
+# same GET -> capture _meta_version -> pure transform -> guarded PUT -> read-back -> audit ->
+# optional publish shape as apply_fields/apply_step_permissions above, with ONE difference that
+# matters: for a delete the audit unit is INVERTED. Success is the field being ABSENT on
+# read-back, so reusing ApplyReport would make `missing` the good case and `verified` the failure
+# — an audit nobody would read correctly twice. Each gets buckets that say what they mean.
+# =====================================================================================
+
+
+@dataclass(frozen=True)
+class DeleteFieldsReport:
+    """Output-invariant audit for a live field/table DELETE. INVERTED unit, see above.
+
+    `deleted` = requested AND confirmed absent on read-back (the success bucket).
+    `surviving` = requested, written, and STILL THERE on read-back — the loud failure, and the
+    only thing that sets `isError`. Every requested name lands in exactly one of the two.
+    `collateral` is what went WITH them: the column, its Permissions, its Events, its query
+    definition, its formula — counted by node Kind off the same `graph.delete_closure` the
+    deleter itself uses, never a separate guess at what should have gone.
+    """
+    flow_id: str
+    fields: tuple[str, ...]
+    tables: tuple[str, ...]
+    deleted: tuple[str, ...]
+    surviving: tuple[str, ...]
+    collateral: tuple[str, ...]
+    meta_version: str | None
+    published: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "flow_id": self.flow_id, "fields": list(self.fields), "tables": list(self.tables),
+            "deleted": list(self.deleted), "surviving": list(self.surviving),
+            "collateral": list(self.collateral), "meta_version": self.meta_version,
+            "published": self.published, "isError": bool(self.surviving),
+        }
+
+
+def _live_names(draft: Draft) -> tuple[set[str], set[str]]:
+    """(every Field name, every table-host name) in a draft — the two namespaces a delete/rename
+    audit reads back against. Table hosts are `Column{Type:"Model"}`, never Fields."""
+    return (
+        {v.get("Name", "") for v in draft.values()
+         if isinstance(v, dict) and v.get("Kind") == "Field"},
+        {v.get("Name", "") for v in draft.values()
+         if isinstance(v, dict) and v.get("Kind") == "Column" and v.get("Type") == "Model"},
+    )
+
+
+def delete_fields(
+    client: KfClient,
+    flow_id: str,
+    fields: tuple[str, ...] = (),
+    tables: tuple[str, ...] = (),
+    publish: bool = False,
+    kind: FlowKind = "process",
+) -> DeleteFieldsReport | Err:
+    """GET draft -> REFUSE if anything that survives still references what is about to go
+    (`graph.field_delete_blockers`) -> graph.delete_nodes offline -> guarded PUT -> read-back
+    verify each name is genuinely ABSENT -> optional publish.
+
+    The refusal is the point, not a formality. `delete_nodes` sweeps the field's own cluster and
+    every LIST reference to it, but a scalar reference from a node it does not own — another
+    field's computed formula, a branch condition, a conditional-visibility trigger, an event
+    Script naming the id — survives, and a dangling scalar is the deterministic publish-500 (#18,
+    zero diagnostics). Refusing with the remedy named beats writing a graph that publishes fine
+    today and 500s on the next unrelated publish.
+
+    Nothing is deleted unless EVERY requested name resolves: `delete_nodes` raises on the first
+    unknown one, before the deepcopy, so a typo in a 5-name batch deletes none of the 5.
+    """
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    version = draft.get(_META_VERSION)
+
+    try:
+        blockers = field_delete_blockers(draft, fields, tables)
+        if blockers:
+            return Err("verify", "refusing to delete — these references would be left dangling: "
+                                 + "; ".join(blockers))
+        doomed = delete_closure(draft, fields, tables)
+        new = delete_nodes(draft, fields, tables)
+    except ValueError as e:
+        return Err("verify", f"offline delete_nodes rejected the request: {e}")
+
+    collateral = tuple(sorted(
+        f"{n} {kind_name} node(s)"
+        for kind_name, n in Counter(
+            (draft.get(nid) or {}).get("Kind", "?") for nid in doomed).items()
+    ))
+
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_draft(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+    # AUDIT BY NODE ID, never by name. `fields`/`tables` accept a NAME **or a raw node id** —
+    # the documented way to disambiguate a name a form field and a table child both carry — and a
+    # node id is never in the NAME namespace, so a name-keyed read-back reported every
+    # id-addressed delete as gone whether or not the write landed, and then PUBLISHED on it. That
+    # is a read-back that cannot fail, which is precisely what THE RULE forbids: a 200 and a clean
+    # publish prove nothing. `graph.delete_closure` is the single derivation of "what goes" (the
+    # same one the blocker audit reads), so asking it per token yields that token's own node ids
+    # with no second, driftable walk.
+    requested = tuple(fields) + tuple(tables)
+    targets = [(n, (n,), ()) for n in fields] + [(n, (), (n,)) for n in tables]
+    surviving = tuple(
+        token for token, f_arg, t_arg in targets
+        if any(nid in read_back for nid in delete_closure(draft, f_arg, t_arg))
+    )
+    deleted = tuple(token for token in requested if token not in surviving)
+
+    published = False
+    if publish and not surviving:
+        pub = client.publish(kind, flow_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+
+    return DeleteFieldsReport(
+        flow_id=flow_id, fields=tuple(fields), tables=tuple(tables), deleted=deleted,
+        surviving=surviving, collateral=collateral,
+        meta_version=read_back.get(_META_VERSION), published=published,
+    )
+
+
+@dataclass(frozen=True)
+class RenameFieldsReport:
+    """Output-invariant audit for a live field RENAME. TWO conditions per record, not one: the
+    new name must be PRESENT and the old name must be GONE. Splitting them is deliberate —
+    `stale` (new name landed, old one still there) is what a half-applied rename or a duplicate
+    node looks like, and folding it into `missing` would report it as "the rename didn't happen"
+    when in fact something worse did.
+
+    `unchanged` is the third condition the two-test split cannot express: a rename whose old and
+    new name are the SAME. The collision guard exempts it (renaming A onto A is not a collision),
+    and the two-test read-back then classified it `stale` — new name present, old name also
+    present, because they are one name — which is the WORST bucket, sets `isError`, and suppresses
+    the publish, for a write that did exactly what was asked. A no-op is not a half-applied
+    rename; it gets its own bucket, and a no-op whose name is not on the read-back at all is
+    still `missing` (a real failure)."""
+    flow_id: str
+    renames: tuple[str, ...]      # "old -> new", the requested records
+    verified: tuple[str, ...]     # new name present AND old name gone
+    missing: tuple[str, ...]      # new name ABSENT on read-back
+    stale: tuple[str, ...]        # new name present but the OLD one survives too
+    unchanged: tuple[str, ...]    # old == new, and the name is present -> an honest no-op
+    meta_version: str | None
+    published: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "flow_id": self.flow_id, "renames": list(self.renames),
+            "verified": list(self.verified), "missing": list(self.missing),
+            "stale": list(self.stale), "unchanged": list(self.unchanged),
+            "meta_version": self.meta_version,
+            "published": self.published, "isError": bool(self.missing or self.stale),
+        }
+
+
+def rename_form_fields(
+    client: KfClient,
+    flow_id: str,
+    renames: dict[str, str],
+    publish: bool = False,
+    kind: FlowKind = "process",
+) -> RenameFieldsReport | Err:
+    """GET draft -> graph.rename_fields offline -> guarded PUT -> read-back verify BOTH halves of
+    every rename -> optional publish.
+
+    A rename is the cheap fix for a wrong field name and the one field edit that is genuinely
+    safe: the node id never changes, so per-step Permissions, `Field::Event` and any submitted
+    data stay attached (a delete-and-recreate silently orphans all three). Only ROOT-model fields
+    are renamed — a child-table column keeps its name, because names are not unique across a form
+    and its tables; an unknown or ambiguous name raises before any write.
+
+    A rename that would COLLIDE with a name already on the form is refused here rather than
+    written: two fields sharing a name make every later name-keyed op (`apply_changes`' idempotent
+    skip, `set_field_events`, `add_field_validation`) resolve to an arbitrary one of them. Renaming
+    a field onto its OWN name is exempt from that guard — it collides with nothing — and is
+    reported in its own `unchanged` bucket, not as `stale` (D9: the guard already knew a no-op was
+    legitimate; only the read-back classification disagreed).
+    """
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    version = draft.get(_META_VERSION)
+
+    live_before, _tables = _live_names(draft)
+    clashes = sorted({new_name for old, new_name in renames.items()
+                      if new_name in live_before and new_name != old})
+    if clashes:
+        return Err("verify", f"refusing to rename onto name(s) already on this form: {clashes} — "
+                             "two fields sharing a name make every name-keyed op resolve to an "
+                             "arbitrary one of them")
+
+    try:
+        new = rename_fields(draft, renames)
+    except ValueError as e:
+        return Err("verify", f"offline rename_fields rejected the spec: {e}")
+
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_draft(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+    live_after, _t = _live_names(read_back)
+
+    wanted = tuple(f"{old} -> {new_name}" for old, new_name in renames.items())
+    # A no-op (old == new) is read FIRST, because the two-condition test cannot express it: the
+    # new name is present and so is the old one — they are the same name — which reads as `stale`,
+    # the worst bucket, for a write that did exactly what was asked. Absent from the read-back it
+    # is still `missing`; the no-op exemption is on the CLASSIFICATION, never on the audit.
+    unchanged = tuple(f"{old} -> {n}" for old, n in renames.items()
+                      if old == n and n in live_after)
+    real = {old: n for old, n in renames.items() if old != n}
+    verified = tuple(f"{old} -> {n}" for old, n in real.items()
+                     if n in live_after and old not in live_after)
+    missing = tuple(f"{old} -> {n}" for old, n in renames.items() if n not in live_after)
+    stale = tuple(f"{old} -> {n}" for old, n in real.items()
+                  if n in live_after and old in live_after)
+
+    published = False
+    if publish and not (missing or stale):
+        pub = client.publish(kind, flow_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+
+    return RenameFieldsReport(
+        flow_id=flow_id, renames=wanted, verified=verified, missing=missing, stale=stale,
+        unchanged=unchanged, meta_version=read_back.get(_META_VERSION), published=published,
+    )
+
+
+@dataclass(frozen=True)
+class RequiredReport:
+    """Output-invariant audit for a live Required sweep. `graph.set_required` is a SET operation,
+    not a patch: every root field NOT named comes back optional. `cleared` is that collateral —
+    the fields that were Required before this call and are not any more because the caller did
+    not list them. It is reported, never silently applied, and never folded into `isError`
+    (clearing is the documented semantics; being unable to see it was the bug)."""
+    flow_id: str
+    required: tuple[str, ...]     # the requested set
+    verified: tuple[str, ...]     # read-back Required flag matches the request
+    missing: tuple[str, ...]      # read-back Required flag does NOT match, OR a REQUESTED name is
+                                  # absent from the read-back entirely -> loud failure either way
+    cleared: tuple[str, ...]      # was Required before, is not now (collateral of the SET)
+    meta_version: str | None
+    published: bool
+
+    def as_tool_result(self) -> dict[str, Any]:
+        return {
+            "flow_id": self.flow_id, "required": list(self.required),
+            "verified": list(self.verified), "missing": list(self.missing),
+            "cleared": list(self.cleared), "meta_version": self.meta_version,
+            "published": self.published, "isError": bool(self.missing),
+        }
+
+
+def _root_field_nodes(draft: Draft) -> dict[str, dict[str, Any]]:
+    """ROOT-model field NAME -> node. The exact population `graph.set_required` rewrites."""
+    root = draft.get("Root")
+    return {v.get("Name", ""): v for v in draft.values()
+            if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Model") == root}
+
+
+def apply_required(
+    client: KfClient,
+    flow_id: str,
+    required: tuple[str, ...],
+    publish: bool = False,
+    kind: FlowKind = "process",
+) -> RequiredReport | Err:
+    """GET draft -> REFUSE a Required flag the runtime can never satisfy -> graph.set_required
+    offline -> guarded PUT -> read-back verify every root field's flag -> optional publish.
+
+    SET semantics, not a patch: naming {"A"} makes A required and everything else optional. The
+    fields that lose the flag are reported in `cleared` rather than changing silently.
+
+    Two refusals before any write, both for the same reason — a Required field a human cannot
+    type into makes its step permanently unsubmittable, and nothing downstream can move either
+    (CLAUDE.md Visibility: "a Required field that is Hidden at its own step is still fatal"):
+      * a COMPUTED field (`Field::Expression`) — the value is calculated, not entered. This is
+        exactly how an auto-number and a Created-At mirror blocked step 1 live on 2026-08-05,
+        the war story `graph.set_required`'s own docstring records.
+      * a SequenceNumber field — stamped by the runtime, in a hidden column, never on screen.
+    """
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    version = draft.get(_META_VERSION)
+
+    root_fields = _root_field_nodes(draft)
+    wanted = set(required)
+    unsatisfiable = sorted(
+        f"{name} ({'computed' if node.get('Field::Expression') else 'SequenceNumber'})"
+        for name, node in root_fields.items()
+        if name in wanted and (node.get("Field::Expression") or node.get("Type") == "SequenceNumber")
+    )
+    if unsatisfiable:
+        return Err("verify", f"refusing to mark un-fillable field(s) Required: {unsatisfiable} — "
+                             "a value the user cannot type makes that step permanently "
+                             "unsubmittable (graph.set_required, CLAUDE.md Visibility)")
+
+    was_required = {name for name, node in root_fields.items() if node.get("Required")}
+
+    try:
+        new = set_required(draft, wanted)
+    except ValueError as e:
+        return Err("verify", f"offline set_required rejected the spec: {e}")
+
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_draft(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+
+    # The audit unit is EVERY root field the read-back knows about, UNION every name the caller
+    # REQUESTED. The union is the load-bearing half: iterating the read-back population alone
+    # (what this used to do) means a requested name that was on the form before the write and is
+    # NOT in the read-back lands in no bucket at all — `{"required": ["A"], "verified": ["B"],
+    # "missing": [], "published": true}`. Every sibling here (delete_fields, rename_form_fields,
+    # apply_fields) iterates the REQUESTED set; this one used to invert it. Keeping the read-back
+    # side too is deliberate and is what `apply_required` alone needs: a SET operation that
+    # flipped a field the caller never mentioned is exactly what this report exists to surface.
+    live = _root_field_nodes(read_back)
+    audited = sorted(set(live) | wanted)
+    verified = tuple(n for n in audited
+                     if n in live and bool(live[n].get("Required", False)) is (n in wanted))
+    missing = tuple(n for n in audited
+                    if n not in live or bool(live[n].get("Required", False)) is not (n in wanted))
+    cleared = tuple(sorted(was_required - wanted))
+
+    published = False
+    if publish and not missing:
+        pub = client.publish(kind, flow_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+
+    return RequiredReport(
+        flow_id=flow_id, required=tuple(required), verified=verified, missing=missing,
+        cleared=cleared, meta_version=read_back.get(_META_VERSION), published=published,
     )

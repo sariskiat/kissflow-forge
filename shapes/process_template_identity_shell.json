@@ -307,7 +307,7 @@
       "CreatedAt": "2025-12-11T08:33:38.009Z",
       "Model": "Model_Sample01",
       "Column": "Column_Sample30",
-      "Name": "Business Unit Lookup (TODO: was a Reference field — QueryDefinition stripped, needs a dev-tenant list; see docs/capabilities/process-template.md)"
+      "Name": "Business Unit Lookup"
     },
     "Row_Sample14": {
       "Id": "Row_Sample14",
@@ -642,7 +642,7 @@
       "CreatedAt": "2026-01-13T06:44:17.854Z",
       "Model": "Model_Sample01",
       "Column": "Column_Sample26",
-      "Name": "Manager User (TODO: was a User field — see shapes/field_user_reference.json for the proven QueryDefinition shape; needs a dev user/_employee source, unverified on dev)"
+      "Name": "Manager User"
     },
     "Row_Sample23": {
       "Id": "Row_Sample23",
@@ -906,7 +906,7 @@
       "Type": "Text",
       "CreatedAt": "2026-01-26T08:03:03.668Z",
       "Model": "Model_Sample01",
-      "Name": "Requestor User (TODO: was a User field — see shapes/field_user_reference.json for the proven QueryDefinition shape; needs a dev user/_employee source, unverified on dev)",
+      "Name": "Requestor User",
       "Column": "Column_Sample29"
     },
     "Row_Sample17": {
@@ -974,7 +974,7 @@
       "Type": "Text",
       "CreatedAt": "2026-04-28T11:35:54.444Z",
       "Model": "Model_Sample01",
-      "Name": "Representative Requestor User (TODO: was a User field — see shapes/field_user_reference.json for the proven QueryDefinition shape; needs a dev user/_employee source, unverified on dev)",
+      "Name": "Representative Requestor User",
       "Column": "Column_Sample23"
     },
     "Appearance_Sample04": {
@@ -1062,7 +1062,7 @@
       "Type": "Text",
       "CreatedAt": "2026-08-07T04:29:03.724Z",
       "Model": "Model_Sample01",
-      "Name": "Branch (TODO: was a Reference field — QueryDefinition stripped, needs a dev-tenant list; see docs/capabilities/process-template.md)",
+      "Name": "Branch",
       "Column": "Column_Sample09",
       "Required": true
     },
@@ -1116,6 +1116,7 @@
     "Every Field's real display Name (mostly non-English in the source capture) is replaced with a generic English placeholder -- the \"template identity block\" this ticket asks for. A lone RichText info-banner column (real non-English text embedding a real prod URL) and its now-empty hosting Row were dropped explicitly during de-identification, never copied here.",
     "The source capture's own root Model had NO Model::Appearance key at all -- only 4 Column-level Appearance/Style pairs (the OPTIONAL per-section colour chain). A 5th, Model-level pair is synthesized here (Appearance_Sample05/Style_Sample04) to satisfy this repo's own proven Node-graph invariant that every flow needs the MANDATORY chain or the builder fails to render -- not copied from the source, which plausibly never had this gap caught because nobody opens a \"Duplicate me\" utility template directly.",
     "Ids are minted <Kind>_SampleNN, numbered per-kind -- kfforge.graph.clone_template_shell re-mints ALL of them again at clone time (kfforge.pages._instantiate, the same machinery nav.py already reuses from pages.py) so two from_template=True processes never collide.",
-    "KF_PROCESS_TEMPLATE (env var) or an explicit template_path argument overrides which shapes/*.json file clone_template_shell loads -- this shipped shell is only the DEFAULT; a tenant-specific template belongs in tenant config, never hardcoded into the engine."
+    "KF_PROCESS_TEMPLATE (env var) or an explicit template_path argument overrides which shapes/*.json file clone_template_shell loads -- this shipped shell is only the DEFAULT; a tenant-specific template belongs in tenant config, never hardcoded into the engine.",
+    "RECONNECT LIST (the de-identification's own TODO, kept OUT of every Field's `Name`): Field_Sample13 \"Manager User\", Field_Sample24 \"Requestor User\" and Field_Sample21 \"Representative Requestor User\" were `Type:\"User\"` on the source tenant — reconnect them to Type:\"User\" + Field::QueryDefinition{FlowType:\"User\"} per shapes/field_user_reference.json once a dev-tenant User/_employee source exists. Field_Sample01 \"Branch\" and Field_Sample14 \"Business Unit Lookup\" were `Type:\"Reference\"` — reconnect a ReferredList once a real dev-tenant list exists (see docs/capabilities/process-template.md). These notes used to ship INSIDE each Field's `Name`, which published a developer TODO as a user-facing form label on every from_template=True process; verify.doctor rule 7c now flags that."
   ]
 }

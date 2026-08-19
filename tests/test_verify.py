@@ -325,3 +325,285 @@ def test_doctor_flags_dangling_sequence_step_stamp() -> None:
     rep = doctor(draft)
     assert any("Activity_gone" in p and "500" in p for p in rep.problems)
     assert rep.checked["step_stamps"] == 1
+
+
+# ---- 8. column geometry: a field column off the 6-unit row grid ----------------
+
+def test_column_geometry_is_counted_on_a_clean_draft(clean_draft: Draft) -> None:
+    """The rule counts every field column it examined — a rule that fires nothing must still
+    prove it LOOKED, or a silently-skipped walk reads exactly like a clean bill of health."""
+    report = doctor(clean_draft)
+    assert report.checked["column_geometry"] > 0
+    assert not any("row grid" in p or "overlap" in p for p in report.problems), report.problems
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "why"),
+    [(0, 8, "off the end of the 6-unit row"),
+     (-1, 2, "a negative Start"),
+     (8, 6, "End < Start, the shape the old leftover packer emitted")],
+)
+def test_doctor_flags_a_column_off_the_row_grid(clean_draft: Draft, start: int, end: int,
+                                                why: str) -> None:
+    """The safety net for a draft THIS ENGINE DID NOT BUILD — a human- or copilot-built form whose
+    columns overflow one Row breaks rendering for the WHOLE flow (CLAUDE.md > Node-graph
+    invariants), and every other rule reads it as perfectly healthy."""
+    d = copy.deepcopy(clean_draft)
+    cid = sorted(_section_column_ids(d, "Intake"))[0]
+    d[cid].update({"Start": start, "End": end})
+
+    report = doctor(d)
+    assert any(f"Start={start}, End={end}" in p and "row grid" in p
+               for p in report.problems), (why, report.problems)
+
+
+def test_doctor_flags_two_columns_overlapping_in_one_row(clean_draft: Draft) -> None:
+    """Two columns cannot share a unit of the 6-unit grid — same render-breaking class, per row."""
+    d = copy.deepcopy(clean_draft)
+    row = next(v for v in d.values() if isinstance(v, dict) and v.get("Kind") == "Row"
+               and len(v.get("Row::Column") or []) >= 2
+               and all((d.get(c) or {}).get("Type") == "Field" for c in v["Row::Column"]))
+    first, second = row["Row::Column"][:2]
+    d[first].update({"Start": 0, "End": 4})
+    d[second].update({"Start": 2, "End": 6})
+
+    report = doctor(d)
+    assert any("overlap" in p and row["Id"] in p for p in report.problems), report.problems
+
+
+def test_doctor_flags_a_column_with_no_numeric_span(clean_draft: Draft) -> None:
+    """A missing Start/End is not a zero — the builder cannot place the column at all."""
+    d = copy.deepcopy(clean_draft)
+    cid = sorted(_section_column_ids(d, "Intake"))[0]
+    d[cid].pop("Start", None)
+
+    report = doctor(d)
+    assert any("no numeric grid span" in p for p in report.problems), report.problems
+
+
+def test_table_child_columns_are_not_flagged_off_the_grid() -> None:
+    """A table's child columns are Start=0/End=0 BY DESIGN (CLAUDE.md > Tables: "the 6-unit row
+    grid does not apply inside a table"). A geometry rule that re-derives the grid instead of
+    reading `section_layout`'s fact base false-flags every table-bearing flow — including its host
+    row, where every child sits in ONE schema Row at identical (0, 0) coordinates."""
+    from kfforge.graph import add_table
+    from kfforge.types import FieldType
+
+    d = add_table(synthetic_process_draft(), "Line Items",
+                  [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER), ("Note", FieldType.TEXT)])
+    owners = {**OWNERS, "Other": ["Wrap-up report"]}
+    d = set_step_permissions(d, progressive_matrix(d, owners))
+
+    report = doctor(d)
+    assert not any("row grid" in p or "overlap" in p or "numeric grid span" in p
+                   for p in report.problems), report.problems
+    # ... and the rule genuinely ran: the root form's own columns were still walked
+    assert report.checked["column_geometry"] > 0
+
+
+def test_hidden_sequence_number_column_is_still_checked(clean_draft: Draft) -> None:
+    """A hidden column takes no Permission (#9) but is still LAID OUT — it keeps a real span, so
+    the geometry rule must not inherit the permission-matrix exclusions wholesale."""
+    d = add_sequence_number(copy.deepcopy(clean_draft), "Case No", "Intake",
+                            prefix="CS-", padding="0001", step_activity_name="Start")
+    before = doctor(d).checked["column_geometry"]
+
+    (col,) = [v for v in d.values() if isinstance(v, dict) and v.get("Kind") == "Column"
+              and v.get("IsHidden") and v.get("Type") == "Field"]
+    col.update({"Start": 0, "End": 9})
+    report = doctor(d)
+    assert before > 0
+    assert any("Start=0, End=9" in p for p in report.problems), report.problems
+
+
+# ---- 7b. a list-backed field bound to NO list --------------------------------
+
+def _bare_field_draft(**field_keys: Any) -> Draft:
+    """The smallest draft doctor will run on, carrying ONE field built from `field_keys`. Rule 7b
+    needs no layout, no workflow and no permissions, so a two-node graph isolates it completely."""
+    return {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process",
+               "Model::Field": ["Field_One01"]},
+        "Field_One01": {"Id": "Field_One01", "Kind": "Field", "Model": "M1", **field_keys},
+    }
+
+
+def test_doctor_flags_a_select_field_with_no_referred_list() -> None:
+    """The publish-500 the whole 2026-08-19 diagnosis landed on: a Select is a dropdown whose
+    OPTIONS live in a separate list flow, so a Select with no `ReferredList` is bound to nothing.
+    PUT 200s, publish dies MetadataError with zero diagnostic content — and every other rule reads
+    the flow as perfectly healthy, which is the doctrine-#2 hole this closes: the field landed in
+    NO bucket at all."""
+    rep = doctor(_bare_field_draft(Type="Select", Name="Urgency"))
+    assert any("Urgency" in p and "no ReferredList" in p for p in rep.problems), rep.problems
+    assert rep.checked["list_backed_fields"] == 1
+
+
+def test_doctor_does_not_require_the_referred_list_target_to_be_in_the_draft() -> None:
+    """THE false-positive guard. A list is a SEPARATE FLOW, never a node in this graph, so a rule
+    of the form `ReferredList not in draft` would fire on every correctly wired Select in
+    existence — including every one this engine writes."""
+    rep = doctor(_bare_field_draft(Type="Select", Name="Urgency",
+                                   ReferredList="List_NotInThisDraft"))
+    assert rep.problems == ()
+    assert rep.checked["list_backed_fields"] == 1
+
+
+@pytest.mark.parametrize(
+    ("keys", "flagged"),
+    [({"Type": "Select", "Name": "Plain"}, True),
+     ({"Type": "Select", "Widget": "Radio", "Name": "Radio"}, True),       # field_radio.json
+     ({"Type": "Multiselect", "Name": "Many"}, True),                      # field_multiselect.json
+     ({"Type": "Checkbox", "Name": "Ticks"}, True),                        # field_checkbox.json
+     ({"Type": "Checklist", "Name": "Items"}, True),                       # field_checklist.json
+     ({"Type": "Text", "Name": "Notes"}, False),                           # a branch may test Text
+     ({"Type": "Boolean", "Name": "Done"}, False),
+     ({"Type": "Select", "Name": "Wired", "ReferredList": "List_X1"}, False)],
+)
+def test_list_backed_family_is_exactly_the_captured_one(keys: dict[str, Any],
+                                                        flagged: bool) -> None:
+    """The family is the set of `Type` strings EVERY capture in shapes/ carries `ReferredList` on —
+    never inferred from a field's name, and never widened to `Text` (CLAUDE.md documents Text as a
+    legitimate deciding-field type for a branch condition)."""
+    rep = doctor(_bare_field_draft(**keys))
+    assert any("no ReferredList" in p for p in rep.problems) is flagged, rep.problems
+
+
+def test_clean_draft_has_every_select_wired_to_a_list(clean_draft: Draft) -> None:
+    """The engine's own dogfood build must not be the thing rule 7b catches: the synthetic draft
+    carries three Selects, and every one of them names a list."""
+    rep = doctor(clean_draft)
+    assert rep.checked["list_backed_fields"] >= 3
+    assert not any("no ReferredList" in p for p in rep.problems), rep.problems
+
+
+# ---- 3c. dangling SCALAR references ------------------------------------------
+
+def test_doctor_flags_a_dangling_scalar_reference() -> None:
+    """Rule 3 sweeps `::` LIST refs only; rule 3b guards exactly one scalar (`Property{Step}`).
+    Every other scalar owner back-ref was unguarded — the same PUT-200/publish-500 class."""
+    d = _bare_field_draft(Type="Text", Name="Notes", Column="Column_Gone99")
+    rep = doctor(d)
+    assert any("Column_Gone99" in p and "scalar reference" in p for p in rep.problems), rep.problems
+    assert rep.checked["scalar_refs"] > 0
+
+
+def test_scalar_rule_never_resolves_an_id_shaped_value_that_is_not_a_reference() -> None:
+    """Driven by an explicit (Kind -> keys) ALLOWLIST, never an "looks like an id" heuristic. In
+    the real broken draft `Activity.NodeType == "SendBackToInitiator"` is a string that literally
+    equals a node id, and `Field.ReferredList` / `Resource.Value` / `Model._application_id` are all
+    id-shaped and all resolve to nothing in the draft BY DESIGN."""
+    d: Draft = {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process",
+               "_application_id": "App_Elsewhere01"},
+        "Field_One01": {"Id": "Field_One01", "Kind": "Field", "Type": "Select", "Name": "Pick",
+                        "Model": "M1", "ReferredList": "List_Elsewhere01"},
+        "Activity_One01": {"Id": "Activity_One01", "Kind": "Activity",
+                           "NodeType": "SendBackToInitiator", "Name": "Send back"},
+        "Resource_One01": {"Id": "Resource_One01", "Kind": "Resource", "ValueType": "AppRole",
+                           "Value": "RoElsewhere01"},
+    }
+    rep = doctor(d)
+    assert not any("scalar reference" in p for p in rep.problems), rep.problems
+
+
+def test_scalar_rule_is_silent_on_the_shipped_template_shell() -> None:
+    """The strongest available oracle: the identity shell is a de-identified capture of a REAL
+    published production process template. A scalar rule that fires here fires on every process
+    this engine builds with `from_template=True` — the default."""
+    from kfforge.graph import clone_template_shell
+
+    d = clone_template_shell({"Root": "M1",
+                              "M1": {"Id": "M1", "Kind": "Model", "Name": "P",
+                                     "FlowType": "Process"}})
+    rep = doctor(d)
+    assert not any("scalar reference" in p for p in rep.problems), rep.problems
+    assert rep.checked["scalar_refs"] > 0
+
+
+# ---- 7c. a shipped TODO placeholder in a user-facing field NAME ---------------
+
+def test_doctor_flags_a_todo_placeholder_shipped_as_a_field_label() -> None:
+    d = _bare_field_draft(Type="Text",
+                          Name="Manager User (TODO: was a User field — see field_user_reference)")
+    rep = doctor(d)
+    assert any("TODO placeholder" in p for p in rep.problems), rep.problems
+    assert rep.checked["placeholder_names"] == 1
+
+
+def test_shipped_template_shell_carries_no_todo_placeholder_names() -> None:
+    """The real fix for rule 7c is in the SHAPE, not the rule: a developer note must never ship as
+    a user-facing label on every from_template=True process."""
+    from kfforge.graph import clone_template_shell
+
+    d = clone_template_shell({"Root": "M1",
+                              "M1": {"Id": "M1", "Kind": "Model", "Name": "P",
+                                     "FlowType": "Process"}})
+    rep = doctor(d)
+    assert not any("TODO placeholder" in p for p in rep.problems), rep.problems
+    assert rep.checked["placeholder_names"] > 0
+
+
+# ---- 8b. one column claimed by two rows ---------------------------------------
+
+def test_doctor_flags_one_column_claimed_by_two_rows(clean_draft: Draft) -> None:
+    """D8(a): `apply_exact_layout` used to accept the same field named twice, leaving one Column in
+    two Rows' `Row::Column` while its own `Row` back-ref names only one. The geometry rule groups
+    BY that back-ref, so the duplicate appears once per group and reads perfectly clean."""
+    d = copy.deepcopy(clean_draft)
+    rows = [v for v in d.values() if isinstance(v, dict) and v.get("Kind") == "Row"
+            and (v.get("Row::Column") or [])]
+    victim = rows[0]["Row::Column"][0]
+    rows[1]["Row::Column"].append(victim)          # a second row now claims it too
+
+    rep = doctor(d)
+    assert any(victim in p and "two rows claim" in p for p in rep.problems), rep.problems
+    assert rep.checked["row_column_claims"] > 0
+
+
+def test_four_column_row_from_the_real_prod_template_is_not_flagged() -> None:
+    """Counter-capture, stated deliberately: `shapes/process_template_identity_shell.json` — a
+    de-identified capture of a REAL published production template — carries a Row with FOUR field
+    columns at (0,2) (2,4) (4,5) (5,6). CLAUDE.md's "at most 3 columns per row" is the consequence
+    of FIELD_SPAN=2, not a platform limit, so the doctor refuses to invent a count bound it has a
+    live capture AGAINST (doctrine #10). The engine's own write guard still caps its OWN output at
+    3 — see test_layout_guard_refuses_more_than_three_columns_in_one_row."""
+    from kfforge.graph import clone_template_shell
+
+    d = clone_template_shell({"Root": "M1",
+                              "M1": {"Id": "M1", "Kind": "Model", "Name": "P",
+                                     "FlowType": "Process"}})
+    widest = max((len(v.get("Row::Column") or []) for v in d.values()
+                  if isinstance(v, dict) and v.get("Kind") == "Row"), default=0)
+    assert widest >= 4, "fixture drift: the shipped shell no longer has its 4-column row"
+    rep = doctor(d)
+    assert not any("columns per row" in p or "two rows claim" in p
+                   for p in rep.problems), rep.problems
+
+
+def test_doctor_reports_a_malformed_permission_instead_of_raising() -> None:
+    """Doctrine 7: doctor REPORTS, it never raises. A Permission missing Column/Activity used to
+    escape `forge_doctor` as a bare KeyError across the tool boundary — and doctor is the tool
+    SKILL.md tells the builder to run after EVERY edit, on flows this engine did not build."""
+    from tests.synthetic import synthetic_process_draft
+
+    draft = synthetic_process_draft()
+    draft["Permission_bad"] = {"Id": "Permission_bad", "Kind": "Permission",
+                               "Permission": "Editable"}          # no Column, no Activity
+
+    report = doctor(draft)                                        # must not raise
+
+    assert report.checked["malformed_permissions"] == 1
+    assert any("Permission node(s) missing a Column/Activity" in p for p in report.problems)
+    assert any("Permission_bad" in p for p in report.problems), "must NAME the offending node"
+
+
+def test_a_clean_draft_reports_no_malformed_permissions() -> None:
+    """The control: the guard must not invent a problem on a well-formed graph."""
+    from tests.synthetic import synthetic_process_draft
+
+    report = doctor(synthetic_process_draft())
+    assert report.checked["malformed_permissions"] == 0
+    assert not [p for p in report.problems if "malformed" in p or "missing a Column" in p]

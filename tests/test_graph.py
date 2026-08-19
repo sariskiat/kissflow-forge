@@ -184,8 +184,13 @@ def test_clone_template_shell_grafts_identity_fields_and_manager_approve() -> No
     field_ids = m.get("Model::Field", [])
     assert len(field_ids) == 28, "the identity/initiate shell carries 28 fields"
     names = {got[fid]["Name"] for fid in field_ids}
-    assert "Manager Display Name" in names and "Branch" not in names  # Branch got a TODO suffix, not a bare name
-    assert any(n.startswith("Branch") for n in names)
+    assert "Manager Display Name" in names
+    # "Branch" is a BARE name now. It used to ship as "Branch (TODO: was a Reference field ...)" —
+    # a developer note published as a user-facing label on every from_template=True process. The
+    # reconnect notes live in the shape's own `notes`; verify.doctor rule 7c flags any that come
+    # back.
+    assert "Branch" in names
+    assert not any("TODO:" in n for n in names), sorted(n for n in names if "TODO:" in n)
 
     pd = got[m["RootProcessDef"]]
     acts = [got[a] for a in pd["ProcessDef::Activity"]]
@@ -488,19 +493,210 @@ def test_apply_exact_layout_preserves_field_and_column_ids() -> None:
     assert ids == ids2
 
 
+def _section_rows(draft: dict, section_name: str = "S") -> list[list[tuple[str, int, int]]]:
+    """One inner list per Row of the named section: `(field name, Start, End)` in row order.
+
+    Reads the ROW nodes' own `Row::Column` lists, never the draft's dict insertion order — the
+    latter is stable regardless and hides an unordered leftover pack completely.
+    """
+    sec = next(v for v in draft.values() if isinstance(v, dict)
+               and v.get("Type") == "Section" and v.get("Name") == section_name)
+    col_name = {f["Column"]: f["Name"] for f in draft.values()
+                if isinstance(f, dict) and f.get("Kind") == "Field"}
+    return [[(col_name[c], draft[c]["Start"], draft[c]["End"])
+             for c in draft[rid]["Row::Column"]]
+            for rid in sec["Column::Row"]]
+
+
 def test_apply_exact_layout_keeps_unlisted_fields_in_a_trailing_row() -> None:
-    """A partial layout spec never drops a field off the form — leftovers go in a trailing row."""
+    """A partial layout spec never drops a field off the form — leftovers go in a trailing row,
+    in the section's pre-existing order, tiled on the grid (not merely 'present in some order')."""
     from kfforge.graph import apply_exact_layout, regroup_into_sections
 
     base = regroup_into_sections(_draft_with_fields("a", "b", "c"), [("S", ["a", "b", "c"])])
     got = apply_exact_layout(base, {"S": [[("a", 0, 6)]]})  # b and c not named
-    sec = next(v for v in got.values() if isinstance(v, dict) and v.get("Type") == "Section")
-    col_name = {f["Column"]: f["Name"] for f in got.values()
-                if isinstance(f, dict) and f.get("Kind") == "Field"}
-    rows = [got[r] for r in sec["Column::Row"]]
-    assert len(rows) == 2                       # the named row + the trailing leftover row
-    leftover_names = [col_name[c] for c in rows[1]["Row::Column"]]
-    assert sorted(leftover_names) == ["b", "c"]
+    assert _section_rows(got) == [
+        [("a", 0, 6)],
+        [("b", 0, 2), ("c", 2, 4)],             # the trailing leftover row, in the order they sat
+    ]
+
+
+def test_apply_exact_layout_leftovers_never_run_off_the_grid() -> None:
+    """#F1: a partial layout is the DOCUMENTED usage, and 5 leftovers used to run off the end.
+
+    The old packer added FIELD_SPAN per leftover with no cap, emitting a column at (6,8) — one
+    past the 6-unit row — and then one at (8,6) with End < Start. Either breaks rendering for the
+    WHOLE flow (CLAUDE.md > Node-graph invariants), from the normal path, on 6 ordinary fields.
+    """
+    from kfforge.graph import ROW_UNITS, apply_exact_layout, regroup_into_sections
+
+    names = ["Ticket No", "Contact Date", "Problem", "Unit Serial", "Urgency", "Outcome"]
+    base = regroup_into_sections(_draft_with_fields(*names), [("Big", names)])
+    got = apply_exact_layout(base, {"Big": [[("Ticket No", 0, ROW_UNITS)]]})
+
+    rows = _section_rows(got, "Big")
+    assert rows == [
+        [("Ticket No", 0, 6)],
+        [("Contact Date", 0, 2), ("Problem", 2, 4), ("Unit Serial", 4, 6)],
+        [("Urgency", 0, 2), ("Outcome", 2, 4)],
+    ]
+    for row in rows:                             # the invariant itself, stated independently
+        assert len(row) <= 3
+        for name, start, end in row:
+            assert 0 <= start < end <= ROW_UNITS, (name, start, end)
+
+
+def test_apply_exact_layout_leftover_order_is_deterministic() -> None:
+    """The leftovers used to be read out of a `set[str]`, and Python randomizes string hashing per
+    process — the SAME input produced a different field order on every run. The order must be the
+    section's own pre-existing row/column order: the order the user already sees on the form."""
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    names = ["Ticket No", "Contact Date", "Problem", "Unit Serial", "Urgency", "Outcome"]
+    base = regroup_into_sections(_draft_with_fields(*names), [("Big", names)])
+    spec = {"Big": [[("Ticket No", 0, 6)]]}
+
+    runs = [_section_rows(apply_exact_layout(base, spec), "Big") for _ in range(8)]
+    assert all(r == runs[0] for r in runs), runs
+
+    leftover_order = [n for row in runs[0][1:] for n, _, _ in row]
+    assert leftover_order == names[1:], "leftovers must keep the section's existing field order"
+
+
+def test_apply_exact_layout_leftover_order_survives_a_different_hash_seed() -> None:
+    """The set-iteration bug is invisible within one process — hashing is randomized per PROCESS.
+    Run the same input under two different PYTHONHASHSEEDs and demand the same field order."""
+    import os
+    import subprocess
+    import sys
+
+    src = (
+        "import json,sys;"
+        "sys.path.insert(0, %r);"
+        "from kfforge.graph import apply_changes, apply_exact_layout, regroup_into_sections;"
+        "from kfforge.types import FieldSpec, FieldType;"
+        "names=['Ticket No','Contact Date','Problem','Unit Serial','Urgency','Outcome'];"
+        "d={'Root':'M1','M1':{'Id':'M1','Kind':'Model','Name':'F','FlowType':'Form'}};"
+        "d=apply_changes(d,[FieldSpec(name=n,type=FieldType.TEXT) for n in names]);"
+        "d=regroup_into_sections(d,[('Big',names)]);"
+        "g=apply_exact_layout(d,{'Big':[[('Ticket No',0,6)]]});"
+        "sec=next(v for v in g.values() if isinstance(v,dict) and v.get('Type')=='Section');"
+        "cn={f['Column']:f['Name'] for f in g.values() "
+        "    if isinstance(f,dict) and f.get('Kind')=='Field'};"
+        "print(json.dumps([[cn[c] for c in g[r]['Row::Column']] for r in sec['Column::Row']]))"
+    ) % str(pathlib.Path(__file__).resolve().parent.parent)
+
+    outs = []
+    for seed in ("1", "424242"):
+        env = {**os.environ, "PYTHONHASHSEED": seed}
+        outs.append(subprocess.run([sys.executable, "-c", src], check=True, env=env,
+                                   capture_output=True, text=True).stdout.strip())
+    assert outs[0] == outs[1], outs
+    assert json.loads(outs[0]) == [
+        ["Ticket No"], ["Contact Date", "Problem", "Unit Serial"], ["Urgency", "Outcome"]]
+
+
+def test_apply_exact_layout_rejects_a_span_off_the_end_of_the_grid() -> None:
+    """A Row is a 6-unit grid; End past it breaks rendering for the whole flow. Refuse it."""
+    import pytest
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a", "b"), [("S", ["a", "b"])])
+    with pytest.raises(ValueError, match=r"'a'.*Start=0, End=99.*6-unit"):
+        apply_exact_layout(base, {"S": [[("a", 0, 99)]]})
+
+
+def test_apply_exact_layout_rejects_a_negative_start() -> None:
+    import pytest
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a"), [("S", ["a"])])
+    with pytest.raises(ValueError, match=r"'a'.*Start=-1"):
+        apply_exact_layout(base, {"S": [[("a", -1, 2)]]})
+
+
+def test_apply_exact_layout_rejects_an_inverted_span() -> None:
+    """End <= Start is the shape the old leftover packer emitted itself, e.g. (8, 6)."""
+    import pytest
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a"), [("S", ["a"])])
+    with pytest.raises(ValueError, match=r"'a'.*Start=4, End=2"):
+        apply_exact_layout(base, {"S": [[("a", 4, 2)]]})
+
+    with pytest.raises(ValueError, match=r"'a'.*Start=2, End=2"):   # zero-width is equally illegal
+        apply_exact_layout(base, {"S": [[("a", 2, 2)]]})
+
+
+def test_apply_exact_layout_rejects_two_overlapping_spans_in_one_row() -> None:
+    """Two columns cannot share a unit — the same overflow class, stated per-row."""
+    import pytest
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a", "b"), [("S", ["a", "b"])])
+    with pytest.raises(ValueError, match=r"overlaps 'b'.*with 'a'"):
+        apply_exact_layout(base, {"S": [[("a", 0, 4), ("b", 2, 6)]]})
+
+    # the SAME two spans on two different rows are perfectly legal
+    ok = apply_exact_layout(base, {"S": [[("a", 0, 4)], [("b", 2, 6)]]})
+    assert _section_rows(ok) == [[("a", 0, 4)], [("b", 2, 6)]]
+
+
+def test_apply_exact_layout_rejects_the_same_field_placed_twice() -> None:
+    """D8(a): a Column belongs to exactly ONE Row. Naming a field twice used to be accepted, and
+    the draft it produced had one Column in two Rows' `Row::Column` while the Column's own `Row`
+    back-ref named only the last — a corruption the doctor's geometry rule cannot see, because it
+    groups BY that back-ref and the duplicate shows up once per group."""
+    import pytest
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a", "b"), [("S", ["a", "b"])])
+    with pytest.raises(ValueError, match=r"'a'.*twice"):
+        apply_exact_layout(base, {"S": [[("a", 0, 6)], [("a", 0, 6)]]})
+
+
+def test_apply_exact_layout_rejects_the_same_field_placed_in_two_sections() -> None:
+    """The duplicate is illegal across the WHOLE spec, not just within one row: a field has one
+    Column, so two sections claiming it is the same one-column-two-rows corruption."""
+    import pytest
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a", "b"), [("S1", ["a"]), ("S2", ["b"])])
+    with pytest.raises(ValueError, match=r"'a'.*twice"):
+        apply_exact_layout(base, {"S1": [[("a", 0, 6)]], "S2": [[("a", 0, 6)]]})
+
+
+def test_layout_guard_refuses_more_than_three_columns_in_one_row() -> None:
+    """D8(b): six 1-unit columns are individually in-grid and pairwise disjoint, so the span guard
+    passed them. CLAUDE.md > Node-graph invariants: "at most 3 columns per row" — the engine's own
+    tiler never emits more, and this is what the engine WRITES, so it is capped here."""
+    import pytest
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    names = [f"f{i}" for i in range(6)]
+    base = regroup_into_sections(_draft_with_fields(*names), [("S", names)])
+    row = [(n, i, i + 1) for i, n in enumerate(names)]
+    with pytest.raises(ValueError, match=r"6 columns.*at most 3"):
+        apply_exact_layout(base, {"S": [row]})
+
+    # exactly 3 is the documented maximum and stays legal, at any widths
+    ok = apply_exact_layout(base, {"S": [[("f0", 0, 1), ("f1", 1, 2), ("f2", 2, 6)]]})
+    assert _section_rows(ok)[0] == [("f0", 0, 1), ("f1", 1, 2), ("f2", 2, 6)]
+
+
+def test_apply_exact_layout_rejects_a_bad_span_before_touching_the_draft() -> None:
+    """Pure-function discipline: a rejected spec leaves the draft byte-identical — the validation
+    runs before the deepcopy, so a later section's bad row cannot half-apply an earlier one."""
+    import copy as _copy
+
+    import pytest
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a", "b"), [("S1", ["a"]), ("S2", ["b"])])
+    snapshot = _copy.deepcopy(base)
+    with pytest.raises(ValueError, match="S2"):
+        apply_exact_layout(base, {"S1": [[("a", 0, 6)]], "S2": [[("b", 0, 7)]]})
+    assert base == snapshot
 
 
 def test_apply_exact_layout_raises_on_a_field_not_in_the_draft() -> None:
@@ -1545,3 +1741,291 @@ def test_regroup_does_not_break_a_table_bearing_flow() -> None:
     # the table host column is still a live root-level row, not folded into any Section
     root_rows = got["M1"]["Model::Row"]
     assert host["Row"] in root_rows
+
+
+# =====================================================================================
+# Field lifecycle (F2): delete_closure / field_delete_blockers / delete_nodes.
+# `delete_nodes` had ZERO callers before the client wrappers landed, so its sweep had never been
+# exercised against a field carrying any of the CONFIGURATION nodes the engine can now attach
+# (query definition, computed formula, validation, conditional visibility, sequence properties).
+# Every one of those hangs off the field by a SCALAR back-reference, which `_sweep_dangling` is
+# deliberately blind to and which is the deterministic publish-500 (#18).
+# =====================================================================================
+
+def _scalar_dangling_refs(draft: dict) -> list[str]:
+    """Every SCALAR (non-list) value that LOOKS like a node id and points at a node that is not
+    in the draft. The exact blind spot `_dangling_refs`/`_sweep_dangling` (list-only, by design)
+    cannot see — and the one that publishes 500 with zero diagnostics."""
+    prefixes = ("Field_", "Column_", "Row_", "Permission_", "Event_", "Expression_", "Node_",
+                "Criteria_", "Condition_", "QueryDefinition_", "Property_", "Activity_",
+                "ProcessDef_", "Resource_", "Model_")
+    problems: list[str] = []
+    for nid, node in draft.items():
+        if not isinstance(node, dict):
+            continue
+        for key, val in node.items():
+            if key == "Id" or not isinstance(val, str):
+                continue
+            if val.startswith(prefixes) and val not in draft:
+                problems.append(f"{nid}.{key} -> {val}")
+    return problems
+
+
+def _form_with(*specs) -> dict:
+    from kfforge.graph import apply_changes
+    d = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    return apply_changes(d, list(specs))
+
+
+def test_delete_nodes_sweeps_a_user_fields_query_definition() -> None:
+    """A `User` field's sibling QueryDefinition holds a SCALAR `Field` back-ref. Left behind it is
+    an orphan pointing at a dead id — and refusing the delete instead would make every User field
+    permanently undeletable, since nothing on the tool surface can remove a QueryDefinition."""
+    from kfforge.graph import delete_closure, delete_nodes
+
+    draft = _form_with(FieldSpec(name="Owner", type=FieldType.USER))
+    qids = [k for k, v in draft.items() if isinstance(v, dict) and v.get("Kind") == "QueryDefinition"]
+    assert len(qids) == 1, "fixture must actually carry the User field's QueryDefinition"
+
+    assert qids[0] in delete_closure(draft, ("Owner",))
+    got = delete_nodes(draft, ("Owner",))
+    assert qids[0] not in got
+    assert _scalar_dangling_refs(got) == []
+
+
+def test_delete_nodes_sweeps_the_fields_own_computed_expression_tree() -> None:
+    from kfforge.graph import delete_nodes, set_field_computed
+
+    draft = _form_with(FieldSpec(name="Total", type=FieldType.NUMBER),
+                       FieldSpec(name="Qty", type=FieldType.NUMBER))
+    draft = set_field_computed(draft, "Total", {"fn": "concatenate",
+                                                "args": [{"static": "n="}, {"field": "Qty"}]})
+    assert any(v.get("Kind") == "Expression" for v in draft.values() if isinstance(v, dict))
+
+    got = delete_nodes(draft, ("Total",))
+    assert not [v for v in got.values() if isinstance(v, dict) and v.get("Kind") == "Expression"]
+    assert not [v for v in got.values() if isinstance(v, dict) and v.get("Kind") == "Node"]
+    assert _scalar_dangling_refs(got) == []
+    assert "Qty" in {v.get("Name") for v in got.values()
+                     if isinstance(v, dict) and v.get("Kind") == "Field"}
+
+
+def test_delete_nodes_sweeps_the_fields_own_validation_criteria_and_conditions() -> None:
+    from kfforge.graph import add_field_validation, delete_nodes
+
+    draft = _form_with(FieldSpec(name="Code", type=FieldType.TEXT))
+    draft = add_field_validation(draft, "Code", "MAX_LENGTH", "10")
+    assert any(v.get("Kind") == "Condition" for v in draft.values() if isinstance(v, dict))
+
+    got = delete_nodes(draft, ("Code",))
+    assert not [v for v in got.values() if isinstance(v, dict)
+                and v.get("Kind") in ("Criteria", "Condition")]
+    assert _scalar_dangling_refs(got) == []
+
+
+def test_delete_nodes_sweeps_the_fields_own_conditional_visibility_rule() -> None:
+    """Deleting the TARGET of a conditional-visibility rule takes the rule with it — and the
+    trigger column's `LHSOwnField::Condition` back-ref is a LIST, so the existing sweep clears it."""
+    from kfforge.graph import delete_nodes, set_conditional_visibility
+
+    draft = _form_with(FieldSpec(name="Reason", type=FieldType.TEXT),
+                       FieldSpec(name="Flag", type=FieldType.BOOLEAN))
+    draft = set_conditional_visibility(draft, "Reason", "Flag", "EQUAL_TO", "true")
+
+    got = delete_nodes(draft, ("Reason",))
+    assert not [v for v in got.values() if isinstance(v, dict)
+                and v.get("Kind") in ("Criteria", "Condition")]
+    assert _scalar_dangling_refs(got) == []
+    assert _dangling_refs(got) == []
+
+
+def test_delete_nodes_still_sweeps_the_column_and_its_permissions() -> None:
+    """Regression net for the ORIGINAL sweep, now that delete_nodes routes through
+    delete_closure: the field, its Column and every Permission on that Column still go."""
+    from kfforge.graph import delete_nodes
+
+    draft = _form_with(FieldSpec(name="a", type=FieldType.TEXT),
+                       FieldSpec(name="b", type=FieldType.TEXT))
+    fid = next(k for k, v in draft.items()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "a")
+    col = draft[fid]["Column"]
+    draft["Permission_x"] = {"Id": "Permission_x", "Kind": "Permission", "Column": col,
+                             "Activity": "Activity_1", "Permission": "Editable"}
+    draft[col].setdefault("Column::Permission", []).append("Permission_x")
+
+    got = delete_nodes(draft, ("a",))
+    assert fid not in got and col not in got and "Permission_x" not in got
+    assert "b" in {v.get("Name") for v in got.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Field"}
+
+
+def test_delete_nodes_unknown_name_raises_before_any_copy() -> None:
+    from kfforge.graph import delete_nodes
+
+    draft = _form_with(FieldSpec(name="a", type=FieldType.TEXT))
+    snapshot = copy.deepcopy(draft)
+    with pytest.raises(ValueError, match="no field named 'nope'"):
+        delete_nodes(draft, ("a", "nope"))
+    assert draft == snapshot, "a rejected delete must leave the input byte-identical"
+
+
+def test_field_delete_blockers_is_empty_for_a_plain_field() -> None:
+    from kfforge.graph import field_delete_blockers
+
+    draft = _form_with(FieldSpec(name="a", type=FieldType.TEXT),
+                       FieldSpec(name="b", type=FieldType.TEXT))
+    assert field_delete_blockers(draft, ("a",)) == ()
+
+
+def test_field_delete_blockers_names_a_surviving_formula_that_reads_the_field() -> None:
+    """`Total`'s formula reads `Qty` by id through a `Node{Type:"Field"}`. Deleting `Qty` leaves
+    that Node holding a dead scalar — and sweeping it would silently rewrite Total's formula, a
+    change the caller never asked for. So: refuse, and name the remedy."""
+    from kfforge.graph import field_delete_blockers, set_field_computed
+
+    draft = _form_with(FieldSpec(name="Total", type=FieldType.NUMBER),
+                       FieldSpec(name="Qty", type=FieldType.NUMBER))
+    draft = set_field_computed(draft, "Total", {"fn": "concatenate", "args": [{"field": "Qty"}]})
+
+    blockers = field_delete_blockers(draft, ("Qty",))
+    assert len(blockers) == 1
+    assert "'Qty'" in blockers[0] and "Expression" in blockers[0]
+    assert field_delete_blockers(draft, ("Total",)) == (), "the OWNER of the formula deletes clean"
+
+
+def test_field_delete_blockers_names_a_conditional_visibility_trigger() -> None:
+    from kfforge.graph import field_delete_blockers, set_conditional_visibility
+
+    draft = _form_with(FieldSpec(name="Reason", type=FieldType.TEXT),
+                       FieldSpec(name="Flag", type=FieldType.BOOLEAN))
+    draft = set_conditional_visibility(draft, "Reason", "Flag", "EQUAL_TO", "true")
+
+    blockers = field_delete_blockers(draft, ("Flag",))
+    assert len(blockers) == 1 and "TRIGGER" in blockers[0] and "'Flag'" in blockers[0]
+    assert field_delete_blockers(draft, ("Reason",)) == ()
+
+
+def test_field_delete_blockers_names_a_surviving_event_script_that_uses_the_id() -> None:
+    """`set_field_events` already refuses a script naming a MISSING field ("breaks the WHOLE form
+    at load"). The delete side of the same rule: never create that condition either."""
+    from kfforge.graph import field_delete_blockers, set_field_events
+
+    draft = _form_with(FieldSpec(name="Source", type=FieldType.TEXT),
+                       FieldSpec(name="Target", type=FieldType.TEXT))
+    tgt = next(k for k, v in draft.items()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Target")
+    draft = set_field_events(draft, {"Source": [("onChange", f"kf.x('{tgt}');")]})
+
+    blockers = field_delete_blockers(draft, ("Target",))
+    assert len(blockers) == 1 and "Script" in blockers[0] and "'Target'" in blockers[0]
+    assert field_delete_blockers(draft, ("Source",)) == (), "the event's OWN field deletes clean"
+
+
+# ---- apply_changes: a Select must name the list its options live in --------------------------
+
+def test_apply_changes_refuses_a_select_with_no_referred_list() -> None:
+    """Rule A′ (2026-08-19 publish-500 diagnosis). A Select's OPTIONS live in a separate list
+    flow; minting one with no `ReferredList` is a dropdown bound to nothing, which PUTs 200 and
+    dies on publish with a bare MetadataError. The `FieldType.USER` branch twenty lines below
+    already refuses/repairs its own version of exactly this defect — refuse at compile (ADR-0004),
+    naming the fix, rather than writing a field that cannot publish."""
+    import pytest
+    from kfforge.graph import apply_changes
+    from kfforge.types import FieldSpec, FieldType
+
+    with pytest.raises(ValueError, match=r"'Urgency'.*referred_list"):
+        apply_changes(_load(), [FieldSpec(name="Urgency", type=FieldType.SELECT)])
+
+
+def test_apply_changes_refuses_the_select_before_touching_the_graph() -> None:
+    """Validation-first, like every other refusal in apply_changes: a batch whose LAST spec is a
+    bare Select must not have written the earlier ones."""
+    import copy as _copy
+
+    import pytest
+    from kfforge.graph import apply_changes
+    from kfforge.types import FieldSpec, FieldType
+
+    draft = _load()
+    snapshot = _copy.deepcopy(draft)
+    with pytest.raises(ValueError, match="referred_list"):
+        apply_changes(draft, [FieldSpec(name="Notes", type=FieldType.TEXT),
+                              FieldSpec(name="Urgency", type=FieldType.SELECT)])
+    assert draft == snapshot
+
+
+def test_apply_changes_writes_a_wired_select() -> None:
+    from kfforge.graph import apply_changes
+    from kfforge.types import FieldSpec, FieldType
+
+    got = apply_changes(_load(), [FieldSpec(name="Urgency", type=FieldType.SELECT,
+                                            referred_list="List_Sample01")])
+    (fld,) = [v for v in got.values() if isinstance(v, dict) and v.get("Name") == "Urgency"]
+    assert fld["Type"] == "Select" and fld["ReferredList"] == "List_Sample01"
+
+
+# ---- S2(a) / D10: progressive_matrix DROPPED an unknown name instead of refusing it -----------
+# Two tool descriptions (kf_plan_step_visibility, kf_set_step_visibility) already claimed "a
+# section or step name that is not in `draft` is refused as DATA here". It was not: an unknown
+# section key matched no Section and simply never appeared, and an unknown step name matched no
+# Activity, which read as "nobody owns this section" and quietly emitted ReadOnly everywhere —
+# on a DESTRUCTIVE rebuild that deletes every Permission first. The name the caller supplied
+# landed in no bucket at all (doctrine 2).
+
+
+def _visibility_draft() -> dict:
+    from synthetic import synthetic_process_draft
+
+    return synthetic_process_draft()
+
+
+def test_progressive_matrix_refuses_a_section_name_that_is_not_on_the_form() -> None:
+    from kfforge.graph import progressive_matrix
+
+    with pytest.raises(ValueError, match=r"section\(s\) not on this form.*NoSuchSection"):
+        progressive_matrix(_visibility_draft(), {"NoSuchSection": ["Assess unit"]})
+
+
+def test_progressive_matrix_refuses_a_step_name_that_is_not_on_the_workflow() -> None:
+    from kfforge.graph import progressive_matrix
+
+    with pytest.raises(ValueError, match=r"step\(s\) not on this workflow.*Assess Unit"):
+        progressive_matrix(_visibility_draft(), {"Assessment": ["Assess Unit"]})   # wrong case
+
+
+def test_the_refusal_names_what_is_actually_available() -> None:
+    """A refusal a caller cannot act on is a dead end — both messages list the real set."""
+    from kfforge.graph import progressive_matrix
+
+    with pytest.raises(ValueError) as sec:
+        progressive_matrix(_visibility_draft(), {"Intak": ["Start"]})
+    assert "Intake" in str(sec.value)
+
+    with pytest.raises(ValueError) as step:
+        progressive_matrix(_visibility_draft(), {"Intake": ["Strt"]})
+    assert "Start" in str(step.value)
+
+
+def test_a_section_the_owners_map_deliberately_omits_is_still_legal() -> None:
+    """The control, and it must pass BOTH before and after the guard: leaving a section out of
+    `owners` is the documented unowned case (ReadOnly everywhere), NOT an unresolved name. A guard
+    that could not tell the two apart would break every real call — the synthetic draft's own
+    "Other" section is deliberately unowned."""
+    from synthetic import OWNERS
+
+    from kfforge.graph import progressive_matrix
+    from kfforge.types import Visibility
+
+    matrix = progressive_matrix(_visibility_draft(), OWNERS)
+    assert "Other" not in OWNERS and "Other" in matrix
+    assert set(matrix["Other"].values()) == {Visibility.READONLY}
+
+
+def test_an_empty_owner_list_is_still_legal() -> None:
+    """The other half of the control: `{"Other": []}` names a REAL section with no owner. It must
+    stay legal — only an unresolvable NAME is refused, never an empty list."""
+    from kfforge.graph import progressive_matrix
+    from kfforge.types import Visibility
+
+    matrix = progressive_matrix(_visibility_draft(), {"Other": []})
+    assert set(matrix["Other"].values()) == {Visibility.READONLY}

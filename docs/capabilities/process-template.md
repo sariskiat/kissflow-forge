@@ -54,7 +54,10 @@ de-identified capture of a REAL, published production process template
 (280 nodes on the source tenant) — structure only, not a literal 1:1 clone:
 5 `QueryDefinition` nodes (prod-tenant list/user bindings) were stripped,
 the 2 `Reference` fields and 3 `User` fields they belonged to converted to
-plain `Text` (each `Name` flagged with a TODO), and every
+plain `Text` (the reconnect TODO for each one lives in the shape's own
+`notes`, deliberately NOT inside the field's `Name` — a developer note in a
+`Name` publishes as a user-facing form label on every process built from this
+shell, which `verify.doctor` rule 7c now flags), and every
 `Permission`/`Resource`/`Criteria`/`Condition`/`Expression`/`Node` (in-flight
 state and the branch/validation AST) dropped outright as out of scope for an
 identity shell. See `shapes/process_template_identity_shell.json`'s own
@@ -74,13 +77,14 @@ what those tools write BEFORE a human ever opens the draft.
   the old bare scaffold — issue #59's decision is that every process built
   through this engine starts from the same known-good identity shape rather
   than an empty draft, so grilling/spec work stacks on a proven foundation.
-- The shell's 3 retyped `Text` fields (originally `User`) are marked with a
-  `(TODO: was a User field ...)` `Name` — reconnect them to `Type:"User"` +
-  `Field::QueryDefinition{FlowType:"User"}` per
+- The shell's 3 retyped `Text` fields (originally `User`) are named plainly —
+  "Manager User", "Requestor User", "Representative Requestor User"; the
+  shape's own `notes` carry the RECONNECT LIST naming them by id. Reconnect
+  them to `Type:"User"` + `Field::QueryDefinition{FlowType:"User"}` per
   `shapes/field_user_reference.json` once a dev-tenant `User`/`_employee`
   source exists to bind against (see `docs/capabilities/field.user.md`).
-  Similarly for the 2 retyped `Reference` fields — reconnect a `ReferredList`
-  once a real dev-tenant list exists.
+  Similarly for the 2 retyped `Reference` fields ("Branch", "Business Unit
+  Lookup") — reconnect a `ReferredList` once a real dev-tenant list exists.
 - `KF_PROCESS_TEMPLATE` lets a deployment point at its OWN de-identified
   template instead of the shipped default, without touching engine code — a
   real tenant's template itself must never be committed to this repo (only a

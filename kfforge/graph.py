@@ -105,6 +105,87 @@ def _alloc_slot(draft: Draft, model_id: str, seq: int) -> tuple[str, int, int]:
     return row_id, start, start + FIELD_SPAN
 
 
+def _tile_into_rows(columns: list[str]) -> list[list[tuple[str, int, int]]]:
+    """Tile column ids across the 6-unit grid: one inner list per Row, `(column id, Start, End)`.
+
+    THE auto-tiler. At most ROW_UNITS/FIELD_SPAN columns per Row, at (0,2) (2,4) (4,6) — past
+    that a new Row opens, exactly as `_alloc_slot` allocates one slot at a time. Every path that
+    places columns the caller did not position itself goes through here (`regroup_into_sections`,
+    `apply_exact_layout`'s leftover row), so "a Row never overflows the grid" is ONE rule in one
+    place rather than one copy per call site — a second, hand-rolled tiler is how
+    `apply_exact_layout` came to emit (6,8) and (8,6) columns off the end of the grid. Pure.
+    """
+    per_row = ROW_UNITS // FIELD_SPAN
+    rows: list[list[tuple[str, int, int]]] = []
+    for i, cid in enumerate(columns):
+        slot = i % per_row
+        if slot == 0:
+            rows.append([])
+        rows[-1].append((cid, slot * FIELD_SPAN, (slot + 1) * FIELD_SPAN))
+    return rows
+
+
+MAX_COLUMNS_PER_ROW = ROW_UNITS // FIELD_SPAN   # 3 — CLAUDE.md > Node-graph invariants
+
+
+def validate_layout_spans(layout: dict[str, list[list[tuple[str, int, int]]]]) -> None:
+    """Reject any caller-stated layout that cannot exist on the 6-unit row grid. Raises ValueError.
+
+    PURE — it reads the spec and nothing else, no draft required. That is what lets the live
+    orchestration (`client.apply_layout`) run it BEFORE the GET, so a caller with an impossible
+    span is refused without paying for a round trip; `apply_exact_layout` runs it again before it
+    copies or touches anything, so a bad spec also leaves the draft entirely unmutated.
+
+    Three refusals, all of them render-breaking rather than cosmetic (CLAUDE.md > Node-graph
+    invariants — overflow one Row and the BUILDER fails to render the whole flow, not just that
+    row):
+
+    * a span off the grid (`0 <= Start < End <= ROW_UNITS`);
+    * two spans sharing a unit of the same row;
+    * more than `MAX_COLUMNS_PER_ROW` columns in one row (D8b) — six 1-unit columns are each
+      in-grid and pairwise disjoint, so the first two checks passed them happily. This is a cap on
+      what THIS ENGINE writes, matching its own auto-tiler (`_tile_into_rows`), not a claim about
+      every draft in existence: shapes/process_template_identity_shell.json, captured off a real
+      published production template, does carry a 4-column row, which is why `verify.doctor`
+      deliberately asserts no count bound on drafts it did not build.
+
+    A field named TWICE anywhere in the spec is refused too (D8a): a field owns exactly ONE
+    Column, so placing it twice puts that Column in two Rows' `Row::Column` while its own `Row`
+    back-ref names only the last — a corruption the doctor's geometry rule cannot see from the
+    column side, since it groups by that very back-ref.
+    """
+    seen: dict[str, str] = {}                     # field name -> "<section> row <n>" it was placed
+    for title, rows_spec in layout.items():
+        for ri, row in enumerate(rows_spec):
+            if len(row) > MAX_COLUMNS_PER_ROW:
+                raise ValueError(
+                    f"layout puts {len(row)} columns in {title!r} row {ri}: a Row is a "
+                    f"{ROW_UNITS}-unit grid holding at most {MAX_COLUMNS_PER_ROW} columns "
+                    f"(CLAUDE.md > Node-graph invariants) — cramming more in breaks rendering for "
+                    f"the WHOLE flow; split them across rows")
+            placed: list[tuple[str, int, int]] = []
+            for fname, start, end in row:
+                where = f"{title!r} row {ri}"
+                if fname in seen:
+                    raise ValueError(
+                        f"layout places {fname!r} twice — at {seen[fname]} and again at {where}: a "
+                        f"field owns exactly ONE Column, so the second placement leaves that "
+                        f"Column in two Rows while its own Row back-ref names only one")
+                seen[fname] = where
+                if not (0 <= start < end <= ROW_UNITS):
+                    raise ValueError(
+                        f"layout places {fname!r} @ {title!r} row {ri} at (Start={start}, "
+                        f"End={end}): a Row is a {ROW_UNITS}-unit grid, so every span must satisfy "
+                        f"0 <= Start < End <= {ROW_UNITS}")
+                for ofname, ostart, oend in placed:
+                    if start < oend and ostart < end:
+                        raise ValueError(
+                            f"layout overlaps {fname!r} at ({start}, {end}) with {ofname!r} at "
+                            f"({ostart}, {oend}) @ {title!r} row {ri}: spans sharing one Row must "
+                            f"be disjoint on the {ROW_UNITS}-unit grid")
+                placed.append((fname, start, end))
+
+
 def ensure_process_def(
     draft: Draft,
     steps: tuple[str, ...] = ("Submit",),
@@ -346,17 +427,13 @@ def regroup_into_sections(draft: Draft, groups: list[tuple[str, list[str]]]) -> 
                     "Start": 0, "End": ROW_UNITS, "Row": top, "Column::Row": []}
         top_rows.append(top)
 
-        for i, fname in enumerate(names):
-            if i % per_row == 0:
-                row = _new_id("Row", model_id, 3000 + s_i * 100 + i, title)
-                new[row] = {"Id": row, "Kind": "Row", "Column": sec, "Row::Column": []}
-                new[sec]["Column::Row"].append(row)
-            row = new[sec]["Column::Row"][-1]
-            col_id = col_of[fname]
-            slot = len(new[row]["Row::Column"])
-            new[col_id].update({"Row": row, "Start": slot * FIELD_SPAN,
-                                "End": (slot + 1) * FIELD_SPAN})
-            new[row]["Row::Column"].append(col_id)
+        for ri, tiled in enumerate(_tile_into_rows([col_of[fname] for fname in names])):
+            row = _new_id("Row", model_id, 3000 + s_i * 100 + ri * per_row, title)
+            new[row] = {"Id": row, "Kind": "Row", "Column": sec, "Row::Column": []}
+            new[sec]["Column::Row"].append(row)
+            for col_id, start, end in tiled:
+                new[col_id].update({"Row": row, "Start": start, "End": end})
+                new[row]["Row::Column"].append(col_id)
 
     # splice the protected rows back in, immediately after the (new) row of whichever title
     # anchored them before; a title that no longer exists in `plan` falls back to the end rather
@@ -393,10 +470,20 @@ def apply_exact_layout(
     preserved, so `Column::Permission`, `Field::Event` and `Field::Node` survive untouched. A field
     named in the layout but absent from the draft, or a section that does not exist, raises — fail
     loud rather than silently drop a field off the form. Fields NOT named in their section's layout
-    are left in place after the rebuilt rows (trailing row), so nothing is ever dropped.
+    are left in place after the rebuilt rows (trailing rows), so nothing is ever dropped.
+
+    Every caller-stated span is checked against the 6-unit grid FIRST (`validate_layout_spans`,
+    which the live orchestration also runs ahead of its GET), before anything is copied: an
+    out-of-grid, overlapping, over-crowded or duplicated placement is refused with the draft
+    entirely unmutated, rather than written and then discovered as a whole flow that will not
+    render. The leftover columns are tiled by the SAME `_tile_into_rows` the auto-layout path
+    uses, in the section's pre-existing row/column order — the order the user already sees on the
+    form, and (unlike the set it used to be read from) stable across processes.
 
     Pure: returns a new draft.
     """
+    validate_layout_spans(layout)
+
     new: Draft = copy.deepcopy(draft)
     model_id = _model_id(new)
 
@@ -417,10 +504,17 @@ def apply_exact_layout(
         sid = sections[title]
         sec = new[sid]
 
-        # which columns already live in this section? keep their ids so we can spot leftovers
-        before_cols: set[str] = set()
+        # which columns already live in this section? keep their ids so we can spot leftovers.
+        # A LIST in the section's existing row/column order, not a set: leftovers are re-emitted
+        # in this order, and Python randomizes string hashing per process, so reading them back
+        # out of a set gave a different field order on every run of the same input.
+        before_cols: list[str] = []
+        seen_cols: set[str] = set()
         for rid in sec.get("Column::Row") or []:
-            before_cols.update((new.get(rid) or {}).get("Row::Column") or [])
+            for cid in (new.get(rid) or {}).get("Row::Column") or []:
+                if cid not in seen_cols:
+                    seen_cols.add(cid)
+                    before_cols.append(cid)
             new.pop(rid, None)  # drop old rows; columns are preserved
 
         placed: set[str] = set()
@@ -439,18 +533,18 @@ def apply_exact_layout(
                 placed.add(cid)
             new_rows.append(rid)
 
-        # any column that was in this section but not named in the layout goes in a trailing row,
-        # so a partial layout spec never silently drops a field off the form.
+        # any column that was in this section but not named in the layout goes in TRAILING ROWS,
+        # so a partial layout spec (the documented, encouraged usage) never silently drops a field
+        # off the form. Tiled by the shared `_tile_into_rows`, so however many leftovers there
+        # are they stay on the grid: the old single-row packer just kept adding FIELD_SPAN with no
+        # cap, and a 5-field leftover ran off the end at (6,8) and then (8,6).
         leftover = [c for c in before_cols if c not in placed]
-        if leftover:
-            rid = _new_id("Row", sid, 5900, title)
+        for li, tiled in enumerate(_tile_into_rows(leftover)):
+            rid = _new_id("Row", sid, 5900 + li, title)
             new[rid] = {"Id": rid, "Kind": "Row", "Column": sid, "Row::Column": []}
-            start = 0
-            for j, cid in enumerate(leftover):
-                end = ROW_UNITS if j == len(leftover) - 1 else start + FIELD_SPAN
+            for cid, start, end in tiled:
                 new[cid].update({"Row": rid, "Start": start, "End": end})
                 new[rid]["Row::Column"].append(cid)
-                start = end
             new_rows.append(rid)
 
         sec["Column::Row"] = new_rows
@@ -580,55 +674,175 @@ def set_required(draft: Draft, required: set[str]) -> Draft:
     return new
 
 
-def delete_nodes(draft: Draft, fields: tuple[str, ...] = (), tables: tuple[str, ...] = ()) -> Draft:
-    """Delete form fields and/or child tables by NAME, with every back-reference swept. Pure.
+def delete_closure(draft: Draft, fields: tuple[str, ...] = (), tables: tuple[str, ...] = ()) -> set[str]:
+    """Every node id `delete_nodes` will remove for this request. Pure, READ-ONLY on `draft`.
 
-    Deleting a Field means deleting its Column and every Permission that targets that Column.
-    Deleting a table means the whole cluster: host Column, host Row, the nested Model, its schema
-    Row, and every child Column/Field. A surviving list entry pointing at a deleted node PUTs fine
-    (200) but makes PUBLISH fail with a bare MetadataError, so the sweep is not optional.
+    Split out of `delete_nodes` so the deleter and the reference AUDIT (`field_delete_blockers`)
+    reason over ONE derivation of "what goes" — a second, drifting copy of this walk is how an
+    audit ends up blessing a delete that removes something it never looked at.
+
+    Three layers:
+      1. the named nodes — a Field plus its Column; a table plus its whole cluster (host Column,
+         host Row, nested Model, schema Row, every child Column/Field);
+      2. the nodes those OWN — every Permission on a doomed Column, every Event on a doomed
+         Field, and the field's own configuration cluster: its `QueryDefinition` (a User field's
+         mandatory sibling), its computed `Expression` and that formula's whole Node tree, its
+         `Property` chain (a SequenceNumber's Padding/Step/PrefixExpression, prefix Expression
+         included), and any `Criteria` owning its validation rules or its conditional-visibility
+         rule, Conditions and all. Every one of those has exactly ONE inbound reference — a list
+         on the very node being deleted — so nothing can ever reach them again; and each keeps a
+         SCALAR reference to a now-dead id, which `_sweep_dangling` (list-only, by design) cannot
+         see and which is the deterministic publish-500 (#18).
+      3. nothing else. A reference from a node that survives — another field's formula reading
+         this one, another field's visibility triggered by this one, a script naming its id — is
+         NOT swept, because removing it would silently change a field the caller never mentioned.
+         Those are refusals, not sweeps: see `field_delete_blockers`.
 
     Unknown names raise rather than silently doing nothing — a typo must not read as success.
     """
-    new: Draft = copy.deepcopy(draft)
     doomed: set[str] = set()
 
     # NAMES ARE NOT UNIQUE — a form and its child tables all had a field called "Untitled field",
     # and a name->id dict silently kept only the last, so a delete quietly hit the wrong one.
     # Match every field with the name, and accept a raw node id to disambiguate.
     for name in fields:
-        hits = [k for k, v in _kind(new, "Field").items()
+        hits = [k for k, v in _kind(draft, "Field").items()
                 if v.get("Name") == name or k == name]
         if not hits:
             raise ValueError(f"no field named {name!r}")
         for fid in hits:
             doomed.add(fid)
-            col = new[fid].get("Column")
+            col = draft[fid].get("Column")
             if isinstance(col, str):
                 doomed.add(col)
 
-    host_by_name = {v["Name"]: k for k, v in _kind(new, "Column").items()
+    host_by_name = {v["Name"]: k for k, v in _kind(draft, "Column").items()
                     if v.get("Type") == "Model" and v.get("Name")}
     for name in tables:
         host = host_by_name.get(name)
         if host is None:
             raise ValueError(f"no table named {name!r}")
         doomed.add(host)
-        if isinstance(row := new[host].get("Row"), str):
+        if isinstance(row := draft[host].get("Row"), str):
             doomed.add(row)
-        for tid in new[host].get("Column::Model") or []:
+        for tid in draft[host].get("Column::Model") or []:
             doomed.add(tid)
-            table = new.get(tid) or {}
+            table = draft.get(tid) or {}
             doomed.update(table.get("Model::Row") or [])
             for cfid in table.get("Model::Field") or []:
                 doomed.add(cfid)
-                if isinstance(c := (new.get(cfid) or {}).get("Column"), str):
+                if isinstance(c := (draft.get(cfid) or {}).get("Column"), str):
                     doomed.add(c)
 
     # every Permission aimed at a doomed Column goes with it
-    doomed |= {k for k, v in _kind(new, "Permission").items() if v.get("Column") in doomed}
+    doomed |= {k for k, v in _kind(draft, "Permission").items() if v.get("Column") in doomed}
     # ...and every Event on a doomed Field
-    doomed |= {k for k, v in _kind(new, "Event").items() if v.get("Field") in doomed}
+    doomed |= {k for k, v in _kind(draft, "Event").items() if v.get("Field") in doomed}
+
+    def _node_tree(roots: list[Any]) -> set[str]:
+        """One Expression's whole AST, following `Node::Node` down from each root."""
+        out: set[str] = set()
+        stack = [r for r in roots if isinstance(r, str)]
+        while stack:
+            nid = stack.pop()
+            if nid in out or nid not in draft:
+                continue
+            out.add(nid)
+            stack.extend(draft[nid].get("Node::Node") or [])
+        return out
+
+    # layer 2: the doomed node's OWN configuration cluster (see the docstring).
+    for nid, node in draft.items():
+        if not isinstance(node, dict):
+            continue
+        kind = node.get("Kind")
+        if kind == "QueryDefinition" and node.get("Field") in doomed:
+            doomed.add(nid)
+        elif kind == "Expression" and node.get("Field") in doomed:
+            doomed.add(nid)
+            doomed |= _node_tree(node.get("Expression::Node") or [])
+        elif kind == "Property" and node.get("Field") in doomed:
+            doomed.add(nid)
+            for eid in node.get("Property::Expression") or []:
+                doomed.add(eid)
+                doomed |= _node_tree((draft.get(eid) or {}).get("Expression::Node") or [])
+        elif kind == "Criteria" and (node.get("FieldValidation") in doomed
+                                     or node.get("ColumnVisibility") in doomed):
+            doomed.add(nid)
+            doomed |= {c for c in (node.get("Criteria::Condition") or []) if isinstance(c, str)}
+    return doomed
+
+
+def field_delete_blockers(
+    draft: Draft, fields: tuple[str, ...] = (), tables: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Every reference to a doomed node that a SURVIVING node still holds — one sentence each.
+
+    `delete_closure` sweeps a field's own cluster; it deliberately does not touch anything owned
+    by a DIFFERENT field, because deleting another field's formula or visibility rule to make
+    room for this delete would be a silent, unrequested change to the form. So those are reported
+    here and the caller is refused (CLAUDE.md: fail loud, and a dangling scalar publishes 500 with
+    zero diagnostics — #18). Each sentence names the remedy, because a refusal a caller cannot
+    act on is just a dead end.
+
+    Empty tuple = the delete is clean. Unknown names raise, via `delete_closure`.
+    """
+    doomed = delete_closure(draft, fields, tables)
+    dead_fields = {k for k in doomed if (draft.get(k) or {}).get("Kind") == "Field"}
+    # a doomed id must report as the NAME a human typed. A field column carries Name=None (the
+    # name lives on its Field), so resolve through the Field node — an id in a refusal message is
+    # a refusal the caller cannot act on.
+    name_of: dict[str, str] = {k: (draft.get(k) or {}).get("Name") or k for k in doomed}
+    for fid in dead_fields:
+        col = (draft.get(fid) or {}).get("Column")
+        if isinstance(col, str) and col in name_of:
+            name_of[col] = (draft[fid].get("Name") or col)
+    out: list[str] = []
+
+    for nid, node in draft.items():
+        if not isinstance(node, dict) or nid in doomed:
+            continue                                   # a doomed node's own refs die with it
+        kind = node.get("Kind")
+        if kind == "Node" and node.get("Type") == "Field" and node.get("Field") in doomed:
+            out.append(
+                f"{name_of.get(node['Field'])!r} is read by an Expression that survives this "
+                f"delete (Node {nid}) — a branch condition, goto gate or another field's computed "
+                "formula. Rewrite or remove that expression first "
+                "(forge_set_branch_conditions / forge_apply_fields computed=...)")
+        elif kind == "Condition" and node.get("LHSOwnField") in doomed:
+            out.append(
+                f"{name_of.get(node['LHSOwnField'])!r} is the TRIGGER of another field's "
+                f"conditional visibility (Condition {nid}) — re-point or remove that rule first "
+                "(forge_apply_fields conditional_visibility=...)")
+        elif kind == "Event":
+            script = node.get("Script")
+            hit = sorted(fid for fid in dead_fields
+                         if isinstance(script, str) and fid in script)
+            for fid in hit:
+                out.append(
+                    f"{name_of.get(fid)!r} is named by id in the Script of a surviving Event "
+                    f"({nid}) — a script referencing a missing field breaks the WHOLE form at "
+                    "load. Rewrite that event first (forge_set_events)")
+    return tuple(out)
+
+
+def delete_nodes(draft: Draft, fields: tuple[str, ...] = (), tables: tuple[str, ...] = ()) -> Draft:
+    """Delete form fields and/or child tables by NAME, with every back-reference swept. Pure.
+
+    Deleting a Field means deleting its Column, every Permission that targets that Column, and the
+    field's own configuration cluster (events, query definition, computed formula, validation and
+    conditional-visibility Criteria, SequenceNumber Properties) — `delete_closure` is the single
+    derivation of what goes, and its docstring is the full list. Deleting a table means the whole
+    cluster: host Column, host Row, the nested Model, its schema Row, and every child Column/Field.
+    A surviving list entry pointing at a deleted node PUTs fine (200) but makes PUBLISH fail with a
+    bare MetadataError, so the sweep is not optional.
+
+    This does NOT check whether a node that SURVIVES still points at what it just deleted — that
+    audit is `field_delete_blockers`, and a caller that skips it can still build a dangling graph.
+    Unknown names raise rather than silently doing nothing — a typo must not read as success.
+    """
+    doomed = delete_closure(draft, fields, tables)
+    new: Draft = copy.deepcopy(draft)
 
     for nid in doomed:
         new.pop(nid, None)
@@ -1750,6 +1964,16 @@ def progressive_matrix(draft: Draft, owners: dict[str, list[str]]) -> Matrix:
     `owners` maps a section NAME to the workflow step names that own it. Pure; see spec.md for the
     rule table. A section with no owner comes out ReadOnly everywhere rather than being dropped —
     silence would mean "keeps whatever default", which is exactly the bug this replaces.
+
+    Raises ValueError on a section name or a step name in `owners` that does not resolve against
+    `draft`, the same contract `field_override_matrix` already had. This used to DROP both
+    silently: a mistyped section key matched no section and simply never appeared, and a mistyped
+    step name matched no activity, which read as "this section has no owner" and quietly emitted
+    ReadOnly-everywhere. Both fed a DESTRUCTIVE rebuild (`set_step_permissions` deletes every
+    Permission first), so the caller's typo became a whole section nobody can edit, discovered two
+    steps later by `verify.doctor` — a name the caller supplied that lands in no bucket at all is
+    the doctrine-2 hole this closes. A section the caller deliberately leaves OUT of `owners` is
+    untouched by this rule: that is the documented unowned case, not an unresolved name.
     """
     pos, branch = _walk_workflow(draft)
     acts = _kind(draft, "Activity")
@@ -1761,6 +1985,18 @@ def progressive_matrix(draft: Draft, owners: dict[str, list[str]]) -> Matrix:
 
     sections = {v["Name"]: k for k, v in _kind(draft, "Column").items()
                 if v.get("Type") in ("Section", "Model") and v.get("Name")}
+
+    unknown_sections = sorted(n for n in owners if n not in sections)
+    if unknown_sections:
+        raise ValueError(f"owners names section(s) not on this form: {unknown_sections} — "
+                         f"available: {sorted(sections)}")
+    step_names = {acts[a].get("Name") for a in bearing}
+    unknown_steps = sorted({s for names in owners.values() for s in (names or [])
+                            if s not in step_names})
+    if unknown_steps:
+        raise ValueError(f"owners names step(s) not on this workflow: {unknown_steps} — "
+                         f"available: {sorted(n for n in step_names if n)}")
+
     matrix: Matrix = {}
     for name in sections:
         owned = {a for a in bearing if acts[a].get("Name") in (owners.get(name) or [])}
@@ -1803,10 +2039,15 @@ def field_override_matrix(
               else ReadOnly. A header field (Start/Use-case only) stays ReadOnly through the
               branch; a field that re-emerges after the branch is Hidden during the detour.
 
-    Pure; raises ValueError on a field/step name that does not resolve, same contract as
-    `progressive_matrix`. A field named but with an empty editable list is ReadOnly everywhere
-    (no sibling-branch hiding — there is no "own branch" to be private to); omit it instead if
-    you want the section default.
+    Pure; raises ValueError on a STEP name that does not resolve, same contract as
+    `progressive_matrix`. An unresolvable FIELD name is refused too, but one function later, by
+    `set_step_permissions` ("field_matrix names a field that does not exist") — still offline and
+    still before any write. It is deliberately NOT also checked here: a field column carries
+    `Name: None`, so the name resolves through the Field node's own `Column` back-ref, and a
+    second copy of that walk is exactly how two versions of "which fields exist" drift apart.
+    A field named but with an empty editable list is ReadOnly everywhere (no sibling-branch
+    hiding — there is no "own branch" to be private to); omit it instead if you want the section
+    default.
     """
     pos, branch = _walk_workflow(draft)
     acts = _kind(draft, "Activity")
@@ -1967,6 +2208,19 @@ def apply_changes(draft: Draft, changes: list[FieldSpec]) -> Draft:
             raise NotImplementedError("field edit not in MVP; only create (field_id=None)")
         if spec.name in existing:
             continue  # already present -> re-applying the manifest never duplicates
+        # A Select's OPTIONS live in a SEPARATE list flow, named by `ReferredList` — exactly the
+        # way a User field's directory source lives in a sibling QueryDefinition below. Minting one
+        # with no list is a dropdown bound to nothing: it PUTs 200 and publish then dies 500
+        # MetadataError with zero diagnostic content (2026-08-19 diagnosis). Refuse at compile and
+        # name the fix (ADR-0004) rather than write a field that cannot publish; the User branch
+        # below auto-repairs its own version of this defect, and minting a bare Select silently
+        # twenty lines apart was the inconsistency that let it through.
+        if ft is FieldType.SELECT and spec.referred_list is None:
+            raise ValueError(
+                f"field {spec.name!r} is Type Select with no referred_list — a Select bound to no "
+                f"list publishes 500 MetadataError with zero diagnostics; create the list with "
+                f"forge_create_list and pass referred_list=<list id> (CLAUDE.md ReferredList #13)"
+            )
         validated.append((spec, ft))
 
     new: Draft = copy.deepcopy(draft)  # ponytail: deepcopy is fine at builder sizes (~hundreds of nodes)

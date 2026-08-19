@@ -55,17 +55,19 @@ import secrets
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field
 
 from . import tools
 from .capabilities import search_capabilities
 from .playbook import load_playbook
 from .client import (
     Err,
+    FlowKind,
     KfClient,
     KfConfig,
     apply_add_role_users,
@@ -84,6 +86,7 @@ from .client import (
     apply_member_batch,
     apply_member_roles,
     apply_report_members,
+    apply_required,
     apply_section_style,
     apply_sequence_number,
     apply_set_role_preference,
@@ -95,7 +98,9 @@ from .client import (
     create_flow_any,
     create_process,
     delete_anything,
+    delete_fields,
     publish_application_verified,
+    rename_form_fields,
     run_doctor,
     run_sweep,
 )
@@ -122,7 +127,6 @@ from .pages_live import (
     apply_page_build,
     create_page_flow,
 )
-from .tools import _to_spec
 
 mcp = FastMCP("kissflow-forge")
 
@@ -175,6 +179,54 @@ class _CoerceJsonStringArgs(Middleware):
 mcp.add_middleware(_CoerceJsonStringArgs(mcp))
 
 
+# Every tool in this file reports failure as DATA — a dict carrying `isError: true` (doctrine 7,
+# the frozen `Err` dataclass and every Report's `as_tool_result()`). That is the PAYLOAD flag, and
+# it is the one ~40 tests in this repo assert on. MCP, however, defines `isError` on the result
+# ENVELOPE (`CallToolResult.isError`), and because a failing tool here RETURNS rather than raises,
+# FastMCP had no reason to set it: every failure went out as
+#     ToolResult(structured_content={"isError": True, "error": "config: missing env var ..."},
+#                is_error=False)
+# — a protocol SUCCESS carrying an error payload. A gateway, dashboard or retry layer reading the
+# envelope (which is the only thing an MCP client is contractually promised) saw all 59 tools as
+# tools that never fail. This middleware closes that gap in ONE place, the same way
+# _CoerceJsonStringArgs fixes stringified args in one place: no tool body changes, no new return
+# type, and the payload key survives untouched: `model_copy(update=...)` sets the envelope flag
+# and copies `content` / `structured_content` / `meta` through byte-identically.
+class _PromoteIsErrorToProtocol(Middleware):
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[Any],
+        call_next: CallNext[Any, ToolResult],
+    ) -> ToolResult:
+        result = await call_next(context)
+        payload = getattr(result, "structured_content", None)
+        if isinstance(payload, dict) and payload.get("isError") and not result.is_error:
+            if _is_diagnosis(payload):
+                return result
+            return result.model_copy(update={"is_error": True})
+        return result
+
+
+def _is_diagnosis(payload: dict[str, Any]) -> bool:
+    """True when a truthy `isError` is a VERDICT ABOUT THE FLOW, not a failed call.
+
+    `forge_doctor` (client.run_doctor) and `forge_compare_to_spec` (compare.CompareReport) are
+    read-only audits: they report what they found under `ok`, and set the payload's own `isError`
+    from that verdict — a long-standing convention two live tests assert on. A doctor run that
+    finds a sparse permission matrix has WORKED, not failed; SKILL.md tells the builder to run it
+    after EVERY edit, so a mid-build call legitimately reports problems almost every time.
+    Promoting that to the ENVELOPE would mark a perfectly healthy read-only call as a protocol
+    failure — and under a client's default `raise_on_error` it raises, losing the diagnosis the
+    caller asked for. The discriminator is the pair of keys, not the tool name: a diagnosis states
+    a verdict (`ok`) and carries no `error` string; a failure always carries `error` (every `Err`
+    and every Report that can genuinely fail does). Kept next to the middleware it guards.
+    """
+    return "ok" in payload and "error" not in payload
+
+
+mcp.add_middleware(_PromoteIsErrorToProtocol())
+
+
 def _client(app_id: str | None = None, require_app: bool = True) -> KfClient | Err:
     # Which app this call targets: the per-call app_id (every app-scoped tool accepts one), else
     # the KF_APP env as a single-app default. STATELESS by design — no server-side "current app"
@@ -201,28 +253,172 @@ def _result(x: Any) -> dict[str, Any]:
 
 
 # =====================================================================================
-# kf_* — original P0/P1 surface. Unchanged.
+# The boundary vocabulary. Every one of these sets was already CLOSED inside the engine
+# (client.FlowKind, client._TIER_MAP, client._SWEEP_SCOPES, the dataform op switch,
+# design.confirm.is_approved) and then erased at the tool boundary into a bare `str`, so a typo
+# reached the engine — and in two cases got interpolated straight into a live API URL — before
+# anything refused it. Declaring them as `typing.Literal` makes FastMCP emit a real JSON-Schema
+# `enum`, so Pydantic refuses a bad value before ANY code in this process runs, and an agent
+# reading the tool list can see the legal set instead of guessing it out of a docstring.
+#
+# They are deliberately NOT unified. Several different closed sets hide under the single parameter
+# name `kind`, and collapsing them into one union would tell a caller that
+# forge_grant_tier(kind="form") or forge_create_flow(kind="application") is legal when neither is.
+# Each tool gets the set IT actually supports; tests/test_mcp_boundary.py pins each one against
+# the engine constant it mirrors so the two can never drift apart silently.
+#
+# ⚠️ THE OPPOSITE FAILURE IS JUST AS REAL, and this branch shipped it once (D7): an enum TIGHTER
+# than the code supports is a capability REGRESSION, and it is the specific trap of adding enums
+# in bulk. `forge_delete_flow` took a bare `str` and reached `client.delete_flow(kind, ...)` for
+# ANY kind; typing it as PublishKind removed the only route to delete a `list` or a `dataset`,
+# two kinds `forge_create_flow` will happily mint. Every set below now states the EVIDENCE for
+# each member it admits and for each one it leaves out — a member is admitted only where a
+# captured route or a coverage row proves the code path exists (ADR-0004, doctrine 10), and a
+# member is excluded only where the platform genuinely has no such route.
+# =====================================================================================
+
+# The three real FLOW kinds — `client.FlowKind`, re-exported here so the boundary and the engine
+# name the same three strings. Used by every tool whose `kind`/`flow_kind` reaches `_draft_url`
+# AND whose surface (workflow / permissions / members / publish) actually exists on that kind.
+FlowKindArg = FlowKind
+
+# The kinds whose DRAFT is a node-graph this engine reads and writes FIELDS into. `dataset` is the
+# fourth: `GET/PUT /metadata/2/{acct}/dataset/{id}/draft` is a captured route and
+# docs/capabilities/module.dataform.md states outright that "the engine's `apply_fields` runs
+# unmodified with `kind='dataset'`" (live-proven 2026-08-12, #50) — `client.apply_dataset_records`
+# already calls `get_draft("dataset", ...)` on that route to resolve field names. `list` is NOT
+# here: a word list holds an array of strings, not a Model, and no draft-graph capture exists for
+# it (doctrine 10 — no capture means refuse, not guess).
+DataKind = Literal["form", "process", "case", "dataset"]
+
+# A draft-carrying flow OR a page: the draft-read surface. A page draft lives under its owning
+# application, so "page" additionally requires `app_id` — enforced in the body, since a schema
+# cannot express it.
+SchemaKind = Literal["form", "process", "case", "dataset", "page"]
+
+# Everything that can be compiled to a live version: the three flow kinds with a draft/live split
+# plus the two container kinds that have their own publish routes. `list` and `dataset` are
+# deliberately ABSENT and this is not a narrowing — both are born LIVE and have NO publish route at
+# all (shapes/dataform_dataset_skeleton.json: "the publish route 404s — there is NO draft/live
+# split on this flowtype (same family as `list`)"), so accepting either here would promise a 404.
+PublishKind = Literal["form", "process", "case", "page", "application"]
+
+# What `client.delete_anything` can actually delete — NOT the same set as PublishKind, which is
+# what D7 got wrong. `list` and `dataset` fall through its process/form/case branch to
+# `DELETE /flow/2/{acct}/{kind}/{id}` and are verified with `list_flows({kind})` — the same
+# generic `/flow/2/{acct}/{kind}` family their own create (`create_list`/`create_dataset`) and
+# `run_sweep`'s `_SWEEP_FLOW_KINDS` already use for both kinds. Only `process` archives first
+# (400 KISSFLOW_ERROR_04602 otherwise); the others delete directly.
+DeleteKind = Literal["form", "process", "case", "list", "dataset", "page", "application"]
+
+# The permission-TIER ladder is flow-type-dependent (client._TIER_MAP): only process and case
+# have one at all, and `case` carries two rungs `process` does not. The pair is still validated
+# in `apply_grant_tier` — this enum only stops the values that are wrong for EVERY kind.
+TierKind = Literal["process", "case"]
+Tier = Literal["No access", "Initiate", "Read-only", "Edit", "Manage"]
+
+# `create_flow_any`'s wider set: list/dataset/case are born LIVE (no publish step), process/form
+# start as a Draft.
+CreateFlowKind = Literal["process", "form", "list", "dataset", "case"]
+
+# The dataform record data plane (#50, #58) — a fifth `op` string would have been interpolated
+# into the route and 404'd against a live tenant.
+DatasetOp = Literal["create", "update", "delete", "list"]
+
+# client._SWEEP_SCOPES plus the "all" fan-out.
+SweepScope = Literal["apps", "flows", "pages", "roles", "lists", "all"]
+
+# `design.confirm.is_approved` accepts exactly one literal and nothing else — not "Approve", not
+# "approved", not a revise request. The body still checks it (a direct Python call bypasses the
+# schema), but the schema now says so out loud instead of inviting a guess.
+ApprovalDecision = Literal["approve"]
+
+
+# =====================================================================================
+# Tool annotations (MCP `ToolAnnotations`). Seven profiles, derived from what each tool BODY
+# actually does — NOT from its description prefix, which was measured to be wrong: four tools
+# announce themselves OFFLINE and then write files to disk.
+#
+# The rules, applied uniformly:
+#   readOnlyHint    True only if the call writes NEITHER the tenant NOR the filesystem.
+#   destructiveHint True if the call can REMOVE or OVERWRITE state that already exists, as
+#                   opposed to only adding new state. A publish is deliberately NOT destructive:
+#                   it compiles a draft the caller already authored into its live version — it
+#                   removes no node and replaces no draft state.
+#   idempotentHint  True if calling twice with the same arguments leaves the same result — which
+#                   for a REPLACE-semantics tool (set_visibility, build_workflow, create_list) is
+#                   still True, and for an ADD-semantics one that mints a new node every call
+#                   (create_*, add_goto_gate, simulate_case) is False.
+#   openWorldHint   True for anything that touches the Kissflow tenant.
+# =====================================================================================
+
+_OFFLINE_PURE = {"readOnlyHint": True, "destructiveHint": False,
+                 "idempotentHint": True, "openWorldHint": False}
+# offline, but genuinely writes files — the four render/confirm tools. Never destructive: each
+# writes into a `<app_name>_<content digest>` folder of its own (_artifact_dir), so re-rendering
+# the same spec rewrites the same bytes and two different specs cannot collide.
+_OFFLINE_ARTIFACT = {"readOnlyHint": False, "destructiveHint": False,
+                     "idempotentHint": True, "openWorldHint": False}
+_LIVE_READ = {"readOnlyHint": True, "destructiveHint": False,
+              "idempotentHint": True, "openWorldHint": True}
+_LIVE_ADD = {"readOnlyHint": False, "destructiveHint": False,
+             "idempotentHint": True, "openWorldHint": True}
+_LIVE_ADD_ONCE = {"readOnlyHint": False, "destructiveHint": False,
+                  "idempotentHint": False, "openWorldHint": True}
+_LIVE_REPLACE = {"readOnlyHint": False, "destructiveHint": True,
+                 "idempotentHint": True, "openWorldHint": True}
+_LIVE_REPLACE_ONCE = {"readOnlyHint": False, "destructiveHint": True,
+                      "idempotentHint": False, "openWorldHint": True}
+
+
+# =====================================================================================
+# kf_* — original P0/P1 surface. Tool NAMES, parameters and semantics are unchanged; what these
+# eight gained is the same boundary treatment as every forge_* tool below — a title, MCP
+# annotations derived from the body, closed-set enums on `flow_kind`, and a structured refusal
+# where a malformed nested argument used to escape as a bare traceback.
 # =====================================================================================
 
 
-@mcp.tool()
+@mcp.tool(title="Engine field types", annotations=_OFFLINE_PURE)
 def kf_list_field_types() -> list[str]:
-    """List valid Kissflow field types (closed enum; prevents wrong-type errors)."""
+    """List the field types THIS ENGINE can build — the set every `type` key in
+    kf_plan_field_change / kf_apply_field_change / forge_apply_fields / forge_add_table is
+    checked against, so a wrong type is refused offline instead of writing a broken field.
+
+    NOT the platform's own catalog, which is considerably wider (Image, Rich text, Signature,
+    Geolocation and the rest). These are the types whose wire shape is CAPTURED here; anything
+    outside the list is refused at compile rather than guessed at (ADR-0004). To see what is
+    known about the rest of the palette — including which types this engine deliberately
+    refuses and why — call forge_capabilities.
+    """
     return tools.list_field_types()
 
 
-@mcp.tool()
+@mcp.tool(title="Plan field change", annotations=_OFFLINE_PURE)
 def kf_plan_field_change(draft: dict[str, Any], changes: list[dict[str, Any]]) -> dict[str, Any]:
-    """DRY-RUN: preview adding fields to a flow's draft graph. Offline; writes nothing."""
-    return tools.plan_field_change(draft, changes)
+    """DRY-RUN: preview adding fields to a flow's draft graph. Offline; writes nothing.
+
+    Each entry in `changes` is `{"name": ..., "type": <kf_list_field_types value>, "required":
+    bool}`; a malformed entry is refused by index, naming its shape and a correct example.
+    """
+    try:
+        return tools.plan_field_change(draft, changes)
+    except (ValueError, TypeError, KeyError) as e:
+        return Err("verify", str(e)).as_tool_result()
 
 
-@mcp.tool()
-def kf_get_flow_schema(flow_kind: str, flow_id: str, app_id: str | None = None) -> dict[str, Any]:
+@mcp.tool(title="Read flow draft", annotations=_LIVE_READ)
+def kf_get_flow_schema(flow_kind: SchemaKind, flow_id: str,
+                       app_id: str | None = None) -> dict[str, Any]:
     """Read a flow's DRAFT graph from the dev tenant. Read-only. `flow_kind` is
-    "process"/"form"/"case" (a flow — `flow_id` is the flow id) or "page" (needs `app_id`,
-    `flow_id` is the page id — a page draft lives under its owning application, never a
+    "process"/"form"/"case"/"dataset" (a flow — `flow_id` is the flow id) or "page" (needs
+    `app_id`, `flow_id` is the page id — a page draft lives under its owning application, never a
     hard-coded KF_APP default; see CLAUDE.md Pages). `app_id` is ignored for every other kind.
+
+    "dataset" (a dataform) reads the same `/metadata/2/{acct}/dataset/{id}/draft` route the record
+    tools already use — its draft IS its live version, there is no publish split
+    (docs/capabilities/module.dataform.md). A word `list` has no draft graph at all and is not
+    readable here; use forge_sweep(scope="lists") for the inventory.
     """
     c = _client(app_id)
     if isinstance(c, Err):
@@ -232,13 +428,13 @@ def kf_get_flow_schema(flow_kind: str, flow_id: str, app_id: str | None = None) 
             return Err("verify", "app_id is required to read a page draft").as_tool_result()
         got = c.get_page_draft(app_id, flow_id)
         return got.as_tool_result() if isinstance(got, Err) else got
-    got = c.get_draft(flow_kind, flow_id)  # type: ignore[arg-type]
+    got = c.get_draft(flow_kind, flow_id)  # type: ignore[arg-type]  # "dataset" — see DataKind
     return got.as_tool_result() if isinstance(got, Err) else got
 
 
-@mcp.tool()
+@mcp.tool(title="Add fields to a flow", annotations=_LIVE_ADD)
 def kf_apply_field_change(
-    flow_kind: str,
+    flow_kind: DataKind,
     flow_id: str,
     changes: list[dict[str, Any]],
     publish: bool = False,
@@ -248,16 +444,24 @@ def kf_apply_field_change(
 
     Idempotent — a field whose name already exists is skipped, never duplicated. Aborts with a
     conflict if the draft changed since it was read. Show kf_plan_field_change to a human first.
+
+    `flow_kind="dataset"` (a dataform) is supported — field writes produce the identical node
+    shapes as form/process and this engine's `apply_fields` is live-proven unmodified on that kind
+    (docs/capabilities/module.dataform.md, #50). Leave `publish` False for it: a dataform's draft
+    IS live and its publish route 404s.
     """
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    specs = [_to_spec(ch) for ch in changes]
-    report = apply_fields(c, flow_kind, flow_id, specs, publish=publish)  # type: ignore[arg-type]
-    return report.as_tool_result()
+    try:
+        specs = tools.coerce_field_specs("changes", changes)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
+    return _result(apply_fields(c, flow_kind, flow_id, specs,  # type: ignore[arg-type]
+                                publish=publish))
 
 
-@mcp.tool()
+@mcp.tool(title="Create process with fields", annotations=_LIVE_ADD_ONCE)
 def kf_create_process(
     name: str,
     steps: list[str],
@@ -273,27 +477,44 @@ def kf_create_process(
     `steps` is then ignored; rebuild the real workflow with forge_build_workflow afterward. Pass
     `from_template=False` for the old behavior: Start, one UserTask per `steps` entry, Completed.
     A failed run cleans up after itself and leaves no half-built process behind.
+
+    ⚠️ The report's `template_sections` / `template_required_fields` / `template_steps` name
+    everything the shell brought in that you did not ask for — see forge_create_process's own
+    description for why that matters before the first forge_set_visibility call.
     """
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    specs = [_to_spec(f) for f in fields]
-    report = create_process(c, name, tuple(steps), specs, publish=publish, from_template=from_template)
-    return report.as_tool_result()
+    try:
+        specs = tools.coerce_field_specs("fields", fields)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
+    return _result(create_process(c, name, tuple(steps), specs, publish=publish,
+                                  from_template=from_template))
 
 
-@mcp.tool()
+@mcp.tool(title="Plan step visibility", annotations=_OFFLINE_PURE)
 def kf_plan_step_visibility(draft: dict[str, Any], owners: dict[str, list[str]]) -> dict[str, Any]:
     """DRY-RUN: preview per-step section visibility. `owners` maps a section NAME to the step names
-    that own it. Offline; writes nothing. Show this to a human before kf_set_step_visibility."""
-    return tools.plan_step_visibility(draft, owners)
+    that own it. Offline; writes nothing. Show this to a human before kf_set_step_visibility.
+
+    A section or step name that is not in `draft` is refused as DATA here, the same way
+    kf_set_step_visibility and forge_set_visibility refuse it — a preview that raises where the
+    writer returns an Err is the one place a caller cannot tell "the plan is wrong" from "the tool
+    is broken". The refusal names both the offending names and the ones actually available.
+    """
+    try:
+        return tools.plan_step_visibility(draft, owners)
+    except (ValueError, TypeError, KeyError) as e:
+        return Err("verify", str(e)).as_tool_result()
 
 
-@mcp.tool()
+@mcp.tool(title="Rebuild step visibility (sections)", annotations=_LIVE_REPLACE)
 def kf_set_step_visibility(
     flow_id: str,
     owners: dict[str, list[str]],
     publish: bool = False,
+    include_pairs: Annotated[bool, Field(description="Return every (column, activity) permission pair in full, resolved to field/section/step names, instead of the bounded counts + by_section/by_step rollups. The default already lists every `missing` pair in full and states how many entries it summarised.")] = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only): rebuild a process's per-step section visibility.
@@ -301,6 +522,14 @@ def kf_set_step_visibility(
     A section is Editable at the steps that own it, Hidden before them, ReadOnly after. Kissflow has
     no section-level permission, so this writes one Permission node per (field column x step).
     DESTRUCTIVE: every existing Permission on the flow is replaced. Snapshot the draft first.
+
+    A section or step name in `owners` that is not on the live flow is refused before any write,
+    naming the available set — a typo on a DESTRUCTIVE rebuild used to be dropped silently, which
+    left that section editable at no step at all.
+
+    The result states pair COUNTS plus per-section/per-step rollups and an `uncovered_sections`
+    bucket, not the raw (column, activity) id list — same bounded presentation as
+    forge_set_visibility, see its docstring. `include_pairs=True` returns every pair, named.
     """
     c = _client(app_id)
     if isinstance(c, Err):
@@ -312,12 +541,13 @@ def kf_set_step_visibility(
         matrix = progressive_matrix(draft, owners)
     except ValueError as e:
         return Err("verify", str(e)).as_tool_result()
-    return apply_step_permissions(c, flow_id, matrix, publish=publish).as_tool_result()
+    return apply_step_permissions(c, flow_id, matrix, publish=publish,
+                                  include_pairs=include_pairs).as_tool_result()
 
 
-@mcp.tool()
+@mcp.tool(title="Publish flow", annotations=_LIVE_ADD)
 def kf_publish(
-    flow_kind: str,
+    flow_kind: FlowKindArg,
     flow_id: str,
     app_id: str | None = None,
 ) -> dict[str, Any]:
@@ -325,7 +555,7 @@ def kf_publish(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    got = c.publish(flow_kind, flow_id)  # type: ignore[arg-type]
+    got = c.publish(flow_kind, flow_id)
     return got.as_tool_result() if isinstance(got, Err) else {"published": True, "flow_id": flow_id}
 
 
@@ -337,7 +567,7 @@ def kf_publish(
 # =====================================================================================
 
 
-@mcp.tool()
+@mcp.tool(title="Create process shell", annotations=_LIVE_ADD_ONCE)
 def forge_create_process(name: str, publish: bool = False, from_template: bool = True,
                          app_id: str | None = None) -> dict[str, Any]:
     """LIVE (dev only): create a new PROCESS shell — a scaffolded, publishable draft.
@@ -351,6 +581,15 @@ def forge_create_process(name: str, publish: bool = False, from_template: bool =
     forge_member_batch, forge_apply_fields, forge_add_table, forge_build_workflow, etc. A failed
     run cleans up after itself (create_process archives+deletes the half-built shell rather than
     leaving it behind).
+
+    ⚠️ THE DEFAULT IS NOT EMPTY, and the report now says so: `template_sections`,
+    `template_required_fields` and `template_steps` name everything the shell put on the flow,
+    read back off the live draft. This used to be all empty tuples, which is a trap — the shell
+    injects sections a caller cannot name in forge_set_visibility's `owners` because they did not
+    know the sections existed, so the visibility matrix is incomplete from the very first write
+    and doctor only reports it two steps later ("section 'System' is never editable at any live
+    step"). COVER every listed section in your `owners` map, and cover every listed Required
+    field's own section at a step where it is Editable, or that step can never be submitted.
     """
     c = _client(app_id)
     if isinstance(c, Err):
@@ -358,11 +597,11 @@ def forge_create_process(name: str, publish: bool = False, from_template: bool =
     return _result(create_process(c, name, ("Draft",), [], publish=publish, from_template=from_template))
 
 
-@mcp.tool()
+@mcp.tool(title="Grant flow members", annotations=_LIVE_ADD)
 def forge_member_batch(
     target_flow_id: str,
     source_flow_id: str | None = None,
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE (dev only, KF_APP): grant AppRole members on `target_flow_id` — MEMBERS FIRST per
@@ -377,19 +616,25 @@ def forge_member_batch(
     the exact grant that lets the initiator submit their own draft; `Permission: []` 200s the grant
     but still leaves the initiator refused). Only when BOTH sources come up empty does this report
     harvested=[]/role_ids=[] with an explanatory `note` rather than failing — a caller must be able
-    to tell "nothing to grant yet" apart from a real error.
+    to tell "nothing to grant yet" apart from a real error. That empty case is NOT a dead end and
+    needs no human: forge_create_app_role makes an app-scoped AppRole in one call, after which
+    re-running this works (forge_add_member_roles does both at once).
+
+    The account-level path always reports `roles_seen` (app-scoped AppRoles the account list
+    returned) next to `roles_granted` and `roles_unusable`, so "granted 1 of the 2 roles that
+    exist" can never be silent — seen == granted + unusable, always.
     """
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(apply_member_batch(c, target_flow_id, source_flow_id, kind=kind))  # type: ignore[arg-type]
+    return _result(apply_member_batch(c, target_flow_id, source_flow_id, kind=kind))
 
 
-@mcp.tool()
+@mcp.tool(title="Create and grant app roles", annotations=_LIVE_ADD)
 def forge_add_member_roles(
     target_flow_id: str,
     roles: dict[str, str],
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE (dev only, KF_APP): grant AppRoles onto `target_flow_id`, CREATING each role scoped to
@@ -405,10 +650,10 @@ def forge_add_member_roles(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(apply_member_roles(c, target_flow_id, roles, kind=kind))  # type: ignore[arg-type]
+    return _result(apply_member_roles(c, target_flow_id, roles, kind=kind))
 
 
-@mcp.tool()
+@mcp.tool(title="Create app role", annotations=_LIVE_ADD_ONCE)
 def forge_create_app_role(
     name: str,
     app_id: str | None = None,
@@ -429,7 +674,7 @@ def forge_create_app_role(
     return {"role_id": rid, "name": name, "app_id": app_id or c._cfg.app_id, "isError": False}
 
 
-@mcp.tool()
+@mcp.tool(title="Delete app role", annotations=_LIVE_REPLACE_ONCE)
 def forge_delete_app_role(
     role_id: str,
     app_id: str | None = None,
@@ -449,7 +694,34 @@ def forge_delete_app_role(
     return {"role_id": role_id, "deleted": True, "isError": False}
 
 
-@mcp.tool()
+@mcp.tool(title="List app roles", annotations=_LIVE_READ)
+def forge_list_app_roles(
+    app_id: str | None = None,
+) -> dict[str, Any]:
+    """READ-ONLY (dev only): list the AppRoles scoped to `app_id` (defaults to KF_APP).
+
+    The account route (`GET /app_role/2/{acct}/list`, paged) is LEAKAGE-PRONE — it returns every
+    AppRole in the ACCOUNT (356 of them in the probe tenant), which is why this tool always
+    filters to ONE application, the same scope `forge_create_app_role` writes at. Matches on
+    either scope signal the list records carry (`Applications[]._id` or the top-level
+    `_application_id`), so a freshly created role is not silently dropped.
+
+    This is the LIST route `forge_delete_app_role` tells you to verify a deletion against, and
+    the one to check for an existing same-name role before minting another: a write response
+    alone proves nothing (CLAUDE.md "THE RULE"). Returns `roles` as a list of `{_id, Name}`.
+    """
+    c = _client(app_id)
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    scope = app_id or c._cfg.app_id
+    got = c.list_app_roles(scope)
+    if isinstance(got, Err):
+        return got.as_tool_result()
+    roles = [{"_id": r.get("_id"), "Name": r.get("Name")} for r in got]
+    return {"roles": roles, "count": len(roles), "app_id": scope, "isError": False}
+
+
+@mcp.tool(title="Add fields and sections", annotations=_LIVE_REPLACE)
 def forge_apply_fields(
     flow_id: str,
     fields: list[dict[str, Any]],
@@ -457,7 +729,7 @@ def forge_apply_fields(
     validation: dict[str, list[dict[str, str]]] | None = None,
     computed: dict[str, dict[str, Any]] | None = None,
     conditional_visibility: dict[str, dict[str, str]] | None = None,
-    kind: str = "process",
+    kind: DataKind = "process",
     publish: bool = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
@@ -476,6 +748,11 @@ def forge_apply_fields(
     own `DefaultValue` key — a static literal, or the platform's relative-date keyword `"Today"`
     on a Date field — never guess the casing, read it).
 
+    A `"type": "Select"` field REQUIRES `referred_list` — the id of the list flow its options
+    live in (make it first with forge_create_list, then pass its id here). A Select with no list
+    is a dropdown bound to nothing: it writes 200 and publish then dies 500 MetadataError with no
+    diagnostics at all, so it is refused here instead, before any write.
+
     `validation` maps a field NAME to `[{"operator": "MAX_LENGTH", "rhs": "10",
     "error_message": "optional human text"}, ...]` (docs/capabilities/config.validation.md — wire-
     proven operators: MAX_LENGTH, CONTAINS, GREATER_THAN, AFTER; everything else is Q&A-claimed
@@ -487,23 +764,38 @@ def forge_apply_fields(
     (docs/capabilities/config.conditional-visibility.md — the ColumnVisibility Criteria family;
     runtime toggle behavior is graph-verified only, not walked live). Every layer is independently
     read-back verified; a `missing` in any of them marks the whole result `isError`.
+
+    DESTRUCTIVE on the LAYOUT whenever `sections` is given: the regroup REBUILDS every section's
+    rows at a uniform width, so a custom grid an earlier forge_apply_layout wrote does not survive
+    one call here. Every pre-existing field that actually moved is named in `collateral` with its
+    old and new coordinates, and `remediation` names forge_apply_layout — that is what the
+    destructive annotation on this tool is about.
+
+    `kind="dataset"` (a dataform) is supported: field writes produce the identical node shapes as
+    form/process and this engine's own apply_fields is live-proven unmodified on that kind
+    (docs/capabilities/module.dataform.md, #50). Leave `publish` False for it — a dataform's draft
+    IS live and its publish route 404s. A word `list` is not a field-bearing flow and is not
+    accepted here at all.
     """
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    specs = [_to_spec(f) for f in fields]
-    groups = list(sections.items()) if sections else None
+    try:
+        specs = tools.coerce_field_specs("fields", fields)
+        groups = tools.coerce_sections("sections", sections)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
     return _result(apply_fields_full(c, kind, flow_id, specs, groups,  # type: ignore[arg-type]
                                      validations=validation, computed=computed,
                                      conditional=conditional_visibility, publish=publish))
 
 
-@mcp.tool()
+@mcp.tool(title="Re-place fields on the grid", annotations=_LIVE_REPLACE)
 def forge_apply_layout(
     flow_id: str,
     layout: dict[str, list[list[list[Any]]]],
     descriptions: dict[str, str] | None = None,
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     publish: bool = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
@@ -522,19 +814,22 @@ def forge_apply_layout(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    typed = {sec: [[tuple(t) for t in row] for row in rows] for sec, rows in layout.items()}
-    return _result(apply_layout(c, flow_id, typed, descriptions=descriptions,  # type: ignore[arg-type]
+    try:
+        typed = tools.coerce_layout("layout", layout)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
+    return _result(apply_layout(c, flow_id, typed, descriptions=descriptions,
                                 publish=publish, kind=kind))
 
 
-@mcp.tool()
+@mcp.tool(title="Add child table", annotations=_LIVE_ADD)
 def forge_add_table(
     flow_id: str,
     name: str,
     columns: list[list[Any]],
     max_rows: int | None = None,
     allow_import: bool = False,
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     publish: bool = False,
     after_section: str | None = None,
     app_id: str | None = None,
@@ -551,16 +846,20 @@ def forge_add_table(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    col_pairs = [(c[0], c[1], c[2] if len(c) > 2 else None) for c in columns]
-    return _result(apply_table(c, kind, flow_id, name, col_pairs, max_rows=max_rows,  # type: ignore[arg-type]
-                               allow_import=allow_import, publish=publish, after_section=after_section))
+    try:
+        col_specs = tools.coerce_table_columns("columns", columns)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
+    return _result(apply_table(c, kind, flow_id, name, col_specs, max_rows=max_rows,
+                               allow_import=allow_import, publish=publish,
+                               after_section=after_section))
 
 
-@mcp.tool()
+@mcp.tool(title="Compare build to spec", annotations=_LIVE_READ)
 def forge_compare_to_spec(
     flow_id: str,
     spec: dict[str, Any],
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE read-only (dev only, KF_APP): does the BUILT flow match what the INPUT asked for?
@@ -579,13 +878,13 @@ def forge_compare_to_spec(
         parsed = spec_from_dict(spec)
     except ValueError as e:
         return {"isError": True, "error": f"spec did not parse: {e}"}
-    draft = c.get_draft(kind, flow_id)  # type: ignore[arg-type]
+    draft = c.get_draft(kind, flow_id)
     if isinstance(draft, Err):
         return draft.as_tool_result()
     return compare_built_to_spec(draft, parsed).as_tool_result()
 
 
-@mcp.tool()
+@mcp.tool(title="Create or set word list", annotations=_LIVE_REPLACE)
 def forge_create_list(
     name: str,
     values: list[str],
@@ -597,8 +896,16 @@ def forge_create_list(
     Point a Select at it afterwards via forge_apply_fields' `referred_list` (proven end to end:
     a real value persists on an item, a value outside the list PUTs 200 and silently clears the
     field — CLAUDE.md's Select discard rule, which is why values are read back and audited
-    here). Lists holding personal data stay HUMAN-MADE (PDPA) — the spec path refuses to compile
-    them into this tool; do not route one here by hand either.
+    here).
+
+    ⚠️ Lists holding personal data stay HUMAN-MADE (PDPA, decisions D2/D9) and this tool has NO
+    way to tell — it sees a name and an array of strings, nothing else. The gate is the PLAN's,
+    not this tool's: `kfforge.intake.compile` still emits a `create_list` op for a
+    `personal_data` list (values and all, so nothing is silently dropped) and marks it
+    "HUMAN-GATED (personal_data, PDPA)" in that op's own `why`. READ the `why` before executing a
+    create_list op — a human must create/verify that list in the builder UI. An earlier version of
+    this line claimed the spec path would not compile such a list into this tool at all; it
+    does, and believing otherwise would have let an agent execute exactly the op the plan gated.
     """
     c = _client(app_id)
     if isinstance(c, Err):
@@ -606,7 +913,7 @@ def forge_create_list(
     return _result(apply_word_list(c, name, values))
 
 
-@mcp.tool()
+@mcp.tool(title="Add sequence number field", annotations=_LIVE_ADD)
 def forge_add_sequence_number(
     flow_id: str,
     field_name: str,
@@ -616,7 +923,7 @@ def forge_add_sequence_number(
     step_activity_name: str,
     start: int = 0,
     end: int = 2,
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     publish: bool = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
@@ -634,14 +941,14 @@ def forge_add_sequence_number(
         return c.as_tool_result()
     return _result(apply_sequence_number(c, flow_id, field_name, section_name, prefix, padding,
                                          step_activity_name, start=start, end=end,
-                                         publish=publish, kind=kind))  # type: ignore[arg-type]
+                                         publish=publish, kind=kind))
 
 
-@mcp.tool()
+@mcp.tool(title="Add field validation", annotations=_LIVE_ADD)
 def forge_add_field_validation(
     flow_id: str,
     rules: dict[str, list[list[str]]],
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     publish: bool = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
@@ -654,11 +961,14 @@ def forge_add_field_validation(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    norm: dict[str, list[tuple[str, str]]] = {f: [(r[0], r[1]) for r in rs] for f, rs in rules.items()}
-    return _result(apply_field_validation(c, flow_id, norm, publish=publish, kind=kind))  # type: ignore[arg-type]
+    try:
+        norm = tools.coerce_validation_rules("rules", rules)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
+    return _result(apply_field_validation(c, flow_id, norm, publish=publish, kind=kind))
 
 
-@mcp.tool()
+@mcp.tool(title="Rebuild workflow", annotations=_LIVE_REPLACE)
 def forge_build_workflow(
     flow_id: str,
     steps: list[list[Any]],
@@ -666,7 +976,7 @@ def forge_build_workflow(
     parallel_after: int | None = None,
     roles: dict[str, str] | None = None,
     step_meta: dict[str, dict[str, Any]] | None = None,
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     publish: bool = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
@@ -687,23 +997,23 @@ def forge_build_workflow(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    step_tuples: list[tuple[str, str | None]] = [(s[0], s[1]) for s in steps]
-    par: tuple[str, list[tuple[str, list[tuple[str, str | None]]]]] | None = None
-    if parallel:
-        branches = [(b[0], [(s[0], s[1]) for s in b[1]]) for b in parallel["branches"]]
-        par = (parallel["name"], branches)
+    try:
+        step_tuples = tools.coerce_workflow_steps("steps", steps)
+        par = tools.coerce_parallel("parallel", parallel or None)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
     return _result(apply_workflow(c, flow_id, step_tuples, parallel=par,
                                   parallel_after=parallel_after, roles=roles, publish=publish,
-                                  kind=kind, step_meta=step_meta))  # type: ignore[arg-type]
+                                  kind=kind, step_meta=step_meta))
 
 
-@mcp.tool()
+@mcp.tool(title="Add loop-back gate", annotations=_LIVE_ADD_ONCE)
 def forge_add_goto_gate(
     flow_id: str,
     target_activity_name: str,
     field_name: str,
     branch_name: str | None = None,
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     publish: bool = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
@@ -724,16 +1034,16 @@ def forge_add_goto_gate(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(apply_goto_gate(c, flow_id, target_activity_name, field_name,  # type: ignore[arg-type]
+    return _result(apply_goto_gate(c, flow_id, target_activity_name, field_name,
                                    branch_name=branch_name, publish=publish, kind=kind))
 
 
-@mcp.tool()
+@mcp.tool(title="Set branch conditions", annotations=_LIVE_REPLACE)
 def forge_set_branch_conditions(
     flow_id: str,
     field_name: str,
     branch_literals: dict[str, str],
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     publish: bool = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
@@ -763,17 +1073,18 @@ def forge_set_branch_conditions(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(apply_branch_conditions(c, flow_id, field_name, branch_literals,  # type: ignore[arg-type]
+    return _result(apply_branch_conditions(c, flow_id, field_name, branch_literals,
                                            publish=publish, kind=kind))
 
 
-@mcp.tool()
+@mcp.tool(title="Rebuild step visibility (sections + fields)", annotations=_LIVE_REPLACE)
 def forge_set_visibility(
     flow_id: str,
     owners: dict[str, list[str]],
     field_owners: dict[str, list[str]] | None = None,
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     publish: bool = False,
+    include_pairs: Annotated[bool, Field(description="Return every (column, activity) permission pair in full, resolved to field/section/step names, instead of the bounded counts + by_section/by_step rollups. The default already lists every `missing` pair in full and states how many entries it summarised.")] = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): rebuild a process's per-step visibility. `owners` maps a
@@ -788,11 +1099,28 @@ def forge_set_visibility(
     ReadOnly elsewhere) overriding its section's default. Fields not named keep their section's
     matrix. Branch-aware: a branch-private field stays Hidden across a whole sibling branch, not
     ReadOnly-after-last-editable — the case the section rule alone gets wrong.
+
+    A section or step name in `owners` that is not on the live flow is refused before any write,
+    naming the available set; so is a field name in `field_owners`.
+
+    ⚠️ `uncovered_sections` names every section this matrix leaves editable at NO step — the
+    same shape forge_set_branch_conditions' `uncovered` has, and never folded into `isError`
+    (leaving a section alone can be deliberate). It exists because the DEFAULT
+    forge_create_process(from_template=True) injects sections a caller did not ask for and cannot
+    name in `owners`, so the matrix is incomplete from the first write and doctor only says
+    "section 'System' is never editable at any live step" two steps later.
+
+    RESULT SIZE: the audit is one (column, activity) PAIR per field per step and stays complete on
+    every bucket, but the PAYLOAD states counts plus `by_section` / `by_step` rollups and every
+    `missing` pair in full, all resolved to field/section/step NAMES. One live call over 37 columns
+    x 6 activities used to echo all 222 opaque `Column_x@Activity_y` pairs TWICE (~15k tokens) to
+    say "222 written, 0 missing". `summarised` always states how many entries the counts stand in
+    for; `include_pairs=True` returns every one of them, named.
     """
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    draft = c.get_draft(kind, flow_id)  # type: ignore[arg-type]
+    draft = c.get_draft(kind, flow_id)
     if isinstance(draft, Err):
         return draft.as_tool_result()
     try:
@@ -801,34 +1129,133 @@ def forge_set_visibility(
     except ValueError as e:
         return Err("verify", str(e)).as_tool_result()
     return _result(apply_step_permissions(c, flow_id, matrix, publish=publish, kind=kind,
-                                          field_matrix=field_matrix))  # type: ignore[arg-type]
+                                          field_matrix=field_matrix, include_pairs=include_pairs))
 
 
-@mcp.tool()
+@mcp.tool(title="Set field events", annotations=_LIVE_REPLACE)
 def forge_set_events(
     flow_id: str,
-    events: dict[str, list[list[str]]],
-    kind: str = "process",
+    events: dict[str, list[list[str | None]]],
+    kind: FlowKindArg = "process",
     publish: bool = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
-    """LIVE write (dev only, KF_APP): attach SDK field events (the formula-engine substitute — see
-    CLAUDE.md Field events). `events` maps a field NAME to `[[trigger, script], ...]`. The editor's
-    own two parse rules are enforced offline before any write: no top-level `await` (wrap in
-    `(async () => {...})();`), and no `KFSDK` reference (only `kf` is injected).
+    """LIVE write (dev only, KF_APP): attach SDK field events (the script-based computation
+    mechanism — see CLAUDE.md Field events). `events` maps a field NAME to
+    `[[trigger, script], ...]`.
+
+    **Pass `null` for the trigger and it is DERIVED from the source field's live type**, which is
+    the recommended call: the trigger is a FUNCTION of that type (Select fires `onClick`, Date and
+    Number fire `onSelect`, Text/Textarea fire `onChange`), and a hand-picked wrong one writes
+    fine, publishes fine, and simply never fires — invisible to every later check. A stated
+    trigger that disagrees with the derived one is REFUSED, naming both; so is an event on any of
+    the FIVE types this engine refuses outright — Attachment, Image, Signature, SequenceNumber,
+    Geolocation (`kfforge.types.NO_EVENT_FIELD_TYPES`, which this refusal reads directly). CLAUDE.md
+    names a SIXTH event-less type on the PLATFORM, Rich text, and this engine deliberately does NOT
+    refuse it: its wire shape is uncaptured and its inferred shape is Textarea + AllowFormatting —
+    indistinguishable from a plain Textarea, which legitimately fires onChange — so refusing on
+    that guess would block a real capability (doctrine: never invent a rule for an uncaptured
+    shape). The result's `unverified` bucket names any trigger whose (type -> trigger) pair is
+    family-inferred rather than live-confirmed.
+
+    The editor's own two parse rules are enforced offline before any write: no top-level `await`
+    (wrap in `(async () => {...})();`), and no `KFSDK` reference (only `kf` is injected).
     """
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    conv = {name: [(t, s) for t, s in specs] for name, specs in events.items()}
-    return _result(apply_field_events(c, flow_id, conv, publish=publish, kind=kind))  # type: ignore[arg-type]
+    try:
+        conv = tools.coerce_events("events", events)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
+    return _result(apply_field_events(c, flow_id, conv, publish=publish, kind=kind))
 
 
-@mcp.tool()
+@mcp.tool(title="Delete fields and tables", annotations=_LIVE_REPLACE_ONCE)
+def forge_delete_fields(
+    flow_id: str,
+    fields: list[str] | None = None,
+    tables: list[str] | None = None,
+    kind: FlowKindArg = "process",
+    publish: bool = False,
+    app_id: str | None = None,
+) -> dict[str, Any]:
+    """LIVE write (dev only, KF_APP): DELETE form fields and/or child tables by NAME, with the
+    whole cluster swept — the field's Column, its per-step Permissions, its Events, its query
+    definition, its computed formula, its validation and conditional-visibility rules.
+
+    Read-back verified the INVERTED way: success is the name being ABSENT afterwards, so the
+    audit buckets are `deleted` and `surviving` (a name still present after the write is the loud
+    failure). Refuses BEFORE any write when something that SURVIVES still points at what is going
+    — another field's formula, a branch condition, a conditional-visibility trigger, an event
+    script naming the id — because a dangling scalar reference publishes 500 with zero
+    diagnostics; the refusal names the reference and the tool that clears it. Refuses the whole
+    batch if any one name is unknown, so a typo deletes nothing.
+
+    Pass a raw node id instead of a name to disambiguate: names are NOT unique across a form and
+    its child tables, and every field carrying the name is deleted otherwise.
+    """
+    c = _client(app_id)
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(delete_fields(c, flow_id, tuple(fields or ()), tuple(tables or ()),
+                                 publish=publish, kind=kind))
+
+
+@mcp.tool(title="Rename fields", annotations=_LIVE_REPLACE_ONCE)
+def forge_rename_fields(
+    flow_id: str,
+    renames: dict[str, str],
+    kind: FlowKindArg = "process",
+    publish: bool = False,
+    app_id: str | None = None,
+) -> dict[str, Any]:
+    """LIVE write (dev only, KF_APP): RENAME form fields, `{current name: new name}`.
+
+    The cheap, safe fix for a wrong field name: the node id never changes, so per-step
+    Permissions, `Field::Event` and any already-submitted data stay attached — a delete-and-
+    recreate silently orphans all three. Only ROOT-model fields are renamed; a child-table column
+    keeps its name. Read-back verifies BOTH halves of each rename (the new name present AND the
+    old one gone), so a half-applied rename can never read as success. An unknown or ambiguous
+    name, or a new name that already exists on the form, is refused before any write.
+    """
+    c = _client(app_id)
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(rename_form_fields(c, flow_id, renames, publish=publish, kind=kind))
+
+
+@mcp.tool(title="Set required fields", annotations=_LIVE_REPLACE)
+def forge_set_required(
+    flow_id: str,
+    required: list[str],
+    kind: FlowKindArg = "process",
+    publish: bool = False,
+    app_id: str | None = None,
+) -> dict[str, Any]:
+    """LIVE write (dev only, KF_APP): set which ROOT-model fields are Required.
+
+    SET semantics, not a patch — every root field NOT listed comes back optional, so pass the
+    WHOLE required set, not just the additions. The fields that lose the flag are reported in
+    `cleared` rather than changing silently. Read-back verifies the flag on every root field, not
+    only the named ones.
+
+    Refuses before any write to mark a computed or SequenceNumber field Required: nobody can type
+    that value, so the step becomes permanently unsubmittable and nothing downstream can move
+    either (CLAUDE.md Visibility). Unknown names are refused too, so a typo cannot silently leave
+    a field un-required.
+    """
+    c = _client(app_id)
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(apply_required(c, flow_id, tuple(required), publish=publish, kind=kind))
+
+
+@mcp.tool(title="Set section styles", annotations=_LIVE_REPLACE)
 def forge_set_styles(
     flow_id: str,
     styles: dict[str, dict[str, Any]],
-    kind: str = "process",
+    kind: FlowKindArg = "process",
     publish: bool = False,
     root_style: dict[str, Any] | None = None,
     hint_text_position: str | None = None,
@@ -847,13 +1274,13 @@ def forge_set_styles(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(apply_section_style(c, flow_id, styles, publish=publish, kind=kind,  # type: ignore[arg-type]
+    return _result(apply_section_style(c, flow_id, styles, publish=publish, kind=kind,
                                        root_style=root_style,
                                        hint_text_position=hint_text_position))
 
 
-@mcp.tool()
-def forge_publish(kind: str, flow_id: str, app_id: str | None = None) -> dict[str, Any]:
+@mcp.tool(title="Publish", annotations=_LIVE_ADD)
+def forge_publish(kind: PublishKind, flow_id: str, app_id: str | None = None) -> dict[str, Any]:
     """LIVE publish (dev only, KF_APP): compile a draft to its live version. `kind` is
     "process"/"form"/"case" (a flow — `flow_id` is the flow id), "page" (needs `app_id`,
     `flow_id` is the page id), or "application" (`flow_id` is the app id).
@@ -879,10 +1306,10 @@ def forge_publish(kind: str, flow_id: str, app_id: str | None = None) -> dict[st
             return got.as_tool_result()
         return {"kind": kind, "id": flow_id, "published": True, "isError": False}
 
-    got = c.publish(kind, flow_id)  # type: ignore[arg-type]
+    got = c.publish(kind, flow_id)
     if isinstance(got, Err):
         return got.as_tool_result()
-    detail = c.get_flow_detail(kind, flow_id)  # type: ignore[arg-type]
+    detail = c.get_flow_detail(kind, flow_id)
     if isinstance(detail, Err):
         return {"kind": kind, "id": flow_id, "published": True, "status": None,
                 "isError": True, "error": f"publish succeeded but status read-back failed: "
@@ -892,9 +1319,9 @@ def forge_publish(kind: str, flow_id: str, app_id: str | None = None) -> dict[st
             "isError": status != "Live"}
 
 
-@mcp.tool()
+@mcp.tool(title="Run doctor", annotations=_LIVE_READ)
 def forge_doctor(
-    flow_id: str, kind: str = "process",
+    flow_id: str, kind: FlowKindArg = "process",
     visibility_role_claims: list[str] | None = None,
     app_id: str | None = None,
 ) -> dict[str, Any]:
@@ -904,15 +1331,21 @@ def forge_doctor(
     clean. A list whose items fetch fails is recorded in `list_fetch_errors`, never silently
     dropped from the audit. Pass the plan's doctor-op `visibility_role_claims` through verbatim
     — each claim FAILs the audit (role-scoped visibility is API-impossible, #6/ADR-0004).
+
+    Also reads the flow's LIVE member roster — the one condition the offline graph can never see,
+    because membership is not in the draft at all. A flow with AppRole assignees and an EMPTY
+    roster FAILs the audit (`members` bucket, `members_found`): that is a documented bare-metadata
+    publish failure (CLAUDE.md Members first). A roster this tool could not read lands in
+    `member_fetch_error` and is never counted as populated.
     """
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(run_doctor(c, flow_id, kind=kind,  # type: ignore[arg-type]
-                               visibility_role_claims=visibility_role_claims))
+    return _result(run_doctor(c, flow_id, kind=kind,
+                              visibility_role_claims=visibility_role_claims))
 
 
-@mcp.tool()
+@mcp.tool(title="Create page", annotations=_LIVE_ADD_ONCE)
 def forge_create_page(app_id: str, name: str, publish: bool = False) -> dict[str, Any]:
     """LIVE (dev only): create a new app PAGE — a virgin 4-node page graph
     (Page/Container001/Style001) — and verify it via the page LIST route (never the create
@@ -925,7 +1358,7 @@ def forge_create_page(app_id: str, name: str, publish: bool = False) -> dict[str
     return _result(create_page_flow(c, app_id, name, publish=publish))
 
 
-@mcp.tool()
+@mcp.tool(title="Build page content", annotations=_LIVE_REPLACE_ONCE)
 def forge_build_page(
     app_id: str,
     page_id: str | None = None,
@@ -966,11 +1399,15 @@ def forge_build_page(
         return _result(apply_build_page_op(c, app_id, op, publish=publish))
     if not page_id:
         return {"isError": True, "error": "'steps' entry requires 'page_id'"}
-    build_steps = [PageBuildStep(kind=s["kind"], kwargs=s.get("kwargs", {})) for s in steps]
+    try:
+        parsed = tools.coerce_page_steps("steps", steps)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
+    build_steps = [PageBuildStep(kind=k, kwargs=kw) for k, kw in parsed]
     return _result(apply_page_build(c, app_id, page_id, build_steps, publish=publish))
 
 
-@mcp.tool()
+@mcp.tool(title="Wire page into navigation", annotations=_LIVE_REPLACE)
 def forge_set_navigation(
     app_id: str,
     page_id: str,
@@ -991,7 +1428,7 @@ def forge_set_navigation(
                                     publish=publish))
 
 
-@mcp.tool()
+@mcp.tool(title="Share flow report", annotations=_LIVE_ADD)
 def forge_share_report(
     flow_id: str,
     report_id: str,
@@ -1011,7 +1448,7 @@ def forge_share_report(
     return _result(apply_report_members(c, flow_id, report_id, members))
 
 
-@mcp.tool()
+@mcp.tool(title="Simulate one item", annotations=_LIVE_ADD_ONCE)
 def forge_simulate_case(
     flow_id: str,
     steps: list[dict[str, Any]],
@@ -1044,11 +1481,12 @@ def forge_simulate_case(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    plans = [
-        StepPlan(name=s["name"], values=s.get("values", {}) or {}, reject=bool(s.get("reject", False)),
-                 comment=s.get("comment", ""))
-        for s in steps
-    ]
+    try:
+        parsed = tools.coerce_case_steps("steps", steps)
+    except ValueError as e:
+        return Err("verify", str(e)).as_tool_result()
+    plans = [StepPlan(name=s["name"], values=s["values"], reject=s["reject"],
+                      comment=s["comment"]) for s in parsed]
     # Resolve field NAMES -> ids from the flow's live draft, so a caller may key `values` by either
     # (a Cowork user with only the MCP surface cannot hand-resolve name->id). A read failure here
     # is not fatal: fall back to no index (keys passed through verbatim, the old behavior).
@@ -1064,7 +1502,7 @@ def forge_simulate_case(
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Create application", annotations=_LIVE_ADD_ONCE)
 def forge_create_app(name: str) -> dict[str, Any]:
     """LIVE (dev only): create a NEW application (`POST /flow/2/{acct}/application`), verified via
     the application LIST route — proven live 2026-08-06 (see the Node G DEV report's probe
@@ -1078,7 +1516,7 @@ def forge_create_app(name: str) -> dict[str, Any]:
     return _result(create_application_verified(c, name))
 
 
-@mcp.tool()
+@mcp.tool(title="List applications", annotations=_LIVE_READ)
 def forge_list_apps() -> dict[str, Any]:
     """LIVE (dev only): list the applications this credential can see (`GET
     /flow/2/{acct}/application`). Needs NO app selected — this is how a user discovers which
@@ -1096,13 +1534,21 @@ def forge_list_apps() -> dict[str, Any]:
     return {"apps": apps, "count": len(apps), "isError": False}
 
 
-@mcp.tool()
-def forge_delete_flow(kind: str, flow_id: str, app_id: str | None = None) -> dict[str, Any]:
-    """LIVE (dev only): archive+delete a flow (process/form/case), a PAGE (needs `app_id`), or an
-    APPLICATION (`kind="application"`, `flow_id` is the app id). Verifies deletion via the
-    appropriate LIST route, never the delete response alone — CLAUDE.md Page CRUD: a page DELETE
-    returns `{"status":"success"}` for ANY id, even a bogus one, and its draft GET still 200s
-    afterward (storage lingers).
+@mcp.tool(title="Delete flow, page or application", annotations=_LIVE_REPLACE_ONCE)
+def forge_delete_flow(kind: DeleteKind, flow_id: str,
+                      app_id: str | None = None) -> dict[str, Any]:
+    """LIVE (dev only): archive+delete a flow (process/form/case/list/dataset), a PAGE (needs
+    `app_id`), or an APPLICATION (`kind="application"`, `flow_id` is the app id). Verifies deletion
+    via the appropriate LIST route, never the delete response alone — CLAUDE.md Page CRUD: a page
+    DELETE returns `{"status":"success"}` for ANY id, even a bogus one, and its draft GET still
+    200s afterward (storage lingers).
+
+    `kind` is the DELETE set, deliberately wider than forge_publish's: `list` and `dataset` are
+    born LIVE and cannot be published, but they are ordinary `/flow/2/{acct}/{kind}/{id}` records
+    and delete + re-list exactly like the other three. They are also the two kinds
+    forge_create_flow mints most freely, so leaving them out left an agent able to create a
+    dataform it could never clean up. Only `process` is archived first (400 KISSFLOW_ERROR_04602
+    otherwise); every other kind deletes directly.
     """
     # Deleting an APPLICATION is account-level (flow_id IS the app, routes are path-based) — it
     # needs NO app selected, same as forge_create_app. Every other kind lives inside an app, so
@@ -1110,7 +1556,7 @@ def forge_delete_flow(kind: str, flow_id: str, app_id: str | None = None) -> dic
     c = _client(app_id, require_app=(kind != "application"))
     if isinstance(c, Err):
         return c.as_tool_result()
-    return delete_anything(c, kind, flow_id, app_id=app_id)
+    return _result(delete_anything(c, kind, flow_id, app_id=app_id))
 
 
 # =====================================================================================
@@ -1120,7 +1566,7 @@ def forge_delete_flow(kind: str, flow_id: str, app_id: str | None = None) -> dic
 # =====================================================================================
 
 
-@mcp.tool()
+@mcp.tool(title="Add users to a role", annotations=_LIVE_ADD)
 def forge_add_role_users(
     role_id: str,
     user_query: str | None = None,
@@ -1146,12 +1592,12 @@ def forge_add_role_users(
                                         app_id=app_id))
 
 
-@mcp.tool()
+@mcp.tool(title="Grant permission tier", annotations=_LIVE_REPLACE)
 def forge_grant_tier(
-    kind: str,
+    kind: TierKind,
     flow_id: str,
     role_id: str,
-    tier: str,
+    tier: Tier,
     app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only, KF_APP): grant an AppRole a named permission TIER on a flow
@@ -1164,12 +1610,12 @@ def forge_grant_tier(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(apply_grant_tier(c, kind, flow_id, role_id, tier))  # type: ignore[arg-type]
+    return _result(apply_grant_tier(c, kind, flow_id, role_id, tier))
 
 
-@mcp.tool()
+@mcp.tool(title="Create flow", annotations=_LIVE_ADD_ONCE)
 def forge_create_flow(
-    kind: str,
+    kind: CreateFlowKind,
     name: str,
     extra: dict[str, Any] | None = None,
     app_id: str | None = None,
@@ -1179,6 +1625,11 @@ def forge_create_flow(
     publish step. `kind="case"` (a board) REQUIRES `extra={"item_type": "Board"|"Case", "prefix":
     <short string>}` — refused loudly before any write when either is missing (the write API
     itself 400s MissingRequiredFieldError on either omission).
+
+    `kind="process"` clones the identity shell by default (`extra={"from_template": False}` opts
+    out) and the report names what that brought in under `template_sections` /
+    `template_required_fields` / `template_steps` — see forge_create_process for why an `owners`
+    map that cannot name those sections breaks the visibility matrix on the first write.
     """
     c = _client(app_id)
     if isinstance(c, Err):
@@ -1186,7 +1637,7 @@ def forge_create_flow(
     return _result(create_flow_any(c, kind, name, extra))
 
 
-@mcp.tool()
+@mcp.tool(title="Publish application", annotations=_LIVE_ADD)
 def forge_publish_app(app_id: str) -> dict[str, Any]:
     """LIVE publish (dev only): compile an APPLICATION's draft to its live version, WITH a
     genuine post-publish read-back (THE RULE: a 200 from publish proves nothing by itself) — the
@@ -1201,10 +1652,10 @@ def forge_publish_app(app_id: str) -> dict[str, Any]:
     return _result(publish_application_verified(c, app_id))
 
 
-@mcp.tool()
+@mcp.tool(title="Dataform records", annotations=_LIVE_REPLACE_ONCE)
 def forge_dataset_records(
     flow_id: str,
-    op: str,
+    op: DatasetOp,
     record: dict[str, Any] | None = None,
     record_id: str | None = None,
     app_id: str | None = None,
@@ -1232,7 +1683,7 @@ def forge_dataset_records(
     return _result(apply_dataset_records(c, flow_id, op, record, record_id))
 
 
-@mcp.tool()
+@mcp.tool(title="Set role default page", annotations=_LIVE_REPLACE)
 def forge_set_role_preference(
     role_id: str,
     default_page: str | None = None,
@@ -1254,8 +1705,8 @@ def forge_set_role_preference(
                                              default_navigation=default_navigation, app_id=app_id))
 
 
-@mcp.tool()
-def forge_sweep(scope: str, app_id: str | None = None) -> dict[str, Any]:
+@mcp.tool(title="Inventory sweep", annotations=_LIVE_READ)
+def forge_sweep(scope: SweepScope, app_id: str | None = None) -> dict[str, Any]:
     """READ-ONLY (dev only): full-inventory discovery sweep. `scope` is one of
     "apps"|"flows"|"pages"|"roles"|"lists"|"all". `app_id` defaults to the configured `KF_APP`.
     Every leakage-prone route (CLAUDE.md: `list_flows`/`list_lists` return the WHOLE ACCOUNT
@@ -1267,10 +1718,10 @@ def forge_sweep(scope: str, app_id: str | None = None) -> dict[str, Any]:
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    return run_sweep(c, scope, app_id=app_id)
+    return _result(run_sweep(c, scope, app_id=app_id))
 
 
-@mcp.tool()
+@mcp.tool(title="Search capability docs", annotations=_OFFLINE_PURE)
 def forge_capabilities(query: str = "") -> dict[str, Any]:
     """OFFLINE, read-only: search the docs/capabilities/*.md capability docs + their linked
     shapes/*.json captures. Empty `query` returns the full index (`id`, `name`, `status`,
@@ -1280,10 +1731,10 @@ def forge_capabilities(query: str = "") -> dict[str, Any]:
     linked shape's parsed JSON content inline, so a caller gets the real wire shape in the same
     call instead of a dangling file reference.
     """
-    return search_capabilities(query)
+    return _result(search_capabilities(query))
 
 
-@mcp.tool()
+@mcp.tool(title="Builder playbook", annotations=_OFFLINE_PURE)
 def forge_playbook() -> dict[str, Any]:
     """OFFLINE, read-only: return the full builder PLAYBOOK — the doctrine a fresh Claude needs to
     drive this engine correctly (THE RULE that a 200/publish proves nothing, the proven numbered
@@ -1292,10 +1743,10 @@ def forge_playbook() -> dict[str, Any]:
     the brain that ships with the MCP so it travels even to a remote user with no local files. Deep
     wire shapes it references live in `forge_capabilities(<id>)`.
     """
-    return load_playbook()
+    return _result(load_playbook())
 
 
-@mcp.tool()
+@mcp.tool(title="Ask the app copilot", annotations=_LIVE_REPLACE_ONCE)
 def forge_copilot_ask(
     app_id: str,
     message: str,
@@ -1319,7 +1770,7 @@ def forge_copilot_ask(
     return _result(apply_copilot_ask(c, app_id, message, expect=expect))
 
 
-@mcp.tool()
+@mcp.tool(title="Check copilot result", annotations=_LIVE_READ)
 def forge_copilot_check(
     app_id: str,
     conversation_id: str,
@@ -1436,7 +1887,7 @@ def _write_artifact(directory: Path, filename: str, content: str) -> str:
     return str(path)
 
 
-@mcp.tool()
+@mcp.tool(title="Next intake questions", annotations=_OFFLINE_PURE)
 def forge_intake_questions(spec: dict[str, Any] | None = None, limit: int = 4) -> dict[str, Any]:
     """OFFLINE, stateless: the next questions to ask, most-blocking dimension first, for the gaps
     THIS spec still has (kfforge.intake.questions.next_questions). `spec=None` returns the OPENING
@@ -1480,7 +1931,7 @@ def forge_intake_questions(spec: dict[str, Any] | None = None, limit: int = 4) -
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Update app spec", annotations=_OFFLINE_PURE)
 def forge_update_spec(spec: dict[str, Any] | None, patch: dict[str, Any]) -> dict[str, Any]:
     """OFFLINE, stateless: merge Q&A answers into a spec and return the new spec plus its
     remaining gaps. `spec=None` starts from kfforge.intake.schema.blank_spec(). `patch` is a
@@ -1531,7 +1982,7 @@ def forge_update_spec(spec: dict[str, Any] | None, patch: dict[str, Any]) -> dic
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Render flow diagram", annotations=_OFFLINE_ARTIFACT)
 def forge_render_flow_diagram(spec: dict[str, Any], out_dir: str | None = None) -> dict[str, Any]:
     """OFFLINE: render the flow-shape draw.io diagram (kfforge.design.flow_diagram_xml) — stage
     boxes down the spine, decision diamonds, dashed rework-loop back-edges, an unreachable stage
@@ -1558,7 +2009,7 @@ def forge_render_flow_diagram(spec: dict[str, Any], out_dir: str | None = None) 
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Render schema diagram", annotations=_OFFLINE_ARTIFACT)
 def forge_render_schema_diagram(spec: dict[str, Any], out_dir: str | None = None) -> dict[str, Any]:
     """OFFLINE: render the data-shape draw.io diagram (kfforge.design.schema_diagram_xml) — fields
     grouped by stage, tables with their columns/row cap, reference lists with their REAL values.
@@ -1580,7 +2031,7 @@ def forge_render_schema_diagram(spec: dict[str, Any], out_dir: str | None = None
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Render HTML mockups", annotations=_OFFLINE_ARTIFACT)
 def forge_render_mockups(spec: dict[str, Any], out_dir: str | None = None) -> dict[str, Any]:
     """OFFLINE: render the combined HTML mockup bundle (kfforge.design.design_bundle_html) —
     per-stage form cards with FAITHFUL field rendering (a Hidden/ReadOnly/computed field never
@@ -1612,7 +2063,7 @@ def forge_render_mockups(spec: dict[str, Any], out_dir: str | None = None) -> di
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Build confirmation pack", annotations=_OFFLINE_ARTIFACT)
 def forge_request_confirmation(spec: dict[str, Any], out_dir: str | None = None) -> dict[str, Any]:
     """OFFLINE: build the ConfirmationRequest (kfforge.design.request_confirmation) — both draw.io
     diagrams plus the HTML mockup bundle written to disk, a content digest that changes whenever
@@ -1649,7 +2100,7 @@ def forge_request_confirmation(spec: dict[str, Any], out_dir: str | None = None)
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Apply spec revisions", annotations=_OFFLINE_PURE)
 def forge_apply_revisions(spec: dict[str, Any], revisions: dict[str, str]) -> dict[str, Any]:
     """OFFLINE: apply a customer's corrections (kfforge.design.apply_revisions — an explicit key
     vocabulary, e.g. "stage:<name>:rename" / "list:<name>:value:<old>", never a general
@@ -1697,8 +2148,9 @@ def forge_apply_revisions(spec: dict[str, Any], revisions: dict[str, str]) -> di
     }
 
 
-@mcp.tool()
-def forge_approve_spec(spec: dict[str, Any], digest: str, decision: str) -> dict[str, Any]:
+@mcp.tool(title="Approve spec", annotations=_OFFLINE_PURE)
+def forge_approve_spec(spec: dict[str, Any], digest: str,
+                       decision: ApprovalDecision) -> dict[str, Any]:
     """OFFLINE: record approval and mint the ONLY value forge_plan_app accepts.
 
     Refuses unless `digest` matches THIS spec's content digest (kfforge.design.spec_digest, with
@@ -1758,7 +2210,7 @@ def forge_approve_spec(spec: dict[str, Any], digest: str, decision: str) -> dict
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Compile build plan", annotations=_OFFLINE_PURE)
 def forge_plan_app(spec: dict[str, Any], approval_token: str) -> dict[str, Any]:
     """OFFLINE: compile an APPROVED, COMPLETE spec to its ordered BuildPlan
     (kfforge.intake.compile.compile_spec) — THE GATE.

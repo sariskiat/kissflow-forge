@@ -8,12 +8,16 @@ import pytest
 from kfforge.client import (
     ApplyReport,
     BranchConditionReport,
+    DeleteFieldsReport,
     Err,
     EventReport,
+    FullFieldsReport,
     GotoGateReport,
     KfClient,
     KfConfig,
     MemberReport,
+    RenameFieldsReport,
+    RequiredReport,
     StyleReport,
     TableReport,
     WorkflowReport,
@@ -22,18 +26,24 @@ from kfforge.client import (
     apply_field_events,
     apply_fields,
     apply_fields_and_layout,
+    apply_fields_full,
     apply_goto_gate,
+    apply_layout,
     apply_member_batch,
     apply_member_roles,
     apply_report_members,
+    apply_required,
     apply_section_style,
+    apply_step_permissions,
     apply_table,
     apply_workflow,
     create_application_verified,
     create_flow_any,
     create_process,
     delete_anything,
+    delete_fields,
     discover_member_source,
+    rename_form_fields,
     run_doctor,
 )
 from kfforge.graph import apply_changes as _apply_changes
@@ -396,7 +406,8 @@ def test_apply_goto_gate_unknown_field_rejected_before_any_write() -> None:
 
 def test_apply_goto_gate_non_boolean_field_rejected_by_gate_polarity() -> None:
     draft = _ensure_process_def(_bare_process_draft(), ("Review",))
-    draft = _apply_changes(draft, [FieldSpec(name="Choice", type=FieldType.SELECT)])
+    draft = _apply_changes(draft, [FieldSpec(name="Choice", type=FieldType.SELECT,
+                                             referred_list="List_Sample01")])
     c = FakeClient(draft)
     got = apply_goto_gate(c, "F1", target_activity_name="Review", field_name="Choice")
     assert isinstance(got, Err) and got.kind == "verify"
@@ -727,6 +738,88 @@ def test_run_doctor_records_a_list_fetch_failure_without_crashing() -> None:
     assert isinstance(got, dict)
     assert got["list_ids_checked"] == []
     assert "List_Broken" in got["list_fetch_errors"]
+
+
+def _draft_with_an_approle_assignee() -> dict:
+    """A one-step process whose UserTask carries a real AppRole assignee — the exact condition
+    CLAUDE.md > Members first says publish rejects when the flow has NO members."""
+    return {
+        "Root": "M1", "_meta_version": "v1",
+        "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"},
+        "Activity_A1": {"Id": "Activity_A1", "Kind": "Activity", "NodeType": "UserTask",
+                        "Name": "Review", "Activity::Resource": ["Resource_R1"]},
+        "Resource_R1": {"Id": "Resource_R1", "Kind": "Resource", "Activity": "Activity_A1",
+                        "ValueType": "AppRole", "Value": "Ro_lead_0003",
+                        "DisplayValue": "Lead"},
+    }
+
+
+def test_run_doctor_fails_when_an_approle_assignee_has_no_members() -> None:
+    """Rule D (2026-08-19 diagnosis): the blind spot `verify.doctor` cannot close from the graph.
+    Membership does not live in the draft at all, so the module (pure, offline) can only see that
+    a Resource EXISTS. The TOOL can read the live roster — and an assignee with an empty roster is
+    a documented bare-MetadataError publish failure."""
+    c = FakeClient(_draft_with_an_approle_assignee())
+    got = run_doctor(c, "F1")
+    assert isinstance(got, dict)
+    assert got["isError"] is True
+    assert any("ZERO members" in p for p in got["problems"]), got["problems"]
+    assert got["checked"]["members"] == 1
+    assert got["members_found"] == 0
+
+
+def test_run_doctor_is_quiet_when_the_roster_is_populated() -> None:
+    c = FakeClient(_draft_with_an_approle_assignee())
+    c.members[("process", "F1")] = [{"_id": "Ro_lead_0003", "Name": "Lead", "Kind": "AppRole",
+                                     "Role": "Member", "Permission": "InitiateItems"}]
+    got = run_doctor(c, "F1")
+    assert isinstance(got, dict)
+    assert not any("ZERO members" in p for p in got["problems"]), got["problems"]
+    assert got["checked"]["members"] == 1 and got["members_found"] == 1
+
+
+def test_run_doctor_never_reads_members_for_a_flow_with_no_approle_assignee() -> None:
+    """No assignee, no membership requirement to check — the bucket still reports it LOOKED (0),
+    and no round trip is spent."""
+    class _NoMembers(FakeClient):
+        def get_members(self, kind, flow_id):  # type: ignore[override]
+            raise AssertionError("run_doctor read the member roster with no AppRole assignee")
+
+    c = _NoMembers(_bare_process_draft())
+    got = run_doctor(c, "F1")
+    assert isinstance(got, dict)
+    assert got["checked"]["members"] == 0
+    assert got["members_found"] is None
+
+
+def test_run_doctor_records_a_member_fetch_failure_without_falsely_passing() -> None:
+    """A roster this tool could not read is recorded, never silently treated as populated."""
+    class _Broken(FakeClient):
+        def get_members(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "member roster fetch failed")
+
+    c = _Broken(_draft_with_an_approle_assignee())
+    got = run_doctor(c, "F1")
+    assert isinstance(got, dict)
+    assert got["member_fetch_error"] == "member roster fetch failed"
+    assert not any("ZERO members" in p for p in got["problems"]), got["problems"]
+
+
+# ---- apply_layout: the pure validation runs BEFORE the live GET -------------------------------
+
+def test_apply_layout_refuses_an_invalid_span_before_paying_for_the_get() -> None:
+    """E3: `apply_exact_layout` validated the spec only AFTER the draft had been fetched, so a
+    caller with an off-grid span paid a round trip to be told no. Ordering, not correctness — the
+    refusal itself was always right."""
+    class _NoRead(FakeClient):
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            raise AssertionError("apply_layout fetched the draft before validating the spec")
+
+    c = _NoRead(_bare_form_draft())
+    got = apply_layout(c, "F1", {"S": [[("a", 0, 99)]]})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "6-unit" in got.message
+    assert c.puts == 0
 
 
 # ---- member batch: discover_member_source / apply_member_batch -------------------------------
@@ -1400,3 +1493,1383 @@ def test_dataset_create_draft_read_failure_fails_loud() -> None:
     got = apply_dataset_records(c, "Flow_1", "create", record={"Name": "K", "Item Name": "x"})
     assert isinstance(got, Err) and "draft read failed" in got.message
     assert c.created == []
+
+
+# =====================================================================================
+# Bundle B — the live orchestration layer. Four findings, same FakeClient idiom as above:
+#   B1 the field-event trigger is DERIVED from the source field's type, never taken on faith
+#   B2 an ignored field change stops being counted as a success
+#   B3 a destructive tool reports its collateral
+#   B4 the field lifecycle (delete / rename / required) is reachable at all
+# =====================================================================================
+
+def _form_with(*specs) -> dict:
+    return _apply_changes(_bare_form_draft(), list(specs))
+
+
+def _events_of(draft: dict) -> list[dict]:
+    return [v for v in draft.values() if isinstance(v, dict) and v.get("Kind") == "Event"]
+
+
+# ---- B1: derive the field-event trigger -------------------------------------------------------
+
+def test_apply_field_events_derives_the_trigger_from_the_source_field_type() -> None:
+    """CLAUDE.md Field events: a Select source fires onClick. The caller omits the trigger and the
+    engine reads it off the live draft — the whole point, since a wrong one never fires and no
+    later check can see it."""
+    c = FakeClient(_form_with(FieldSpec(name="Route", type=FieldType.SELECT,
+                                        referred_list="List_Sample01")))
+    rep = apply_field_events(c, "F1", {"Route": [(None, "kf.x();")]})
+    assert isinstance(rep, EventReport)
+    assert rep.verified == ("Route",) and rep.missing == ()
+    assert [e["Trigger"] for e in _events_of(c.draft)] == ["onClick"]
+    assert rep.derived == ("Route",)
+    assert rep.triggers == ("Route (Select) -> onClick",)
+    assert rep.unverified == (), "Select -> onClick is live-confirmed, not inferred"
+
+
+@pytest.mark.parametrize("ftype,trigger", [
+    (FieldType.TEXT, "onChange"),
+    (FieldType.TEXTAREA, "onChange"),
+    (FieldType.DATE, "onSelect"),
+    (FieldType.NUMBER, "onSelect"),
+    (FieldType.SELECT, "onClick"),
+])
+def test_apply_field_events_derives_every_live_confirmed_trigger(ftype, trigger) -> None:
+    # a Select must name the list its options live in (graph.apply_changes refuses a bare one);
+    # every other type here takes no list at all
+    listed = {"referred_list": "List_Sample01"} if ftype is FieldType.SELECT else {}
+    c = FakeClient(_form_with(FieldSpec(name="Src", type=ftype, **listed)))
+    rep = apply_field_events(c, "F1", {"Src": [(None, "kf.x();")]})
+    assert isinstance(rep, EventReport)
+    assert [e["Trigger"] for e in _events_of(c.draft)] == [trigger]
+    assert rep.unverified == ()
+
+
+def test_apply_field_events_refuses_a_trigger_that_disagrees_with_the_source_type() -> None:
+    """The F-finding itself: `onChange` on a Select writes fine, publishes fine, never fires."""
+    c = FakeClient(_form_with(FieldSpec(name="Route", type=FieldType.SELECT,
+                                        referred_list="List_Sample01")))
+    got = apply_field_events(c, "F1", {"Route": [("onChange", "kf.x();")]})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "onClick" in got.message and "onChange" in got.message, "must name BOTH triggers"
+    assert c.puts == 0, "a wrong trigger must never reach the network"
+
+
+def test_apply_field_events_accepts_an_explicit_trigger_that_agrees() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="Note", type=FieldType.TEXT)))
+    rep = apply_field_events(c, "F1", {"Note": [("onChange", "kf.x();")]})
+    assert isinstance(rep, EventReport)
+    assert rep.verified == ("Note",) and rep.derived == (), "the caller stated it, we agreed"
+    assert rep.triggers == ("Note (Text) -> onChange",)
+
+
+def test_apply_field_events_refuses_an_attachment_source_outright() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="Doc", type=FieldType.ATTACHMENT)))
+    got = apply_field_events(c, "F1", {"Doc": [(None, "kf.x();")]})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "never carry an event" in got.message
+    assert c.puts == 0
+
+
+@pytest.mark.parametrize("wire_type", ["Attachment", "Image", "Signature", "SequenceNumber",
+                                       "Geolocation"])
+def test_apply_field_events_refuses_every_event_less_field_type(wire_type: str) -> None:
+    """CLAUDE.md Field events names six types with no Event tab at all. Five have a captured (or,
+    for Geolocation, unambiguous) wire string; a stated trigger does not rescue any of them."""
+    draft = _form_with(FieldSpec(name="X", type=FieldType.TEXT))
+    fid = next(k for k, v in draft.items()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "X")
+    draft[fid]["Type"] = wire_type
+    c = FakeClient(draft)
+    got = apply_field_events(c, "F1", {"X": [("onChange", "kf.x();")]})
+    assert isinstance(got, Err) and got.kind == "verify" and wire_type in got.message
+    assert c.puts == 0
+
+
+@pytest.mark.parametrize("ftype,trigger", [(FieldType.USER, "onSelect"),
+                                           (FieldType.BOOLEAN, "onClick")])
+def test_apply_field_events_carries_family_inferred_uncertainty_into_the_report(ftype, trigger) -> None:
+    """User->onSelect and Boolean->onClick are family-inferred and UNVERIFIED live (CLAUDE.md).
+    They are still derived — refusing would block a real capability — but the doubt travels in
+    the payload instead of being silently asserted as fact."""
+    c = FakeClient(_form_with(FieldSpec(name="Who", type=ftype)))
+    rep = apply_field_events(c, "F1", {"Who": [(None, "kf.x();")]})
+    assert isinstance(rep, EventReport)
+    assert [e["Trigger"] for e in _events_of(c.draft)] == [trigger]
+    assert len(rep.unverified) == 1
+    assert "family-inferred" in rep.unverified[0] and trigger in rep.unverified[0]
+    assert rep.as_tool_result()["isError"] is False, "uncertainty is not failure"
+
+
+def test_apply_field_events_refuses_to_guess_a_trigger_for_a_type_it_has_no_mapping_for() -> None:
+    """A real platform type outside `types.trigger_for` (Currency, Rating, ...). Nothing captured
+    means nothing to derive — refuse rather than invent a wire value."""
+    draft = _form_with(FieldSpec(name="Cost", type=FieldType.NUMBER))
+    fid = next(k for k, v in draft.items()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Cost")
+    draft[fid]["Type"] = "Currency"
+    c = FakeClient(draft)
+    got = apply_field_events(c, "F1", {"Cost": [(None, "kf.x();")]})
+    assert isinstance(got, Err) and got.kind == "verify" and "will not guess" in got.message
+    assert c.puts == 0
+
+
+def test_apply_field_events_takes_a_stated_trigger_for_an_unmapped_type_but_flags_it() -> None:
+    draft = _form_with(FieldSpec(name="Cost", type=FieldType.NUMBER))
+    fid = next(k for k, v in draft.items()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Cost")
+    draft[fid]["Type"] = "Currency"
+    c = FakeClient(draft)
+    rep = apply_field_events(c, "F1", {"Cost": [("onSelect", "kf.x();")]})
+    assert isinstance(rep, EventReport)
+    assert [e["Trigger"] for e in _events_of(c.draft)] == ["onSelect"]
+    assert len(rep.unverified) == 1 and "outside" in rep.unverified[0]
+
+
+def test_apply_field_events_empty_string_trigger_means_derive_it() -> None:
+    """A wire caller that cannot send `null` sends `""`. Both mean the same thing."""
+    c = FakeClient(_form_with(FieldSpec(name="Route", type=FieldType.SELECT,
+                                        referred_list="List_Sample01")))
+    rep = apply_field_events(c, "F1", {"Route": [("", "kf.x();")]})
+    assert isinstance(rep, EventReport) and rep.derived == ("Route",)
+    assert [e["Trigger"] for e in _events_of(c.draft)] == ["onClick"]
+
+
+# ---- B2: an ignored change is not a success ---------------------------------------------------
+
+def test_apply_fields_reports_an_ignored_type_change_instead_of_verifying_it() -> None:
+    """F2, proven: apply_changes only CREATES. Asking for a different type on an existing NAME is
+    a silent no-op that used to be counted under `skipped` AND `verified` at once."""
+    c = FakeClient(_bare_form_draft())
+    apply_fields(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)])
+    assert c.puts == 1
+
+    rep = apply_fields(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.NUMBER)])
+    assert isinstance(rep, ApplyReport)
+    assert len(rep.changed_ignored) == 1
+    assert "alpha" in rep.changed_ignored[0]
+    assert "'Number'" in rep.changed_ignored[0] and "'Text'" in rep.changed_ignored[0]
+    assert rep.skipped == () and rep.verified == (), "the record belongs in ONE bucket, the new one"
+    assert rep.added == () and rep.missing == ()
+    assert rep.as_tool_result()["isError"] is True
+    assert c.puts == 1, "nothing was written — that is exactly the problem being reported"
+    assert c.draft[next(k for k, v in c.draft.items() if isinstance(v, dict)
+                        and v.get("Name") == "alpha")]["Type"] == "Text"
+
+
+def test_apply_fields_ignored_required_change_names_the_tool_that_can_do_it() -> None:
+    c = FakeClient(_bare_form_draft())
+    apply_fields(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT, required=False)])
+    rep = apply_fields(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT, required=True)])
+    assert isinstance(rep, ApplyReport)
+    assert len(rep.changed_ignored) == 1 and "Required" in rep.changed_ignored[0]
+    assert rep.remediation == ("forge_set_required",)
+
+
+def test_apply_fields_ignored_type_change_names_the_delete_and_recreate_route() -> None:
+    c = FakeClient(_bare_form_draft())
+    apply_fields(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)])
+    rep = apply_fields(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.NUMBER)])
+    assert isinstance(rep, ApplyReport)
+    assert rep.remediation == ("forge_delete_fields", "forge_apply_fields")
+
+
+def test_apply_fields_an_identical_respec_is_still_a_plain_skip() -> None:
+    """The idempotent re-run must not regress into a false alarm."""
+    c = FakeClient(_bare_form_draft())
+    spec = [FieldSpec(name="alpha", type=FieldType.TEXT, required=True)]
+    apply_fields(c, "form", "F1", spec)
+    rep = apply_fields(c, "form", "F1", spec)
+    assert isinstance(rep, ApplyReport)
+    assert rep.changed_ignored == () and rep.skipped == ("alpha",) and rep.verified == ("alpha",)
+    assert rep.as_tool_result()["isError"] is False
+
+
+def test_apply_fields_compares_only_options_the_caller_actually_named() -> None:
+    """A Number field carries engine-written defaults (Decimalpoint, DefaultValue) no FieldSpec
+    ever mentions — a blind key diff would flag every one of them as an ignored change."""
+    c = FakeClient(_bare_form_draft())
+    spec = [FieldSpec(name="score", type=FieldType.NUMBER)]
+    apply_fields(c, "form", "F1", spec)
+    rep = apply_fields(c, "form", "F1", spec)
+    assert isinstance(rep, ApplyReport) and rep.changed_ignored == ()
+
+    rep2 = apply_fields(c, "form", "F1",
+                        [FieldSpec(name="score", type=FieldType.NUMBER,
+                                   options={"DefaultValue": "7"})])
+    assert isinstance(rep2, ApplyReport)
+    assert len(rep2.changed_ignored) == 1 and "DefaultValue" in rep2.changed_ignored[0]
+
+
+def test_apply_fields_never_publishes_when_a_change_was_ignored() -> None:
+    c = FakeClient(_bare_form_draft())
+    apply_fields(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)])
+    rep = apply_fields(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.NUMBER)],
+                       publish=True)
+    assert isinstance(rep, ApplyReport) and rep.published is False
+    assert c.published is False, "never publish a draft that failed its own audit"
+
+
+def test_apply_fields_and_layout_reports_an_ignored_change_too() -> None:
+    c = FakeClient(_bare_form_draft())
+    apply_fields_and_layout(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)],
+                            groups=[("G", ["alpha"])])
+    rep = apply_fields_and_layout(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.NUMBER)],
+                                  groups=[("G", ["alpha"])])
+    assert isinstance(rep, ApplyReport)
+    assert len(rep.changed_ignored) == 1 and rep.verified == () and rep.skipped == ()
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_apply_fields_full_reports_an_ignored_change_too() -> None:
+    c = FakeClient(_bare_form_draft())
+    apply_fields_full(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)])
+    rep = apply_fields_full(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.NUMBER)])
+    assert not isinstance(rep, Err)
+    assert len(rep.changed_ignored) == 1 and rep.verified == () and rep.skipped == ()
+    assert rep.as_tool_result()["isError"] is True
+    assert rep.as_tool_result()["remediation"] == ["forge_delete_fields", "forge_apply_fields"]
+
+
+# ---- B3: destructive tools report their collateral --------------------------------------------
+
+def _synthetic_with_permissions() -> tuple[dict, int]:
+    from synthetic import OWNERS, synthetic_process_draft
+
+    from kfforge.graph import progressive_matrix, set_step_permissions
+    draft = synthetic_process_draft()
+    draft = set_step_permissions(draft, progressive_matrix(draft, OWNERS))
+    n = len([v for v in draft.values() if isinstance(v, dict) and v.get("Kind") == "Permission"])
+    assert n > 0, "fixture must actually carry a live visibility matrix"
+    return draft, n
+
+
+def test_apply_workflow_reports_the_permission_matrix_it_destroyed() -> None:
+    """A4: build_workflow DELETES every Permission (CLAUDE.md Workflow, Visibility; measured live
+    234 -> 0) and the report used to say nothing at all about it."""
+    draft, before = _synthetic_with_permissions()
+    c = FakeClient(draft)
+    rep = apply_workflow(c, "F1", [("Draft", None), ("Review", None)])
+    assert isinstance(rep, WorkflowReport)
+    assert rep.permissions_deleted == before
+    assert any("Permission node(s) deleted" in s for s in rep.collateral)
+    assert rep.remediation == ("forge_set_visibility",)
+    assert rep.as_tool_result()["permissions_deleted"] == before
+    assert rep.as_tool_result()["isError"] is False, "documented destruction is not a failure"
+
+
+def test_apply_workflow_counts_the_damage_on_the_read_back_not_on_the_plan() -> None:
+    """THE RULE: what we hoped to write proves nothing. A client whose PUT is accepted but never
+    lands must NOT report a wiped matrix, because the live matrix is still there."""
+    draft, _before = _synthetic_with_permissions()
+
+    class Dropping(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            self.puts += 1
+            return new                                    # accepted, self.draft NOT updated
+
+    c = Dropping(draft)
+    rep = apply_workflow(c, "F1", [("Draft", None)])
+    assert isinstance(rep, WorkflowReport)
+    assert rep.permissions_deleted == 0 and rep.collateral == ()
+
+
+def test_apply_workflow_reports_a_relocated_sequence_number_step_stamp() -> None:
+    """#18: the Step stamp is a SCALAR activity ref the list-only sweep never touches. A rebuild
+    that drops its step silently repoints it at StartEvent — correct, and previously invisible."""
+    from synthetic import synthetic_process_draft
+
+    from kfforge.graph import add_sequence_number
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    draft = add_sequence_number(draft, "Case ID", section, "CS-", "0001", step)
+
+    c = FakeClient(draft)
+    rep = apply_workflow(c, "F1", [("Totally Different Step", None)])
+    assert isinstance(rep, WorkflowReport)
+    assert any("Case ID" in s and "Step stamp relocated" in s for s in rep.collateral)
+    assert "forge_add_sequence_number" in rep.remediation
+
+
+def test_apply_workflow_reports_no_collateral_on_a_flow_that_had_none() -> None:
+    c = FakeClient(_bare_process_draft())
+    rep = apply_workflow(c, "F1", [("Draft", "Role_A")])
+    assert isinstance(rep, WorkflowReport)
+    assert rep.permissions_deleted == 0 and rep.collateral == () and rep.remediation == ()
+
+
+def test_apply_step_permissions_reports_the_pairs_the_rebuild_dropped() -> None:
+    """set_step_permissions DELETES every Permission before it writes. A pair that was live and is
+    not in the new matrix used to be absent from every counted bucket (doctrine 2)."""
+    from synthetic import OWNERS, synthetic_process_draft
+
+    from kfforge.graph import progressive_matrix
+    draft = synthetic_process_draft()
+    full = progressive_matrix(draft, OWNERS)
+    c = FakeClient(draft)
+
+    first = apply_step_permissions(c, "F1", full)
+    assert isinstance(first, ApplyReport) and first.collateral == ()
+
+    dropped_activity = sorted(next(iter(full.values())))[0]
+    thinner = {sec: {a: v for a, v in row.items() if a != dropped_activity}
+               for sec, row in full.items()}
+    second = apply_step_permissions(c, "F1", thinner)
+    assert isinstance(second, ApplyReport)
+    assert second.collateral, "every dropped pair must be named, not silently deleted"
+    assert all("deleted Permission" in s for s in second.collateral)
+    assert all(dropped_activity in s for s in second.collateral)
+    assert second.remediation == ("forge_set_visibility",)
+    assert second.as_tool_result()["isError"] is False
+
+
+def test_apply_layout_reports_the_fields_it_retiled() -> None:
+    """apply_exact_layout rebuilds a whole section's rows, so a field the PARTIAL spec does not
+    name is MOVED into a trailing row. Nothing is lost, but the form the user sees changed."""
+    c = FakeClient(_bare_form_draft())
+    apply_fields_and_layout(
+        c, "form", "F1",
+        [FieldSpec(name=n, type=FieldType.TEXT) for n in ("a", "b", "c")],
+        groups=[("G", ["a", "b", "c"])])
+
+    rep = apply_layout(c, "F1", {"G": [[("a", 0, 6)]]}, kind="form")
+    assert isinstance(rep, ApplyReport)
+    assert len(rep.collateral) == 2
+    assert all("re-tiled into a trailing row" in s for s in rep.collateral)
+    assert any("'b'" in s for s in rep.collateral) and any("'c'" in s for s in rep.collateral)
+    assert rep.remediation == ("forge_apply_layout",)
+    assert rep.as_tool_result()["isError"] is False
+
+
+def test_apply_layout_reports_no_collateral_when_the_spec_names_every_field() -> None:
+    c = FakeClient(_bare_form_draft())
+    apply_fields_and_layout(c, "form", "F1",
+                            [FieldSpec(name=n, type=FieldType.TEXT) for n in ("a", "b")],
+                            groups=[("G", ["a", "b"])])
+    rep = apply_layout(c, "F1", {"G": [[("a", 0, 3), ("b", 3, 6)]]}, kind="form")
+    assert isinstance(rep, ApplyReport) and rep.collateral == () and rep.remediation == ()
+
+
+# ---- B4: the field lifecycle ------------------------------------------------------------------
+
+def test_delete_fields_audits_ABSENCE_not_presence() -> None:
+    """The delete audit is inverted: success is the name being GONE on read-back."""
+    c = FakeClient(_form_with(FieldSpec(name="keep", type=FieldType.TEXT),
+                              FieldSpec(name="drop", type=FieldType.TEXT)))
+    rep = delete_fields(c, "F1", ("drop",), kind="form")
+    assert isinstance(rep, DeleteFieldsReport)
+    assert rep.deleted == ("drop",) and rep.surviving == ()
+    assert rep.as_tool_result()["isError"] is False
+    live = {v.get("Name") for v in c.draft.values()
+            if isinstance(v, dict) and v.get("Kind") == "Field"}
+    assert live == {"keep"}
+
+
+def test_delete_fields_reports_the_cluster_it_swept() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="drop", type=FieldType.TEXT)))
+    rep = delete_fields(c, "F1", ("drop",), kind="form")
+    assert isinstance(rep, DeleteFieldsReport)
+    assert "1 Field node(s)" in rep.collateral and "1 Column node(s)" in rep.collateral
+
+
+def test_delete_fields_surviving_field_is_a_loud_failure_not_a_silent_pass() -> None:
+    class Dropping(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            self.puts += 1
+            return new                                     # accepted, but nothing changes
+
+    c = Dropping(_form_with(FieldSpec(name="drop", type=FieldType.TEXT)))
+    rep = delete_fields(c, "F1", ("drop",), publish=True, kind="form")
+    assert isinstance(rep, DeleteFieldsReport)
+    assert rep.surviving == ("drop",) and rep.deleted == ()
+    assert rep.as_tool_result()["isError"] is True
+    assert rep.published is False and c.published is False
+
+
+def test_delete_fields_unknown_name_never_reaches_put() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    got = delete_fields(c, "F1", ("a", "nope"), kind="form")
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0, "one bad name in a batch must delete none of the batch"
+
+
+def test_delete_fields_refuses_when_a_surviving_formula_still_reads_the_field() -> None:
+    from kfforge.graph import set_field_computed
+
+    draft = _form_with(FieldSpec(name="Total", type=FieldType.NUMBER),
+                       FieldSpec(name="Qty", type=FieldType.NUMBER))
+    draft = set_field_computed(draft, "Total", {"fn": "concatenate", "args": [{"field": "Qty"}]})
+    c = FakeClient(draft)
+
+    got = delete_fields(c, "F1", ("Qty",), kind="form")
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "left dangling" in got.message and "Qty" in got.message
+    assert "forge_apply_fields" in got.message, "a refusal must name the way out"
+    assert c.puts == 0
+
+
+def test_delete_fields_refuses_when_the_field_triggers_another_fields_visibility() -> None:
+    from kfforge.graph import set_conditional_visibility
+
+    draft = _form_with(FieldSpec(name="Reason", type=FieldType.TEXT),
+                       FieldSpec(name="Flag", type=FieldType.BOOLEAN))
+    draft = set_conditional_visibility(draft, "Reason", "Flag", "EQUAL_TO", "true")
+    c = FakeClient(draft)
+
+    got = delete_fields(c, "F1", ("Flag",), kind="form")
+    assert isinstance(got, Err) and "TRIGGER" in got.message
+    assert c.puts == 0
+
+
+def test_delete_fields_refuses_when_a_surviving_event_script_names_the_field_id() -> None:
+    from kfforge.graph import set_field_events
+
+    draft = _form_with(FieldSpec(name="Source", type=FieldType.TEXT),
+                       FieldSpec(name="Target", type=FieldType.TEXT))
+    tgt = next(k for k, v in draft.items()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Target")
+    draft = set_field_events(draft, {"Source": [("onChange", f"kf.set('{tgt}');")]})
+    c = FakeClient(draft)
+
+    got = delete_fields(c, "F1", ("Target",), kind="form")
+    assert isinstance(got, Err) and "Script" in got.message
+    assert c.puts == 0
+
+
+def test_delete_fields_deletes_a_user_field_cluster_rather_than_refusing_it() -> None:
+    """A User field's QueryDefinition is swept, not refused: the caller has no tool that could
+    remove it first, so a refusal there would be a dead end, not a safeguard."""
+    c = FakeClient(_form_with(FieldSpec(name="Owner", type=FieldType.USER)))
+    rep = delete_fields(c, "F1", ("Owner",), kind="form")
+    assert isinstance(rep, DeleteFieldsReport) and rep.deleted == ("Owner",)
+    assert not [v for v in c.draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "QueryDefinition"]
+
+
+def test_delete_fields_publishes_only_after_the_absence_is_verified() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="drop", type=FieldType.TEXT)))
+    rep = delete_fields(c, "F1", ("drop",), publish=True, kind="form")
+    assert isinstance(rep, DeleteFieldsReport) and rep.published is True and c.published is True
+
+
+def test_rename_form_fields_verifies_both_halves_of_the_rename() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="Tikcet No", type=FieldType.TEXT)))
+    rep = rename_form_fields(c, "F1", {"Tikcet No": "Ticket No"}, kind="form")
+    assert isinstance(rep, RenameFieldsReport)
+    assert rep.verified == ("Tikcet No -> Ticket No",)
+    assert rep.missing == () and rep.stale == ()
+    assert rep.as_tool_result()["isError"] is False
+    live = {v.get("Name") for v in c.draft.values()
+            if isinstance(v, dict) and v.get("Kind") == "Field"}
+    assert live == {"Ticket No"}
+
+
+def test_rename_form_fields_keeps_the_node_id_so_events_and_permissions_survive() -> None:
+    """The whole reason a rename beats delete-and-recreate."""
+    draft = _form_with(FieldSpec(name="old", type=FieldType.TEXT))
+    fid = next(k for k, v in draft.items()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "old")
+    c = FakeClient(draft)
+    rename_form_fields(c, "F1", {"old": "new"}, kind="form")
+    assert c.draft[fid]["Name"] == "new", "same node id, new label"
+
+
+def test_rename_form_fields_reports_stale_when_the_old_name_survives() -> None:
+    """A half-applied rename (old AND new both present) is worse than one that did not happen —
+    every later name-keyed op then resolves to an arbitrary node. It must not read as success."""
+    draft = _form_with(FieldSpec(name="old", type=FieldType.TEXT))
+
+    class Doubling(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            self.puts += 1
+            new["Field_ghost"] = {"Id": "Field_ghost", "Kind": "Field", "Type": "Text",
+                                  "Model": "M1", "Name": "old"}
+            new["_meta_version"] = "v2"
+            self.draft = new
+            return new
+
+    c = Doubling(draft)
+    rep = rename_form_fields(c, "F1", {"old": "new"}, publish=True, kind="form")
+    assert isinstance(rep, RenameFieldsReport)
+    assert rep.stale == ("old -> new",) and rep.missing == ()
+    assert rep.as_tool_result()["isError"] is True
+    assert rep.published is False and c.published is False
+
+
+def test_rename_form_fields_refuses_a_collision_with_an_existing_name() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="a", type=FieldType.TEXT),
+                              FieldSpec(name="b", type=FieldType.TEXT)))
+    got = rename_form_fields(c, "F1", {"a": "b"}, kind="form")
+    assert isinstance(got, Err) and got.kind == "verify" and "already on this form" in got.message
+    assert c.puts == 0
+
+
+def test_rename_form_fields_unknown_name_never_reaches_put() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    got = rename_form_fields(c, "F1", {"nope": "x"}, kind="form")
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0
+
+
+def test_apply_required_sets_verifies_and_reports_what_it_cleared() -> None:
+    """set_required is a SET, not a patch: everything unnamed comes back optional. That is the
+    documented semantics — being unable to SEE it was the problem."""
+    c = FakeClient(_form_with(FieldSpec(name="a", type=FieldType.TEXT, required=True),
+                              FieldSpec(name="b", type=FieldType.TEXT, required=True),
+                              FieldSpec(name="c", type=FieldType.TEXT)))
+    rep = apply_required(c, "F1", ("a",), kind="form")
+    assert isinstance(rep, RequiredReport)
+    assert rep.missing == () and rep.verified == ("a", "b", "c")
+    assert rep.cleared == ("b",), "b silently lost its Required flag — say so"
+    assert rep.as_tool_result()["isError"] is False
+    flags = {v["Name"]: v.get("Required") for v in c.draft.values()
+             if isinstance(v, dict) and v.get("Kind") == "Field"}
+    assert flags == {"a": True, "b": False, "c": False}
+
+
+def test_apply_required_refuses_a_computed_field() -> None:
+    """graph.set_required's own war story: a computed field marked Required blocked step 1 live,
+    because nobody can type the value that would satisfy it."""
+    from kfforge.graph import set_field_computed
+
+    draft = _form_with(FieldSpec(name="Total", type=FieldType.NUMBER),
+                       FieldSpec(name="Qty", type=FieldType.NUMBER))
+    draft = set_field_computed(draft, "Total", {"fn": "concatenate", "args": [{"field": "Qty"}]})
+    c = FakeClient(draft)
+
+    got = apply_required(c, "F1", ("Total",), kind="form")
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "computed" in got.message and "unsubmittable" in got.message
+    assert c.puts == 0
+
+
+def test_apply_required_refuses_a_sequence_number_field() -> None:
+    draft = _form_with(FieldSpec(name="Case ID", type=FieldType.TEXT))
+    fid = next(k for k, v in draft.items()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Case ID")
+    draft[fid]["Type"] = "SequenceNumber"
+    c = FakeClient(draft)
+
+    got = apply_required(c, "F1", ("Case ID",), kind="form")
+    assert isinstance(got, Err) and "SequenceNumber" in got.message
+    assert c.puts == 0
+
+
+def test_apply_required_unknown_name_never_reaches_put() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    got = apply_required(c, "F1", ("nope",), kind="form")
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert c.puts == 0
+
+
+def test_apply_required_missing_is_a_loud_failure_on_read_back() -> None:
+    class Dropping(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            self.puts += 1
+            return new                                     # accepted, nothing lands
+
+    c = Dropping(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    rep = apply_required(c, "F1", ("a",), publish=True, kind="form")
+    assert isinstance(rep, RequiredReport)
+    assert rep.missing == ("a",) and rep.verified == ()
+    assert rep.as_tool_result()["isError"] is True and c.published is False
+
+
+def test_apply_field_events_unknown_field_still_gets_set_field_events_own_message() -> None:
+    """The derivation must not steal a refusal it states worse: an unknown NAME with a stated
+    trigger falls through to `set_field_events`, which names the field precisely."""
+    c = FakeClient(_form_with(FieldSpec(name="Real", type=FieldType.TEXT)))
+    got = apply_field_events(c, "F1", {"Ghost": [("onChange", "1;")]})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "no field named 'Ghost'" in got.message
+    assert c.puts == 0
+
+
+def test_apply_field_events_unknown_field_with_nothing_to_derive_from_says_so() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="Real", type=FieldType.TEXT)))
+    got = apply_field_events(c, "F1", {"Ghost": [(None, "1;")]})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "cannot derive a trigger for 'Ghost'" in got.message
+    assert c.puts == 0
+
+
+# ---- regressions found reviewing the F2/M1 work (D1, D2, D3) ----------------------------------
+
+def test_delete_fields_by_node_id_can_still_FAIL_its_read_back() -> None:
+    """D2 / THE RULE: `fields` accepts a raw node id (the documented way to disambiguate a name a
+    form field and a table child share). The audit used to look that token up in a set of NAMES,
+    where a node id can never appear — so an id-addressed delete read as gone whether or not the
+    write landed, and published on it. A read-back that cannot fail is not a read-back."""
+    class Dropping(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            self.puts += 1
+            return new                                     # 200, lands nothing
+
+    c = Dropping(_form_with(FieldSpec(name="drop", type=FieldType.TEXT)))
+    fid = next(k for k, v in c.draft.items()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "drop")
+
+    rep = delete_fields(c, "F1", (fid,), publish=True, kind="form")
+    assert isinstance(rep, DeleteFieldsReport)
+    assert rep.surviving == (fid,) and rep.deleted == ()
+    assert rep.published is False
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_delete_fields_by_node_id_reports_a_real_delete_as_deleted() -> None:
+    """The control for the test above: the id path must still report a delete that DID land."""
+    c = FakeClient(_form_with(FieldSpec(name="keep", type=FieldType.TEXT),
+                              FieldSpec(name="drop", type=FieldType.TEXT)))
+    fid = next(k for k, v in c.draft.items()
+               if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "drop")
+
+    rep = delete_fields(c, "F1", (fid,), kind="form")
+    assert isinstance(rep, DeleteFieldsReport)
+    assert rep.deleted == (fid,) and rep.surviving == ()
+    assert rep.as_tool_result()["isError"] is False
+
+
+def test_user_field_reapply_is_idempotent_not_a_changed_ignored_error() -> None:
+    """D1: `graph.apply_changes` deliberately pops `LHSModel` off the Field node onto the User
+    field's mandatory QueryDefinition sibling, so it reads back as None on the Field forever.
+    The changed-ignored diff compared the requested value against that None and flagged a field
+    written exactly as asked — turning the documented idempotent re-apply into a hard error whose
+    own remediation advised DELETING a correct field (destroying its permissions and data)."""
+    spec = FieldSpec(name="Requester", type=FieldType.USER, options={"LHSModel": "_employee"})
+    c = FakeClient(_bare_form_draft())
+
+    first = apply_fields(c, "form", "F1", [spec])
+    assert isinstance(first, ApplyReport) and first.as_tool_result()["isError"] is False
+
+    second = apply_fields(c, "form", "F1", [spec])
+    assert isinstance(second, ApplyReport)
+    result = second.as_tool_result()
+    assert result["changed_ignored"] == [], result["changed_ignored"]
+    assert second.skipped == ("Requester",)
+    assert result["isError"] is False
+
+
+def test_a_genuinely_changed_option_key_is_still_reported() -> None:
+    """The control: excluding the relocated key must not blind the diff to a real change."""
+    c = FakeClient(_bare_form_draft())
+    apply_fields(c, "form", "F1", [FieldSpec(name="Qty", type=FieldType.NUMBER)])
+    changed = apply_fields(c, "form", "F1",
+                           [FieldSpec(name="Qty", type=FieldType.TEXT)])
+    assert isinstance(changed, ApplyReport)
+    assert changed.as_tool_result()["changed_ignored"], "a real Type change must still be loud"
+    assert changed.as_tool_result()["isError"] is True
+
+
+# =====================================================================================
+# D4/D5/D6/D9 + the 2026-08-19 live findings. One section per defect; each test is written
+# against the UNFIXED behavior first, so it fails before the change it proves.
+# =====================================================================================
+
+def test_apply_required_reports_a_requested_field_that_vanished_as_missing() -> None:
+    """D4, the output invariant. `verified`/`missing` used to be computed over the READ-BACK
+    population, so a requested name present BEFORE the write and absent from the read-back landed
+    in no bucket at all and the flow published:
+      {"required": ["A"], "verified": ["B"], "missing": [], "published": true, "isError": false}
+    Every sibling (delete_fields, rename_form_fields, apply_fields) iterates the REQUESTED set."""
+    draft = _form_with(FieldSpec(name="A", type=FieldType.TEXT),
+                       FieldSpec(name="B", type=FieldType.TEXT))
+    a_id = next(k for k, v in draft.items()
+                if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "A")
+
+    class Dropping(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            self.puts += 1
+            new.pop(a_id)                      # the write "succeeds"; A is not there afterwards
+            new["_meta_version"] = "v2"
+            self.draft = new
+            return new
+
+    c = Dropping(draft)
+    rep = apply_required(c, "F1", ("A",), publish=True, kind="form")
+    assert isinstance(rep, RequiredReport)
+    assert "A" in rep.missing, "a requested field absent from the read-back is a loud failure"
+    assert "A" not in rep.verified
+    assert rep.as_tool_result()["isError"] is True
+    assert rep.published is False and c.published is False
+
+
+def test_apply_required_still_audits_the_whole_read_back_population() -> None:
+    """The control for the fix above: the SET-semantics audit (a field the caller never named
+    that came back with the wrong flag) must survive the switch to a requested-set union."""
+    class Sticky(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            self.puts += 1
+            for v in new.values():
+                if isinstance(v, dict) and v.get("Name") == "b":
+                    v["Required"] = True       # refuses to be cleared
+            new["_meta_version"] = "v2"
+            self.draft = new
+            return new
+
+    c = Sticky(_form_with(FieldSpec(name="a", type=FieldType.TEXT),
+                          FieldSpec(name="b", type=FieldType.TEXT, required=True)))
+    rep = apply_required(c, "F1", ("a",), kind="form")
+    assert isinstance(rep, RequiredReport)
+    assert rep.missing == ("b",) and rep.verified == ("a",)
+    assert rep.as_tool_result()["isError"] is True
+
+
+def _permission_missing_activity(draft: dict) -> dict:
+    """Seed one Permission node with no `Activity` — the shape `_permission_pairs` used to
+    KeyError on. Nothing in this engine mints one; a template or a half-applied write does."""
+    new = dict(draft)
+    col = next(k for k, v in new.items()
+               if isinstance(v, dict) and v.get("Kind") == "Column" and v.get("Type") == "Field")
+    new["Permission_broken01"] = {"Id": "Permission_broken01", "Kind": "Permission",
+                                  "Column": col, "Permission": "Editable"}
+    return new
+
+
+def test_build_workflow_does_not_key_error_on_a_permission_with_no_activity() -> None:
+    """D6, errors are DATA. `_permission_pairs` subscripted n["Activity"] unguarded, and
+    apply_workflow added two NEW call sites around the write — so one malformed Permission node
+    escaped forge_build_workflow as a bare KeyError traceback, before any write."""
+    from synthetic import synthetic_process_draft
+
+    c = FakeClient(_permission_missing_activity(synthetic_process_draft()))
+    rep = apply_workflow(c, "F1", [("Only step", None)])
+    assert isinstance(rep, WorkflowReport), f"expected a report, got {rep!r}"
+    assert rep.verified_steps == ("Only step",)
+
+
+def test_build_workflow_counts_the_malformed_permission_it_destroyed() -> None:
+    """The other half of the guard: a node the pair walk SKIPS must still land in a bucket, or
+    the guard has just traded a crash for a silent loss."""
+    from synthetic import synthetic_process_draft
+
+    c = FakeClient(_permission_missing_activity(synthetic_process_draft()))
+    rep = apply_workflow(c, "F1", [("Only step", None)])
+    assert isinstance(rep, WorkflowReport)
+    hits = [line for line in rep.collateral if "Permission_broken01" in line]
+    assert len(hits) == 1, rep.collateral
+    assert "malformed" in hits[0]
+    assert "forge_set_visibility" in rep.remediation
+    assert rep.remediation.count("forge_set_visibility") == 1
+
+
+def test_set_visibility_does_not_key_error_on_a_permission_with_no_activity() -> None:
+    """The same guard on the OTHER caller of the pair walk: the rebuild deletes every Permission,
+    malformed ones included, so a node the walk skips must still be named in `collateral`."""
+    from synthetic import OWNERS, synthetic_process_draft
+
+    from kfforge.graph import progressive_matrix
+    draft = synthetic_process_draft()
+    matrix = progressive_matrix(draft, OWNERS)
+    c = FakeClient(_permission_missing_activity(draft))
+    rep = apply_step_permissions(c, "F1", matrix)
+    assert isinstance(rep, ApplyReport), f"expected a report, got {rep!r}"
+    hits = [line for line in rep.collateral if "Permission_broken01" in line]
+    assert len(hits) == 1 and "malformed" in hits[0], rep.collateral
+
+
+# ---- D5: forge_apply_fields silently re-tiles a custom grid ----------------------------------
+
+def _field_placements_of(draft: dict) -> dict[str, tuple[str, int, int, int]]:
+    from kfforge.client import _field_placements
+
+    return _field_placements(draft)
+
+
+def _grid_layout(draft: dict, section: str) -> list[list[tuple[str, int, int]]]:
+    """The section's rows as (field name, Start, End) triples — the shape apply_layout speaks."""
+    rows: dict[int, list[tuple[str, int, int]]] = {}
+    for name, (title, ri, start, end) in _field_placements_of(draft).items():
+        if title == section:
+            rows.setdefault(ri, []).append((name, start, end))
+    return [sorted(rows[i], key=lambda t: t[1]) for i in sorted(rows)]
+
+
+def test_apply_fields_reports_the_custom_grid_it_re_tiled() -> None:
+    """D5. Reproduced live: a custom grid written by forge_apply_layout as
+    [[0-3, 3-6], [0-6], [0-6]] came back [[0-2, 2-4, 4-6], [0-2, 2-4]] after ONE
+    forge_apply_fields call — every pre-existing field moved, and the report said nothing.
+    forge_apply_fields is annotated destructiveHint: True for exactly this."""
+    c = FakeClient(_bare_form_draft())
+    apply_fields_and_layout(
+        c, "form", "F1",
+        [FieldSpec(name=n, type=FieldType.TEXT) for n in ("A", "B", "C", "D")],
+        groups=[("Details", ["A", "B", "C", "D"])])
+    apply_layout(c, "F1", {"Details": [[("A", 0, 3), ("B", 3, 6)], [("C", 0, 6)], [("D", 0, 6)]]},
+                 kind="form")
+    assert _grid_layout(c.draft, "Details") == [[("A", 0, 3), ("B", 3, 6)],
+                                                [("C", 0, 6)], [("D", 0, 6)]]
+
+    rep = apply_fields_full(c, "form", "F1", [FieldSpec(name="E", type=FieldType.TEXT)],
+                            groups=[("Details", ["E"])])
+    assert isinstance(rep, FullFieldsReport)
+    assert _grid_layout(c.draft, "Details") != [[("A", 0, 3), ("B", 3, 6)],
+                                                [("C", 0, 6)], [("D", 0, 6)]], "sanity: it moved"
+    moved = {line.split("'")[1] for line in rep.collateral}
+    assert moved == {"A", "B", "C", "D"}, rep.collateral
+    assert "E" not in moved, "a field this call ADDED did not move — it did not exist before"
+    assert any("0-3" in line and "0-2" in line for line in rep.collateral), rep.collateral
+    assert "forge_apply_layout" in rep.remediation
+    assert rep.as_tool_result()["collateral"] == list(rep.collateral)
+    assert rep.as_tool_result()["isError"] is False, "nothing was lost — ids and refs survive"
+
+
+def test_apply_fields_and_layout_reports_the_custom_grid_it_re_tiled() -> None:
+    """The sibling that hardcoded `collateral=()`."""
+    c = FakeClient(_bare_form_draft())
+    apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name=n, type=FieldType.TEXT) for n in ("A", "B")],
+        groups=[("Details", ["A", "B"])])
+    apply_layout(c, "F1", {"Details": [[("A", 0, 6)], [("B", 0, 6)]]}, kind="form")
+
+    rep = apply_fields_and_layout(c, "form", "F1", [FieldSpec(name="C", type=FieldType.TEXT)],
+                                 groups=[("Details", ["C"])])
+    assert isinstance(rep, ApplyReport)
+    assert {line.split("'")[1] for line in rep.collateral} == {"A", "B"}, rep.collateral
+    assert "forge_apply_layout" in rep.remediation
+
+
+def test_apply_fields_collateral_is_silent_when_nothing_actually_moved() -> None:
+    """No false positives: a regroup that lands every field exactly where it already was reports
+    nothing. Without this the collateral bucket is noise on every idempotent re-run."""
+    c = FakeClient(_bare_form_draft())
+    apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name=n, type=FieldType.TEXT) for n in ("A", "B", "C")],
+        groups=[("Details", ["A", "B", "C"])])
+
+    same = apply_fields_and_layout(c, "form", "F1",
+                                   [FieldSpec(name="A", type=FieldType.TEXT)],
+                                   groups=[("Details", ["A", "B", "C"])])
+    assert isinstance(same, ApplyReport)
+    assert same.collateral == (), same.collateral
+    assert same.remediation == ()
+
+    added = apply_fields_full(c, "form", "F1", [FieldSpec(name="D", type=FieldType.TEXT)],
+                              groups=[("Details", ["D"])])
+    assert isinstance(added, FullFieldsReport)
+    assert added.collateral == (), "appending a 4th field opens a new row; A/B/C do not move"
+
+
+def test_apply_fields_with_no_groups_writes_no_layout_collateral() -> None:
+    """A call that never regroups cannot move anything — the collateral must stay empty."""
+    c = FakeClient(_bare_form_draft())
+    apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name=n, type=FieldType.TEXT) for n in ("A", "B")],
+        groups=[("Details", ["A", "B"])])
+    apply_layout(c, "F1", {"Details": [[("A", 0, 6)], [("B", 0, 6)]]}, kind="form")
+
+    rep = apply_fields_full(c, "form", "F1", [FieldSpec(name="C", type=FieldType.TEXT)])
+    assert isinstance(rep, FullFieldsReport)
+    assert rep.collateral == (), rep.collateral
+    placements = _field_placements_of(c.draft)
+    assert placements["A"] == ("Details", 0, 0, 6) and placements["B"] == ("Details", 1, 0, 6)
+
+
+# ---- D9: a no-op rename classified as the worst bucket ---------------------------------------
+
+def test_rename_form_fields_calls_a_no_op_rename_unchanged_not_stale() -> None:
+    """D9. The collision guard exempts old == new (renaming A onto A collides with nothing), and
+    the read-back then classified it `stale` — new name present, old name present, because they
+    are the same name — which is isError, publish suppressed, for a write that did exactly what
+    was asked."""
+    c = FakeClient(_form_with(FieldSpec(name="Ticket No", type=FieldType.TEXT)))
+    rep = rename_form_fields(c, "F1", {"Ticket No": "Ticket No"}, publish=True, kind="form")
+    assert isinstance(rep, RenameFieldsReport)
+    assert rep.unchanged == ("Ticket No -> Ticket No",)
+    assert rep.stale == () and rep.missing == () and rep.verified == ()
+    assert rep.as_tool_result()["isError"] is False
+    assert rep.published is True and c.published is True
+    assert rep.as_tool_result()["unchanged"] == ["Ticket No -> Ticket No"]
+
+
+def test_a_no_op_rename_whose_field_vanished_is_still_missing() -> None:
+    """The no-op exemption is on the CLASSIFICATION, never on the audit."""
+    draft = _form_with(FieldSpec(name="A", type=FieldType.TEXT))
+    a_id = next(k for k, v in draft.items()
+                if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "A")
+
+    class Dropping(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            self.puts += 1
+            new.pop(a_id)
+            new["_meta_version"] = "v2"
+            self.draft = new
+            return new
+
+    c = Dropping(draft)
+    rep = rename_form_fields(c, "F1", {"A": "A"}, publish=True, kind="form")
+    assert isinstance(rep, RenameFieldsReport)
+    assert rep.missing == ("A -> A",) and rep.unchanged == ()
+    assert rep.as_tool_result()["isError"] is True and rep.published is False
+
+
+def test_a_real_stale_rename_is_still_stale() -> None:
+    """The control: exempting old == new must not blind the two-condition test to a real
+    half-applied rename."""
+    draft = _form_with(FieldSpec(name="old", type=FieldType.TEXT))
+
+    class Doubling(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            self.puts += 1
+            new["Field_ghost"] = {"Id": "Field_ghost", "Kind": "Field", "Type": "Text",
+                                  "Model": "M1", "Name": "old"}
+            new["_meta_version"] = "v2"
+            self.draft = new
+            return new
+
+    c = Doubling(draft)
+    rep = rename_form_fields(c, "F1", {"old": "new"}, kind="form")
+    assert isinstance(rep, RenameFieldsReport)
+    assert rep.stale == ("old -> new",) and rep.unchanged == ()
+    assert rep.as_tool_result()["isError"] is True
+
+
+# ---- live findings 2026-08-19: the dead-end note, and the silent role gap --------------------
+
+def test_empty_app_role_note_names_the_tool_that_fixes_it_not_a_human() -> None:
+    """LIVE FINDING. The old note told the caller "a human must create at least one AppRole for
+    this app in the builder UI first". That is FALSE and was disproven live: forge_create_app_role
+    creates one in a single call (POST /app_role/2/{acct}, PROVEN live 2026-08-08), after which
+    forge_member_batch works. A refusal a caller cannot act on is just a dead end."""
+    c = FakeClient(_bare_process_draft())
+    c.flows["process"] = []
+    rep = apply_member_batch(c, "F_target")
+    assert isinstance(rep, MemberReport) and rep.note is not None
+    assert "builder UI" not in rep.note
+    assert "a human must" not in rep.note
+    assert "forge_create_app_role" in rep.note
+    assert rep.as_tool_result()["isError"] is False
+
+
+def test_member_batch_states_how_many_app_roles_it_saw_versus_granted() -> None:
+    """LIVE FINDING: two AppRoles were created against a brand-new app and member_batch granted
+    ONE, saying nothing about the other. With only a granted count in the report there is no way
+    to tell a DISCOVERY gap (the account list returned one) from a GRANT gap (it returned two and
+    one was dropped) — so the report now states both numbers, always."""
+    c = FakeClient(_bare_process_draft())
+    c.flows["process"] = []
+    c.app_roles = [
+        {"_id": "RoE2MFjIipw3", "Name": "Repair Technician", "_application_id": "App"},
+        {"_id": "RoE2MFsjHKHA", "Name": "Requester", "_application_id": "App"},
+    ]
+    rep = apply_member_batch(c, "F_target")
+    assert isinstance(rep, MemberReport)
+    assert rep.roles_seen == 2
+    assert rep.as_tool_result()["roles_seen"] == 2
+    assert rep.as_tool_result()["roles_granted"] == 2
+    assert rep.note is not None and "saw 2" in rep.note and "granted 2" in rep.note
+
+
+def test_an_app_role_seen_but_not_grantable_lands_in_its_own_bucket() -> None:
+    """Doctrine: seen == granted + unusable. A record the account list returns without an `_id`
+    (or without a `Name`) cannot be posted to member/batch at all, and dropping it silently is
+    exactly how "granted 1 of 2" reads as a clean success."""
+    c = FakeClient(_bare_process_draft())
+    c.flows["process"] = []
+    c.app_roles = [
+        {"_id": "RoGood", "Name": "Requester", "_application_id": "App"},
+        {"Name": "Nameless Id", "_application_id": "App"},          # no _id
+        {"_id": "RoNoName", "_application_id": "App"},              # no Name
+    ]
+    rep = apply_member_batch(c, "F_target")
+    assert isinstance(rep, MemberReport)
+    assert rep.roles_seen == 3
+    assert rep.applied == ("RoGood",)
+    assert len(rep.roles_unusable) == 2, rep.roles_unusable
+    assert rep.roles_seen == len(rep.applied) + len(rep.roles_unusable)
+    assert rep.note is not None and "seen but NOT granted" in rep.note
+
+
+def test_harvest_path_also_states_seen_versus_granted() -> None:
+    """The same doctrine one source of members over: `_normalize_member` drops any harvested
+    record with no `Role` key, and dropped it into nothing at all — seen == granted + unusable
+    must hold on BOTH paths apply_member_batch can take, not just the account-level one."""
+    c = FakeClient(_bare_process_draft())
+    c.members[("process", "F_source")] = [
+        {"_id": "RoA", "Name": "Admin", "Kind": "AppRole", "Role": "DataAdmin",
+         "Permission": ["InitiateItems"]},
+        {"_id": "RoJunk", "Name": "No Role Key", "Kind": "AppRole"},     # dropped by the normalizer
+    ]
+    rep = apply_member_batch(c, "F_target", source_flow_id="F_source")
+    assert isinstance(rep, MemberReport)
+    assert rep.roles_seen == 2
+    assert rep.applied == ("DataAdmin",)
+    assert len(rep.roles_unusable) == 1 and "RoJunk" in rep.roles_unusable[0]
+    assert rep.roles_seen == len(rep.applied) + len(rep.roles_unusable)
+    assert rep.note is not None and "seen but NOT granted" in rep.note
+    assert rep.as_tool_result()["roles_granted"] == 1
+
+
+def test_harvest_path_stays_quiet_when_every_record_was_granted() -> None:
+    """The control: a clean harvest must not grow a note it never had."""
+    c = FakeClient(_bare_process_draft())
+    c.members[("process", "F_source")] = [
+        {"_id": "RoA", "Name": "Admin", "Kind": "AppRole", "Role": "DataAdmin",
+         "Permission": ["InitiateItems"]},
+    ]
+    rep = apply_member_batch(c, "F_target", source_flow_id="F_source")
+    assert isinstance(rep, MemberReport)
+    assert rep.note is None and rep.roles_unusable == ()
+    assert rep.roles_seen == 1 and rep.as_tool_result()["roles_granted"] == 1
+
+
+# =================================================================================================
+# S3 — LIVE FINDING: ONE forge_set_visibility call returned ~15,000 TOKENS.
+#
+# 222 (column, activity) pairs listed TWICE (once under `added`, once under `verified`), every
+# entry an opaque "Column_13Hw6YCM9B@Activity_3c29a1abe0" with no field or step NAME anywhere; two
+# such calls cost ~25k tokens to convey "222 pairs written, 0 missing". The AUDIT is correct and
+# doctrine-2 required and is NOT weakened here — every one of those tuples is still complete on
+# the dataclass. Only the PRESENTATION is bounded.
+# =================================================================================================
+
+
+def _wide_matrix_draft(n_fields: int = 37) -> dict:
+    """The exact live shape: 37 field columns x 6 permission-bearing activities = 222 pairs.
+
+    Built BY the engine (dogfood), zero real-app content — 4 UserTasks plus the StartEvent and the
+    EndEvent are the 6 bearing steps (a Parallel/GotoTask/SendBackToInitiator carries none).
+    """
+    import json
+    import pathlib
+
+    from kfforge.graph import regroup_into_sections
+
+    base = pathlib.Path(__file__).parent / "fixtures" / "empty_form_draft.json"
+    names = [f"Field {i:02d}" for i in range(n_fields)]
+    d = json.loads(base.read_text())
+    d = _apply_changes(d, [FieldSpec(name=n, type=FieldType.TEXT) for n in names])
+    d = regroup_into_sections(d, [("Intake", names[:12]), ("Assess", names[12:25]),
+                                  ("Wrap", names[25:])])
+    d = _build_workflow(d, [("Ticket arrives", None), ("Assess unit", None),
+                            ("Route to path", None), ("Wrap-up report", None)])
+    return d
+
+
+_WIDE_OWNERS = {"Intake": ["Start", "Ticket arrives"], "Assess": ["Assess unit"],
+                "Wrap": ["Wrap-up report"]}
+
+
+def _wide_report(draft: dict | None = None, **kw):
+    from kfforge.graph import progressive_matrix
+
+    d = draft if draft is not None else _wide_matrix_draft()
+    c = FakeClient(d)
+    return c, apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS), **kw)
+
+
+def test_the_222_pair_case_is_measured_and_the_default_payload_is_bounded() -> None:
+    """The measurement, pinned. 37 columns x 6 activities is the live case verbatim."""
+    import json
+
+    _c, rep = _wide_report()
+    assert len(rep.added) == 222 and len(rep.verified) == 222, "precondition: the live pair count"
+
+    # what this used to emit: the BASE ApplyReport payload, both full lists, opaque ids
+    before = json.dumps(ApplyReport.as_tool_result(rep))
+    after = json.dumps(rep.as_tool_result())
+    assert len(before) > 18_000, len(before)
+    assert len(after) < 1_500, after
+    assert len(after) * 10 < len(before), f"{len(before)} -> {len(after)} is not a real bound"
+
+
+def test_the_default_payload_carries_no_opaque_pair_ids_at_all() -> None:
+    _c, rep = _wide_report()
+    body = repr(rep.as_tool_result())
+    assert "Column_" not in body and "Activity_" not in body, body[:400]
+    assert rep.as_tool_result()["pair_counts"] == {
+        "added": 222, "skipped": 0, "verified": 222, "missing": 0, "collateral": 0,
+    }
+
+
+def test_the_summary_names_sections_and_steps_not_ids() -> None:
+    """An id-only audit is unreadable to the agent that has to act on it."""
+    _c, rep = _wide_report()
+    got = rep.as_tool_result()
+    assert got["by_section"] == [
+        "Assess: 78 pair(s) written, 78 verified, 0 missing",
+        "Intake: 72 pair(s) written, 72 verified, 0 missing",
+        "Wrap: 72 pair(s) written, 72 verified, 0 missing",
+    ]
+    assert [line.split(":")[0] for line in got["by_step"]] == [
+        "Assess unit", "End", "Route to path", "Start", "Ticket arrives", "Wrap-up report",
+    ]
+
+
+def test_nothing_is_ever_silently_withheld() -> None:
+    """No silent caps: the payload always states how many entries the counts stand in for."""
+    _c, rep = _wide_report()
+    got = rep.as_tool_result()
+    assert got["summarised"] == len(rep.added) + len(rep.skipped) + len(rep.verified) == 444
+    assert "444" in got["note"] and "include_pairs" in got["note"]
+
+
+def test_include_pairs_returns_every_pair_and_says_it_summarised_nothing() -> None:
+    _c, rep = _wide_report(include_pairs=True)
+    got = rep.as_tool_result()
+    assert got["summarised"] == 0
+    assert len(got["pairs"]["added"]) == 222 and len(got["pairs"]["verified"]) == 222
+    assert got["pairs"]["verified"][0].count("/") == 1 and "@" in got["pairs"]["verified"][0]
+    assert "Column_" not in repr(got["pairs"]), "even the opt-in list is resolved to names"
+
+
+def test_the_audit_tuples_are_untouched_by_the_presentation_bound() -> None:
+    """The half that must NOT change: doctrine 2 lives on the dataclass, not in the payload."""
+    _c, rep = _wide_report()
+    assert len(set(rep.added) | set(rep.verified)) == 222
+    assert all("@" in p and p.startswith("Column_") for p in rep.added)
+    assert set(rep.verified) == set(rep.added)
+
+
+def test_every_missing_pair_is_listed_in_full_and_by_name() -> None:
+    """`missing` is the FAILURE bucket and is never summarised, at any size."""
+    class DroppingHalf(FakeClient):
+        """A PUT that lands, and a read-back that lost every Permission on one activity."""
+
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self.dropped: str | None = None
+
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            got = super().put_draft(kind, flow_id, new, expect_version)
+            acts = [k for k, v in self.draft.items()
+                    if isinstance(v, dict) and v.get("Kind") == "Activity"
+                    and v.get("Name") == "Assess unit"]
+            self.dropped = acts[0]
+            for pid in [k for k, v in list(self.draft.items())
+                        if isinstance(v, dict) and v.get("Kind") == "Permission"
+                        and v.get("Activity") == self.dropped]:
+                del self.draft[pid]
+            return got
+
+    from kfforge.graph import progressive_matrix
+
+    d = _wide_matrix_draft()
+    c = DroppingHalf(d)
+    rep = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS))
+    got = rep.as_tool_result()
+    assert got["pair_counts"]["missing"] == 37
+    assert len(got["missing"]) == 37, "the failure bucket is listed in full, never summarised"
+    assert all(p.endswith("@ Assess unit") for p in got["missing"]), got["missing"][:3]
+    assert got["isError"] is True
+    assert "37 FAILED pairs" in got["note"]
+
+
+def test_collateral_lines_name_the_field_and_step_they_deleted() -> None:
+    """The destructive half is resolved to names too — and keeps the id, which is the only thing
+    that can be handed back to a graph read."""
+    from kfforge.graph import progressive_matrix
+
+    d = _wide_matrix_draft()
+    c = FakeClient(d)
+    full = progressive_matrix(d, _WIDE_OWNERS)
+    apply_step_permissions(c, "F1", full)
+    dropped = sorted(next(iter(full.values())))[0]
+    thinner = {s: {a: v for a, v in row.items() if a != dropped} for s, row in full.items()}
+    second = apply_step_permissions(c, "F1", thinner)
+    assert second.collateral and all(dropped in line for line in second.collateral)
+    assert all("/" in line and "@" in line for line in second.collateral)
+
+
+# ---- S4(b): forge_set_visibility must name the sections the owners map did not cover ------------
+
+
+def test_set_visibility_names_a_section_that_is_editable_at_no_step() -> None:
+    """The live trap: the template shell injects sections the caller cannot name in `owners`, so
+    the matrix is broken from the first write and doctor only says so two steps later."""
+    from kfforge.graph import progressive_matrix
+
+    d = _wide_matrix_draft()
+    owners = {k: v for k, v in _WIDE_OWNERS.items() if k != "Wrap"}
+    c = FakeClient(d)
+    rep = apply_step_permissions(c, "F1", progressive_matrix(d, owners))
+    got = rep.as_tool_result()
+    assert got["uncovered_sections"] == ["Wrap"]
+    assert got["isError"] is False, "leaving a section alone can be deliberate — never an error"
+
+
+def test_a_fully_covered_matrix_reports_no_uncovered_section() -> None:
+    """The no-false-positive control — passes before AND after."""
+    _c, rep = _wide_report()
+    assert rep.as_tool_result()["uncovered_sections"] == []
+
+
+def test_a_section_covered_only_by_field_level_overrides_is_not_uncovered() -> None:
+    """A section that only HIDES, with editability expressed per field, is fully intentional."""
+    from kfforge.graph import field_override_matrix, progressive_matrix
+
+    d = _wide_matrix_draft()
+    owners = {k: v for k, v in _WIDE_OWNERS.items() if k != "Wrap"}
+    field_owners = {"Field 25": ["Wrap-up report"]}
+    c = FakeClient(d)
+    rep = apply_step_permissions(c, "F1", progressive_matrix(d, owners),
+                                 field_matrix=field_override_matrix(d, field_owners))
+    assert rep.as_tool_result()["uncovered_sections"] == []
+
+
+# ---- S4(a): forge_create_process must state what the template brought in -----------------------
+
+
+def test_create_process_states_the_sections_the_template_injected() -> None:
+    """The report used to be all empty tuples, so the caller was blind to four sections and three
+    Required fields the DEFAULT put on their flow."""
+    from kfforge.client import ProcessCreateReport
+
+    c = _CreateProcessClient()
+    rep = create_process(c, "Expense Approval", ("Draft",), [])
+    assert isinstance(rep, ProcessCreateReport)
+    got = rep.as_tool_result()
+    assert got["from_template"] is True
+    assert got["template_sections"] == ["In-Kissflow Template", "Public Form Template",
+                                        "Request Details", "Request Info", "System"]
+    assert got["template_steps"] == ["Completed", "Manager Approve", "Start"]
+    assert "owners" in got["note"] and str(len(got["template_sections"])) in got["note"]
+
+
+def test_create_process_states_the_required_fields_the_template_injected() -> None:
+    """A Required field that is never editable makes its step permanently unsubmittable — the
+    caller cannot cover a field it was never told about."""
+    c = _CreateProcessClient()
+    got = create_process(c, "Expense Approval", ("Draft",), []).as_tool_result()
+    live = sorted(v["Name"] for v in c.draft.values()
+                  if isinstance(v, dict) and v.get("Kind") == "Field"
+                  and v.get("Model") == c.draft["Root"] and v.get("Required"))
+    assert got["template_required_fields"] == live
+    assert live, "precondition: the shipped shell really does carry Required fields"
+
+
+def test_from_template_false_reports_an_empty_template_inventory() -> None:
+    """The control: the bare scaffold brings in no section and no Required field, and says so
+    rather than pretending it did."""
+    c = _CreateProcessClient()
+    got = create_process(c, "Expense Approval", ("Review",), [], from_template=False).as_tool_result()
+    assert got["from_template"] is False
+    assert got["template_sections"] == [] and got["template_required_fields"] == []
+    assert got["template_steps"] == ["Completed", "Review", "Start"]
+    assert "note" not in got
+
+
+def test_an_unreadable_scaffold_is_stated_not_reported_as_an_empty_template() -> None:
+    """Doctrine 2, on the inventory itself: buckets that are empty because nothing was READ must
+    never look identical to buckets that are empty because nothing was there."""
+    class _NoFinalRead(_CreateProcessClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reads = 0
+
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            self.reads += 1
+            if self.reads > 3:                     # scaffold read + apply_fields' two reads
+                return Err("http", "GET draft -> 503")
+            return self.draft
+
+    got = create_process(_NoFinalRead(), "Expense Approval", ("Draft",), []).as_tool_result()
+    assert got["template_sections"] == [] and got["template_required_fields"] == []
+    assert got["template_read_error"] and "503" in got["template_read_error"]
+    assert "not because the shell brought nothing in" in got["note"]
+
+
+def test_create_flow_any_process_also_states_the_template_inventory() -> None:
+    """The OTHER tool that runs the same clone — forge_create_flow(kind='process')."""
+    c = _CreateProcessClient()
+    got = create_flow_any(c, "process", "Expense Approval").as_tool_result()
+    assert got["from_template"] is True
+    assert got["template_sections"] == ["In-Kissflow Template", "Public Form Template",
+                                        "Request Details", "Request Info", "System"]
+    assert got["template_steps"] == ["Completed", "Manager Approve", "Start"]
+    assert got["template_required_fields"] == ["Branch", "Department", "Description",
+                                               "Manager Display Name",
+                                               "Requestor Employee Id Alt"]
+
+
+def test_create_flow_any_born_live_kinds_carry_no_template_inventory() -> None:
+    """The control: a list/dataset/case has no scaffold to inventory and must not invent one."""
+    c = _CreateProcessClient()
+    got = create_flow_any(c, "list", "Urgency Levels").as_tool_result()
+    assert got["from_template"] is False and got["template_sections"] == []
+    assert "note" not in got
+
+
+# ---- S3, the siblings: no write tool's SUCCESS payload may echo opaque node ids ----------------
+
+
+_OPAQUE_ID = __import__("re").compile(
+    r"\b(Column|Activity|Field|Row|Permission|Resource|Expression|Node|Event|Criteria|Property)"
+    r"_[A-Za-z0-9]{4,}"
+)
+
+
+def _wide_specs(n: int = 37) -> list[FieldSpec]:
+    return [FieldSpec(name=f"New {i:02d}", type=FieldType.TEXT) for i in range(n)]
+
+
+def _sibling_payloads() -> dict[str, dict]:
+    """Every write orchestration whose report could grow with the field or step count, run over
+    the same 37-field / 6-step draft `apply_step_permissions` blew up on."""
+    import copy
+
+    from kfforge.client import (
+        apply_fields_full,
+        apply_layout,
+        apply_workflow,
+    )
+    from kfforge.graph import progressive_matrix
+
+    d = _wide_matrix_draft()
+    names = [f"Field {i:02d}" for i in range(37)]
+    runs = {
+        "apply_step_permissions":
+            lambda c: apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS)),
+        "apply_fields":
+            lambda c: apply_fields(c, "process", "F1", _wide_specs()),
+        "apply_fields_full":
+            lambda c: apply_fields_full(c, "process", "F1", _wide_specs(),
+                                        [("Intake", [s.name for s in _wide_specs()])]),
+        "apply_workflow":
+            lambda c: apply_workflow(c, "F1", [(f"Step {i}", None) for i in range(6)]),
+        "delete_fields":
+            lambda c: delete_fields(c, "F1", tuple(names), ()),
+        "rename_form_fields":
+            lambda c: rename_form_fields(c, "F1", {n: f"Renamed {n}" for n in names}),
+        "apply_required":
+            lambda c: apply_required(c, "F1", tuple(names)),
+        "run_doctor":
+            lambda c: run_doctor(c, "F1"),
+        "apply_layout":
+            lambda c: apply_layout(c, "F1", {"Intake": [[(names[i], 0, 2), (names[i + 1], 2, 4),
+                                                        (names[i + 2], 4, 6)]
+                                                       for i in range(0, 12, 3)]}),
+    }
+    out: dict[str, dict] = {}
+    for label, run in runs.items():
+        rep = run(FakeClient(copy.deepcopy(d)))
+        assert not isinstance(rep, Err), f"{label} fixture is broken: {rep}"
+        out[label] = rep.as_tool_result() if hasattr(rep, "as_tool_result") else rep
+    return out
+
+
+@pytest.mark.parametrize("label", sorted(_sibling_payloads()))
+def test_no_write_tools_success_payload_echoes_an_opaque_node_id(label: str) -> None:
+    """The finding generalised: an id-only report is unreadable to the agent that has to act on
+    it, and it is what made ONE call cost ~15k tokens. This is the standing guard across the
+    whole orchestration surface, not just the tool that was caught."""
+    import json
+
+    body = json.dumps(_sibling_payloads()[label])
+    hits = sorted(set(_OPAQUE_ID.findall(body)))
+    assert not hits, f"{label}'s success payload names raw node ids: {hits}"
+
+
+@pytest.mark.parametrize("label", sorted(_sibling_payloads()))
+def test_every_sibling_payload_stays_small_at_37_fields(label: str) -> None:
+    """apply_step_permissions was the SOLE outlier — 18,396 bytes where every sibling was under
+    2.5k. Pinned so a new bucket cannot quietly reintroduce the same cost."""
+    import json
+
+    body = json.dumps(_sibling_payloads()[label])
+    assert len(body) < 3_000, f"{label} returned {len(body)} bytes for 37 fields"
