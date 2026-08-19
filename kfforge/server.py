@@ -842,6 +842,12 @@ def forge_add_table(
     `name` is a no-op (no second PUT). `after_section` places the host row directly after that
     Section's root row — REQUIRED when the table has a banner section, or the stranded banner breaks
     the whole form's render (CLAUDE.md > Tables).
+
+    A `"Select"` column REQUIRES the list its options live in, exactly as a root field does in
+    forge_apply_fields — name it in that column's own options dict, `[<column name>, "Select",
+    {"ReferredList": "<list id>"}]`, after making the list with forge_create_list. A Select with no
+    list is a dropdown bound to nothing: it writes 200 and publish then dies 500 MetadataError with
+    no diagnostics at all, so it is refused here instead, before any write.
     """
     c = _client(app_id)
     if isinstance(c, Err):
@@ -1336,7 +1342,8 @@ def forge_doctor(
     because membership is not in the draft at all. A flow with AppRole assignees and an EMPTY
     roster FAILs the audit (`members` bucket, `members_found`): that is a documented bare-metadata
     publish failure (CLAUDE.md Members first). A roster this tool could not read lands in
-    `member_fetch_error` and is never counted as populated.
+    `member_fetch_error` and in `unvalidated`, and is never counted as populated — an unreadable
+    roster is UNKNOWN, not a clean bill of health.
     """
     c = _client(app_id)
     if isinstance(c, Err):
@@ -1629,7 +1636,10 @@ def forge_create_flow(
     `kind="process"` clones the identity shell by default (`extra={"from_template": False}` opts
     out) and the report names what that brought in under `template_sections` /
     `template_required_fields` / `template_steps` — see forge_create_process for why an `owners`
-    map that cannot name those sections breaks the visibility matrix on the first write.
+    map that cannot name those sections breaks the visibility matrix on the first write. All
+    three are read off the LIVE flow after the write, never off the payload that was sent; when
+    that read fails, `template_read_error` says so and the buckets are empty because nothing was
+    READ, not because the shell brought nothing in.
     """
     c = _client(app_id)
     if isinstance(c, Err):

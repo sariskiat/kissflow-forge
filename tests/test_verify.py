@@ -450,6 +450,48 @@ def test_doctor_does_not_require_the_referred_list_target_to_be_in_the_draft() -
     assert rep.checked["list_backed_fields"] == 1
 
 
+def _table_child_select_draft(**field_keys: Any) -> Draft:
+    """A form whose ONE list-backed field is a table CHILD — `add_table`'s own shape (host
+    Column{Type:"Model"} -> nested Model -> schema Row -> child Column/Field), built by the real
+    function so the fixture cannot drift from what the engine writes."""
+    from kfforge.graph import add_table
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Process"}}
+    d = add_table(bare, "Items", [("Grade", "Select", {"ReferredList": "List_G1"})])
+    (grade,) = [v for v in d.values()
+                if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Grade"]
+    grade.pop("ReferredList")                       # a hand-built / template-cloned bare Select
+    grade.update(field_keys)
+    return d
+
+
+def test_doctor_remedy_for_a_table_child_names_a_path_that_actually_works() -> None:
+    """G2: "a refusal a caller cannot act on is just a dead end" (CLAUDE.md > Members first),
+    applied to a remedy. Rule 7b told every caller to "re-apply the field with referred_list" —
+    for a table CHILD that returns isError:true with `changed_ignored` ("apply_changes only
+    creates"), and its fallback (forge_delete_fields + forge_apply_fields) would delete the table
+    column and re-add the name as a ROOT form field: a different form. The remedy must name the
+    child's own table and the rebuild that really repairs it."""
+    rep = doctor(_table_child_select_draft())
+    (problem,) = [p for p in rep.problems if "no ReferredList" in p]
+
+    assert "'Grade'" in problem and "'Items'" in problem, problem
+    # the path that actually works: mint the list, then REBUILD the table
+    assert "forge_delete_fields" in problem and "forge_add_table" in problem, problem
+    assert "ReferredList" in problem.split("forge_add_table")[1], problem
+    # and the dead end is not advised: the root-field remedy must not appear on a table child
+    assert "re-apply the field with referred_list" not in problem, problem
+
+
+def test_doctor_remedy_for_a_root_field_is_unchanged() -> None:
+    """The root-field remedy WAS correct and stays verbatim — the table-child branch is an
+    addition, not a rewrite of a working message."""
+    rep = doctor(_bare_field_draft(Type="Select", Name="Urgency"))
+    (problem,) = [p for p in rep.problems if "no ReferredList" in p]
+    assert "re-apply the field with referred_list" in problem, problem
+    assert "forge_add_table" not in problem, problem
+
+
 @pytest.mark.parametrize(
     ("keys", "flagged"),
     [({"Type": "Select", "Name": "Plain"}, True),
@@ -566,10 +608,11 @@ def test_doctor_flags_one_column_claimed_by_two_rows(clean_draft: Draft) -> None
 def test_four_column_row_from_the_real_prod_template_is_not_flagged() -> None:
     """Counter-capture, stated deliberately: `shapes/process_template_identity_shell.json` — a
     de-identified capture of a REAL published production template — carries a Row with FOUR field
-    columns at (0,2) (2,4) (4,5) (5,6). CLAUDE.md's "at most 3 columns per row" is the consequence
-    of FIELD_SPAN=2, not a platform limit, so the doctor refuses to invent a count bound it has a
-    live capture AGAINST (doctrine #10). The engine's own write guard still caps its OWN output at
-    3 — see test_layout_guard_refuses_more_than_three_columns_in_one_row."""
+    columns at (0,2) (2,4) (4,5) (5,6). "At most 3 columns per row" is the consequence of
+    FIELD_SPAN=2 — the auto-tiler's default packing — not a platform limit, so the doctor refuses
+    to invent a count bound it has a live capture AGAINST (doctrine #10). The WRITE guard now
+    agrees rather than contradicting it — see
+    test_layout_guard_accepts_the_four_column_row_the_prod_capture_proves."""
     from kfforge.graph import clone_template_shell
 
     d = clone_template_shell({"Root": "M1",

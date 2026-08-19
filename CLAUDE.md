@@ -139,21 +139,27 @@ requires.
   Appearance-node count > Style-node count in the draft; each `Appearance`
   must own exactly one `Style`. `forge_set_styles` with a real token on the
   stranded section completes the chain and restores render.
-- **A Row is a 6-unit grid.** Field columns tile `(0,2) (2,4) (4,6)` — start
-  and end units along a 6-wide row, at most 3 columns per row. Overflow one
-  Row (say, columns all pinned at `Start=0`, or more than 3 columns crammed
-  in) and it breaks rendering for the *whole* flow, not just that row.
-  ⚠️ **"At most 3" is the consequence of a field column spanning 2 units, NOT
-  a platform-enforced count** — and there is a live capture AGAINST reading it
-  as one: `shapes/process_template_identity_shell.json`, de-identified off a
-  real published production template, carries a Row with FOUR field columns at
-  `(0,2) (2,4) (4,5) (5,6)` — fully packed, non-overlapping, rendering. So the
-  count is enforced where it belongs, on what this engine WRITES
-  (`graph.validate_layout_spans` refuses a caller-stated row of more than 3,
-  matching its own auto-tiler), and `verify.doctor` deliberately asserts NO
-  count bound on drafts it did not build — a rule that fires on every
-  `from_template=True` flow is worse than no rule. What is invariant either
-  way, and what both sides DO enforce: in-grid, non-overlapping, and **one
+- **A Row is a 6-unit grid.** Field columns carry a `Start` and an `End` unit
+  along that 6-wide row; the engine's auto-tiler packs them `(0,2) (2,4)
+  (4,6)`, three to a row, because a field column defaults to 2 units wide.
+  Overflow one Row — columns all pinned at `Start=0`, spans overlapping, or a
+  span running off the end — and it breaks rendering for the *whole* flow, not
+  just that row.
+  ⚠️ **A CORRECTED BELIEF (2026-08-19).** This bullet used to say "at most 3
+  columns per row" as if it were a platform limit, and the engine's own write
+  guard was built to refuse a 4th — WRONG on both counts, against a capture
+  this repo already ships. `shapes/process_template_identity_shell.json`,
+  de-identified off a REAL PUBLISHED production template, carries a Row with
+  FOUR field columns at `(0,2) (2,4) (4,5) (5,6)` — fully packed,
+  non-overlapping, rendering. "Three" is the consequence of the 2-unit default
+  width, i.e. a DEFAULT LAYOUT, never a count the platform enforces; a caller
+  who states narrower spans may legally fill a row with more. Neither side
+  asserts a count any more: `graph.validate_layout_spans` (the write guard)
+  and `verify.doctor` (the read audit) both dropped it — refusing a geometry
+  the platform demonstrably renders is inventing a bound with no capture
+  behind it, and a rule that fires on every `from_template=True` flow is worse
+  than no rule. What IS invariant, and what both sides do enforce: every span
+  in-grid (`0 <= Start < End <= 6`), spans in one Row disjoint, and **one
   column belongs to exactly ONE Row** — the same field named twice in a layout
   leaves a Column in two Rows' `Row::Column` while its own `Row` back-ref
   names only the last.
@@ -161,9 +167,9 @@ requires.
 ```
 Field  { Id:"Field_Sample01", Type:"Text", Model:<root model id>, CreatedAt:"<timestamp>" }
 Row    { Column:<section id>, Row::Column:[Column_Sample01, Column_Sample02, Column_Sample03] }
-  Column_Sample01 { Type:"Field", Start:0, End:2 }   # tile 1 of 3, max per row
-  Column_Sample02 { Type:"Field", Start:2, End:4 }   # tile 2 of 3
-  Column_Sample03 { Type:"Field", Start:4, End:6 }   # tile 3 of 3 — 6 units, fully packed
+  Column_Sample01 { Type:"Field", Start:0, End:2 }   # tile 1 of the auto-tiler's default 3
+  Column_Sample02 { Type:"Field", Start:2, End:4 }   # tile 2
+  Column_Sample03 { Type:"Field", Start:4, End:6 }   # tile 3 — 6 units, fully packed
 ```
 This Row is nested inside a section, so its parent key is `Column:<section id>`; a
 root-level Row that instead holds a *section* column carries `Model:<root model id>`

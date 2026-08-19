@@ -125,9 +125,6 @@ def _tile_into_rows(columns: list[str]) -> list[list[tuple[str, int, int]]]:
     return rows
 
 
-MAX_COLUMNS_PER_ROW = ROW_UNITS // FIELD_SPAN   # 3 — CLAUDE.md > Node-graph invariants
-
-
 def validate_layout_spans(layout: dict[str, list[list[tuple[str, int, int]]]]) -> None:
     """Reject any caller-stated layout that cannot exist on the 6-unit row grid. Raises ValueError.
 
@@ -136,18 +133,21 @@ def validate_layout_spans(layout: dict[str, list[list[tuple[str, int, int]]]]) -
     span is refused without paying for a round trip; `apply_exact_layout` runs it again before it
     copies or touches anything, so a bad spec also leaves the draft entirely unmutated.
 
-    Three refusals, all of them render-breaking rather than cosmetic (CLAUDE.md > Node-graph
-    invariants — overflow one Row and the BUILDER fails to render the whole flow, not just that
-    row):
+    Two refusals, both render-breaking rather than cosmetic (CLAUDE.md > Node-graph invariants —
+    overflow one Row and the BUILDER fails to render the whole flow, not just that row):
 
     * a span off the grid (`0 <= Start < End <= ROW_UNITS`);
-    * two spans sharing a unit of the same row;
-    * more than `MAX_COLUMNS_PER_ROW` columns in one row (D8b) — six 1-unit columns are each
-      in-grid and pairwise disjoint, so the first two checks passed them happily. This is a cap on
-      what THIS ENGINE writes, matching its own auto-tiler (`_tile_into_rows`), not a claim about
-      every draft in existence: shapes/process_template_identity_shell.json, captured off a real
-      published production template, does carry a 4-column row, which is why `verify.doctor`
-      deliberately asserts no count bound on drafts it did not build.
+    * two spans sharing a unit of the same row.
+
+    ⚠️ A COUNT bound ("at most 3 columns per row") deliberately does NOT live here, and briefly
+    did (D8b, reverted 2026-08-19). The repo owns a capture AGAINST it:
+    shapes/process_template_identity_shell.json, de-identified off a REAL PUBLISHED production
+    template, carries a Row with FOUR field columns at (0,2) (2,4) (4,5) (5,6) — in-grid,
+    disjoint, rendering. `verify.doctor` cited that same capture to refuse a count bound on drafts
+    it did not build, so asserting one HERE was the same repo contradicting itself, and refusing a
+    geometry the platform demonstrably renders is inventing a bound with no capture behind it
+    (#10). "At most 3" remains the consequence of FIELD_SPAN=2 in the auto-tiler
+    (`_tile_into_rows`), which is a default layout, never a limit on what a caller may state.
 
     A field named TWICE anywhere in the spec is refused too (D8a): a field owns exactly ONE
     Column, so placing it twice puts that Column in two Rows' `Row::Column` while its own `Row`
@@ -157,12 +157,6 @@ def validate_layout_spans(layout: dict[str, list[list[tuple[str, int, int]]]]) -
     seen: dict[str, str] = {}                     # field name -> "<section> row <n>" it was placed
     for title, rows_spec in layout.items():
         for ri, row in enumerate(rows_spec):
-            if len(row) > MAX_COLUMNS_PER_ROW:
-                raise ValueError(
-                    f"layout puts {len(row)} columns in {title!r} row {ri}: a Row is a "
-                    f"{ROW_UNITS}-unit grid holding at most {MAX_COLUMNS_PER_ROW} columns "
-                    f"(CLAUDE.md > Node-graph invariants) — cramming more in breaks rendering for "
-                    f"the WHOLE flow; split them across rows")
             placed: list[tuple[str, int, int]] = []
             for fname, start, end in row:
                 where = f"{title!r} row {ri}"
@@ -859,6 +853,23 @@ def delete_nodes(draft: Draft, fields: tuple[str, ...] = (), tables: tuple[str, 
     return new
 
 
+def unbound_select(ft: FieldType, referred_list: Any) -> bool:
+    """THE predicate behind every "a Select must name its list" refusal in this module.
+
+    A Select's OPTIONS live in a SEPARATE list flow, named by `ReferredList`; one written without
+    it is a dropdown bound to nothing, which PUTs 200 and then dies on publish with a bare 500
+    MetadataError carrying zero diagnostic content (2026-08-19 diagnosis, CLAUDE.md ReferredList
+    #13). TWO paths in this module mint a `Field` node from a caller's spec — `apply_changes` for
+    a root form field and `add_table` for a table CHILD column — and they must refuse the same
+    node for the same reason: sealing only the first left the identical publish-500 reachable
+    through the second door, on a flow `forge_add_table` had just built. One derivation, so the
+    two cannot drift apart again. `verify.doctor` rule 7b is the read-side sibling (wider, because
+    it audits drafts this engine did not build: the whole captured list-backed family, not just
+    Select).
+    """
+    return ft is FieldType.SELECT and not referred_list
+
+
 def add_table(
     draft: Draft,
     name: str,
@@ -884,7 +895,28 @@ def add_table(
     root `Model::Row`. An empty banner Section renders ONLY as a caption right above its table —
     appending the host last strands the banner and the whole form fails to render (CLAUDE.md >
     Tables). Unknown name raises before any write. Default None keeps the append behavior.
+
+    A child Select must name its list (`unbound_select`), exactly as a root field must in
+    `apply_changes` — the options dict is where a table column carries `ReferredList`. Every
+    column is normalized and checked BEFORE the first node is minted, so a refused spec leaves the
+    draft untouched rather than half-built.
     """
+    # 1) validate everything first (fail loud, before touching the graph)
+    normalized: list[tuple[str, FieldType, dict[str, Any] | None]] = []
+    for col in columns:
+        col_name, col_type = col[0], col[1]
+        col_opts = col[2] if len(col) > 2 else None
+        ft = FieldType(col_type) if not isinstance(col_type, FieldType) else col_type
+        if unbound_select(ft, (col_opts or {}).get("ReferredList")):
+            raise ValueError(
+                f"table {name!r} column {col_name!r} is Type Select with no ReferredList — a "
+                f"Select bound to no list publishes 500 MetadataError with zero diagnostics; "
+                f"create the list with forge_create_list, then name it in the column's own "
+                f"options: ({col_name!r}, 'Select', {{'ReferredList': '<list id>'}}) "
+                f"(CLAUDE.md ReferredList #13)"
+            )
+        normalized.append((col_name, ft, col_opts))
+
     new: Draft = copy.deepcopy(draft)
     model_id = _model_id(new)
     root = new[model_id]
@@ -909,11 +941,7 @@ def add_table(
 
     child_cols: list[str] = []
     child_fields: list[str] = []
-    for i, col in enumerate(columns):
-        col_name = col[0]
-        col_type = col[1]
-        col_opts = col[2] if len(col) > 2 else None
-        ft = FieldType(col_type) if not isinstance(col_type, FieldType) else col_type
+    for i, (col_name, ft, col_opts) in enumerate(normalized):
         cid = _new_id("Column", table_id, i, col_name)
         fid = _new_id("Field", table_id, i, col_name)
         new[cid] = {"Id": cid, "Kind": "Column", "Type": "Field", "Row": schema_row,
@@ -2214,8 +2242,9 @@ def apply_changes(draft: Draft, changes: list[FieldSpec]) -> Draft:
         # MetadataError with zero diagnostic content (2026-08-19 diagnosis). Refuse at compile and
         # name the fix (ADR-0004) rather than write a field that cannot publish; the User branch
         # below auto-repairs its own version of this defect, and minting a bare Select silently
-        # twenty lines apart was the inconsistency that let it through.
-        if ft is FieldType.SELECT and spec.referred_list is None:
+        # twenty lines apart was the inconsistency that let it through. The predicate is shared
+        # with `add_table`'s table-child columns (`unbound_select`) — one rule, both mint paths.
+        if unbound_select(ft, spec.referred_list):
             raise ValueError(
                 f"field {spec.name!r} is Type Select with no referred_list — a Select bound to no "
                 f"list publishes 500 MetadataError with zero diagnostics; create the list with "

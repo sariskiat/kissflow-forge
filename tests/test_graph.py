@@ -666,22 +666,56 @@ def test_apply_exact_layout_rejects_the_same_field_placed_in_two_sections() -> N
         apply_exact_layout(base, {"S1": [[("a", 0, 6)]], "S2": [[("a", 0, 6)]]})
 
 
-def test_layout_guard_refuses_more_than_three_columns_in_one_row() -> None:
-    """D8(b): six 1-unit columns are individually in-grid and pairwise disjoint, so the span guard
-    passed them. CLAUDE.md > Node-graph invariants: "at most 3 columns per row" — the engine's own
-    tiler never emits more, and this is what the engine WRITES, so it is capped here."""
+def _prod_capture_widest_row() -> list[tuple[int, int]]:
+    """The (Start, End) spans of the WIDEST row in shapes/process_template_identity_shell.json —
+    read out of the shape file itself so this test can never drift from the capture it cites."""
+    import json as _json
+    import pathlib as _pathlib
+
+    shape = _json.loads(
+        (_pathlib.Path(__file__).parent.parent / "shapes"
+         / "process_template_identity_shell.json").read_text(encoding="utf-8"))["template"]
+    rows = [[(shape[c]["Start"], shape[c]["End"]) for c in v.get("Row::Column") or []
+             if shape.get(c, {}).get("Type") == "Field"]
+            for v in shape.values() if isinstance(v, dict) and v.get("Kind") == "Row"]
+    return max(rows, key=len)
+
+
+def test_layout_guard_accepts_the_four_column_row_the_prod_capture_proves() -> None:
+    """G3, replacing a refusal the repo has a capture AGAINST (doctrine #10). The write guard used
+    to cap a caller-stated row at 3 columns, calling a 4th "render-breaking" — but
+    shapes/process_template_identity_shell.json, de-identified off a REAL PUBLISHED production
+    template, carries exactly that geometry ((0,2) (2,4) (4,5) (5,6)) and renders. `verify.doctor`
+    already refused to assert a count bound for that reason; the WRITE guard asserting the
+    opposite was the same repo contradicting itself. What stays enforced is what the capture
+    actually backs: in-grid, disjoint, one column to one Row."""
+    from kfforge.graph import apply_exact_layout, regroup_into_sections, validate_layout_spans
+
+    spans = _prod_capture_widest_row()
+    assert len(spans) >= 4, "fixture drift: the shipped shell no longer has its 4-column row"
+
+    names = [f"f{i}" for i in range(len(spans))]
+    row = [(n, s, e) for n, (s, e) in zip(names, spans, strict=True)]
+    validate_layout_spans({"S": [row]})                       # pure guard: must not raise
+
+    base = regroup_into_sections(_draft_with_fields(*names), [("S", names)])
+    got = apply_exact_layout(base, {"S": [row]})
+    assert _section_rows(got)[0] == row, "the production geometry must land verbatim"
+
+
+def test_layout_guard_still_refuses_what_the_capture_does_back() -> None:
+    """The count bound is gone; the capture-backed invariants are NOT. Six 1-unit columns are fine
+    (in-grid, disjoint, that is the whole rule), an overlap is refused, and off-grid is refused."""
     import pytest
-    from kfforge.graph import apply_exact_layout, regroup_into_sections
+    from kfforge.graph import validate_layout_spans
 
     names = [f"f{i}" for i in range(6)]
-    base = regroup_into_sections(_draft_with_fields(*names), [("S", names)])
-    row = [(n, i, i + 1) for i, n in enumerate(names)]
-    with pytest.raises(ValueError, match=r"6 columns.*at most 3"):
-        apply_exact_layout(base, {"S": [row]})
+    validate_layout_spans({"S": [[(n, i, i + 1) for i, n in enumerate(names)]]})
 
-    # exactly 3 is the documented maximum and stays legal, at any widths
-    ok = apply_exact_layout(base, {"S": [[("f0", 0, 1), ("f1", 1, 2), ("f2", 2, 6)]]})
-    assert _section_rows(ok)[0] == [("f0", 0, 1), ("f1", 1, 2), ("f2", 2, 6)]
+    with pytest.raises(ValueError, match="disjoint"):
+        validate_layout_spans({"S": [[("a", 0, 4), ("b", 2, 6)]]})
+    with pytest.raises(ValueError, match=r"0 <= Start < End <= 6"):
+        validate_layout_spans({"S": [[("a", 0, 7)]]})
 
 
 def test_apply_exact_layout_rejects_a_bad_span_before_touching_the_draft() -> None:
@@ -1225,6 +1259,56 @@ def test_add_table_per_column_options_override_type_defaults() -> None:
             if isinstance(n, dict) and n.get("Kind") == "Field"}
     assert cols["Round"]["Decimalpoint"] == 0       # opt-in overrides the "2" default
     assert cols["Hours"]["Decimalpoint"] == "2"     # default survives untouched
+
+
+# ---- add_table: the SECOND door onto the bare-Select publish-500 -------------------------------
+
+def test_add_table_refuses_a_select_child_with_no_referred_list() -> None:
+    """G1. `apply_changes` refuses a bare Select (the 2026-08-19 publish-500 diagnosis), and
+    `add_table` minted the byte-identical `Field{Type:"Select"}` with no `ReferredList` and no
+    complaint — the same deterministic publish-500 through a second door, on a flow
+    `forge_add_table` had just built and `verify.doctor` would then flag. ONE rule, both doors:
+    the refusal reuses apply_changes' own predicate rather than a second copy that can drift."""
+    import pytest
+    from kfforge.graph import add_table
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    with pytest.raises(ValueError) as exc:
+        add_table(bare, "Items", [("Item", "Text", None), ("Grade", "Select", None)])
+
+    msg = str(exc.value)
+    assert "'Grade'" in msg, msg                      # NAME the offending child column
+    assert "ReferredList" in msg, msg
+    # and show the escape hatch that already exists but was named nowhere
+    assert "'Grade', 'Select', {'ReferredList':" in msg, msg
+
+
+def test_add_table_writes_a_select_child_that_names_its_list() -> None:
+    """The escape hatch the refusal points at: the child-spec `options` dict already passes
+    `ReferredList` through verbatim — a wired table-child Select is legal and unchanged."""
+    from kfforge.graph import add_table
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    got = add_table(bare, "Items", [("Item", "Text", None),
+                                    ("Grade", "Select", {"ReferredList": "List_G1"})])
+    (grade,) = [n for n in got.values()
+                if isinstance(n, dict) and n.get("Kind") == "Field" and n.get("Name") == "Grade"]
+    assert grade["Type"] == "Select" and grade["ReferredList"] == "List_G1"
+
+
+def test_add_table_refuses_the_bad_child_before_writing_any_node() -> None:
+    """Validation-first, exactly like apply_changes: a table whose LAST column is a bare Select
+    must leave the caller's draft byte-identical — a refused spec writes nothing at all."""
+    import copy as _copy
+
+    import pytest
+    from kfforge.graph import add_table
+
+    draft = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Form"}}
+    snapshot = _copy.deepcopy(draft)
+    with pytest.raises(ValueError, match="'Grade'"):
+        add_table(draft, "Items", [("Item", "Text", None), ("Grade", "Select", None)])
+    assert draft == snapshot
 
 
 def test_build_workflow_step_meta_writes_suspended_and_description() -> None:

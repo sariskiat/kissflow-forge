@@ -82,8 +82,10 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
 
 **1. Fields + sections — `forge_apply_fields`, `forge_apply_layout`.**
    Node-graph invariants apply from the first field: every Field needs a `Model` back-ref + a
-   `CreatedAt`; ids use capitalised prefixes (`Field_`, `Column_`); a Row is a 6-unit grid, max
-   3 columns, tiled `(0,2)(2,4)(4,6)` — overflow breaks the WHOLE form. The mandatory style chain
+   `CreatedAt`; ids use capitalised prefixes (`Field_`, `Column_`); a Row is a 6-unit grid,
+   auto-tiled `(0,2)(2,4)(4,6)` — spans must stay in-grid and disjoint (a narrower stated span may
+   legally put 4 columns in a row, as a real prod capture does), and overflowing a Row breaks
+   rendering for the WHOLE form, not just that row. The mandatory style chain
    (`Model::Appearance → Appearance → Appearance::Style → Style`) must be COMPLETE on every flow;
    an Appearance with zero Style children renders "There was an error / Reload" while doctor,
    publish, and item-create all pass.

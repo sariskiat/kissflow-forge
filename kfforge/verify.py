@@ -103,6 +103,28 @@ def _nodes(draft: Draft) -> dict[str, Any]:
     return {k: v for k, v in draft.items() if isinstance(v, dict)}
 
 
+def _owning_table_name(nodes: dict[str, Any], field: dict[str, Any]) -> str | None:
+    """The NAME of the child table this field belongs to, or None when it is a root form field.
+
+    A table is a nested Model hosted by a `Column{Type:"Model"}` (CLAUDE.md > Tables), so a child
+    field's `Model` back-ref names the table Model rather than the root. The name is read off the
+    table Model and falls back to its HOST column — the two carry the same name when this engine
+    writes the table, and a live read-back that drops one still resolves the other, the same
+    two-signal discipline `graph._table_model_ids` uses.
+
+    Only ever used to pick which REMEDY a problem sentence states, so an unnamed table degrades to
+    the root-field remedy rather than a sentence naming `None`.
+    """
+    owner = nodes.get(field.get("Model"))
+    if not isinstance(owner, dict) or owner.get("Kind") != "Model":
+        return None
+    host = nodes.get(owner.get("Column"))
+    if not isinstance(host, dict):                     # a root Model has no host column
+        return None
+    name = owner.get("Name") or host.get("Name")
+    return name if isinstance(name, str) and name else None
+
+
 def doctor(
     draft: Draft,
     *,
@@ -402,17 +424,39 @@ def doctor(
     # The `ReferredList` TARGET is deliberately never resolved: a list is a separate flow, never a
     # node in this graph, so `ReferredList not in draft` would false-flag every correctly wired
     # Select in existence. A table-child Select is NOT excluded — it needs its list just the same.
+    #
+    # ...but it takes a DIFFERENT remedy, and stating the root-field one for it was a dead end
+    # (2026-08-19). `forge_apply_fields` only CREATES: on a name that already exists it returns
+    # isError with `changed_ignored` ("apply_changes only creates"), and its own fallback
+    # (forge_delete_fields + forge_apply_fields) would delete the table COLUMN and re-add the name
+    # as a ROOT form field — a different form, from following the advice verbatim. There is no
+    # in-place edit of a table child anywhere on the tool surface (`add_table` is idempotent: it
+    # no-ops on a table that already exists), so the honest path is to rebuild the table itself.
+    # "A refusal a caller cannot act on is just a dead end" (CLAUDE.md > Members first) applies to
+    # a remedy exactly as it does to a refusal.
     list_backed = [v for v in N.values() if v.get("Kind") == "Field"
                    and v.get("Type") in LIST_BACKED_FIELD_TYPES]
     checked["list_backed_fields"] = len(list_backed)
     for f in list_backed:
         ref = f.get("ReferredList")
         if not isinstance(ref, str) or not ref:
-            problems.append(
-                f"{f.get('Type')} field {f.get('Name')!r} has no ReferredList — a dropdown bound "
-                f"to no list; PUT 200s and publish dies 500 MetadataError with zero diagnostics "
-                f"(CLAUDE.md ReferredList wiring #13 — mint the list with forge_create_list, then "
-                f"re-apply the field with referred_list=<list id>)")
+            name = f.get("Name")
+            head = (f"{f.get('Type')} field {name!r} has no ReferredList — a dropdown bound "
+                    f"to no list; PUT 200s and publish dies 500 MetadataError with zero "
+                    f"diagnostics (CLAUDE.md ReferredList wiring #13 — ")
+            table = _owning_table_name(N, f)
+            if table is None:
+                problems.append(head + "mint the list with forge_create_list, then re-apply "
+                                       "the field with referred_list=<list id>)")
+            else:
+                problems.append(
+                    head + f"mint the list with forge_create_list, then REBUILD table {table!r}: "
+                           f"forge_delete_fields(tables=[{table!r}]) followed by forge_add_table "
+                           f"with the column stated as [{name!r}, {f.get('Type')!r}, "
+                           f'{{"ReferredList": "<list id>"}}]. A table CHILD has no in-place '
+                           f"edit: forge_apply_fields only creates ROOT fields, so re-applying "
+                           f"this name would leave the table untouched and add a second, "
+                           f"root-level field of the same name)")
 
     # 7c. a developer TODO note shipped as a user-facing field LABEL. Not a publish blocker — a
     # certain repo defect regardless: a de-identified template shape carried its own reconnect
@@ -487,9 +531,12 @@ def doctor(
     # A COUNT rule ("at most 3 columns per row") deliberately does NOT live here: the shipped
     # shapes/process_template_identity_shell.json — a de-identified capture of a REAL published
     # production template — carries a Row with FOUR field columns at (0,2) (2,4) (4,5) (5,6), so a
-    # >3 rule would fire on every from_template=True flow. CLAUDE.md's "at most 3 columns per row"
-    # is the consequence of FIELD_SPAN=2 and is enforced where it belongs, on what this engine
-    # WRITES (`graph.validate_layout_spans`), not asserted about drafts it did not build (#10).
+    # >3 rule would fire on every from_template=True flow. "Three" is the consequence of
+    # FIELD_SPAN=2 — the auto-tiler's default packing, never a platform limit — so NOTHING asserts
+    # it: the write guard (`graph.validate_layout_spans`) briefly did and dropped it on the same
+    # capture (2026-08-19), because refusing a geometry the platform demonstrably renders is
+    # inventing a bound with no capture behind it (#10). Both sides enforce the same
+    # capture-backed set instead: in-grid, disjoint within a row, one column to one Row.
     row_claims = 0
     for rid, row in N.items():
         if row.get("Kind") != "Row":

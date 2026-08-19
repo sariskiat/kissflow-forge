@@ -12,7 +12,9 @@ are enforced structurally rather than left to whoever executes the plan later:
   now executable via forge_create_list (create-or-reuse + REPLACE-semantics item set +
   `ReferredList:<list_id>` on the Select, all live-proven end to end on a real item). The one
   standing gate: a `personal_data` list stays human-made (PDPA, D2/D9), its op's `why` says so,
-  and its VALUES still ride in the plan so they are never silently lost.
+  and its VALUES still ride in the plan so they are never silently lost. A Select field's own op
+  carries the BINDING to its list (`referred_list_from`), never an id — a plan is compiled before
+  anything exists; see `_referred_list_binding` for the contract and why it is not a placeholder.
 - **Gate polarity is checked before a plan can exist at all.** `_check_loop_gate_is_boolean`
   resolves the gate field against `DataModel.fields` and raises rather than trusting a
   self-declared flag; `_check_loop_stages` additionally requires the jump to be backward.
@@ -39,6 +41,7 @@ from .schema import (
     DesignNode,
     EventTrigger,
     FieldReq,
+    ListSpec,
     OnClickAction,
     PageIntent,
     PopupIntent,
@@ -176,18 +179,25 @@ def _check_select_fields_have_list(spec: AppSpec) -> None:
     every downstream consumer at once rather than requiring each to rediscover it independently.
     """
     list_names = {l.name for l in spec.master_data.lists}
+    row = coverage.get("word-list-dropdown")
     for f in spec.data_model.fields:
         if f.type != FieldType.SELECT:
             continue
         if f.list_name is None:
             raise ValueError(
                 f"field {f.name!r} is Select but names no list_name — it would render as an "
-                f"empty dropdown with no options"
+                f"empty dropdown with no options, and there is no list whose id could ever be "
+                f"bound as its ReferredList (coverage row {row.key!r}). Refused HERE, at compile "
+                f"(ADR-0004), not at write time: a Select with no ReferredList PUTs 200 and its "
+                f"publish dies 500 MetadataError with zero diagnostic content. Declare the list "
+                f"in MasterData.lists and name it in this field's list_name."
             )
         if f.list_name not in list_names:
             raise ValueError(
                 f"field {f.name!r} names list_name {f.list_name!r}, which is not in "
-                f"MasterData.lists {sorted(list_names)}"
+                f"MasterData.lists {sorted(list_names)} — a Select backed by a list the spec "
+                f"never declares has no create_list op to take an id from (coverage row "
+                f"{row.key!r}), same dead end as naming no list at all"
             )
 
 
@@ -990,20 +1000,52 @@ def _op_create_list(spec: AppSpec) -> tuple[Op, ...]:
     """One op per reference list (dimension 7), BEFORE apply_fields so a Select field never
     references a list the plan hasn't already flagged. Executable since #13 (create + item-set +
     ReferredList wiring all live-proven 2026-08-12) — EXCEPT a `personal_data` list, which stays
-    human-gated (PDPA, D2/D9) with its VALUES still in the plan so nothing is silently dropped."""
+    human-gated (PDPA, D2/D9) with its VALUES still in the plan so nothing is silently dropped.
+
+    This is the PRODUCING end of the binding `_op_apply_fields` states from the other side: the
+    `_id` this op's forge_create_list call returns is exactly what a later field's
+    `referred_list_from = {"list_name": <this name>, "from_op": "create_list"}` resolves to. Both
+    ends name the list by the SAME string (`args["name"]`), so the binding is checkable from the
+    plan alone — no executor has to infer which list a Select meant."""
     return tuple(
         Op(kind="create_list",
            args={"name": l.name, "values": l.values, "owner_role": l.owner_role,
                  "personal_data": l.personal_data},
            why=("HUMAN-GATED (personal_data, PDPA): this list holds personal data — a human "
                 "must create/verify it in the builder UI with EXACTLY these values; "
-                "forge_create_list must NOT write it"
+                "forge_create_list must NOT write it. Its id still binds every Select naming "
+                "it (referred_list_from with from_op None) — read it back BY NAME off the "
+                "tenant, never create it here"
                 if l.personal_data else
                 "execute with forge_create_list (create-or-reuse by name, REPLACE-semantics "
-                "item set, read-back audited); then Select fields below may reference it via "
-                "referred_list — #13, live-proven 2026-08-12"))
+                "item set, read-back audited); KEEP the `_id` it returns — every apply_fields "
+                "field whose referred_list_from names this list resolves its referred_list to "
+                "exactly that id — #13, live-proven 2026-08-12"))
         for l in spec.master_data.lists
     )
+
+
+def _referred_list_binding(list_spec: ListSpec) -> dict[str, Any]:
+    """WHERE a Select's `ReferredList` id comes from at execution time — the binding, never an id.
+
+    A plan is compiled BEFORE anything is created, so the id of a list that does not exist yet
+    cannot be in it. Two shapes could express that: a placeholder token the executor substitutes,
+    or the list NAME plus an explicit statement of which op produces its id. This is the second,
+    deliberately — an unresolved placeholder string is TRUTHY, so it would sail straight past
+    `graph.unbound_select` and write `ReferredList:"{{...}}"`, a PUT 200 whose publish then dies
+    `500 MetadataError` with zero diagnostic content (CLAUDE.md Write path). Leaving
+    `referred_list` at None instead means an executor that ignores this binding is REFUSED loudly
+    at the write ("field 'Urgency' is Type Select with no referred_list — ..."), which is the
+    failure this engine prefers every time: fail loud, never write a value nothing backs.
+
+    `from_op` is `"create_list"` for an engine-created list — the id is the `_id` that op's own
+    forge_create_list call returns, and OP_ORDER already runs create_list first. It is None for a
+    `personal_data` list: PDPA (D2/D9) keeps that one HUMAN-MADE, never routed into
+    forge_create_list, so its id is read back BY NAME off the tenant instead.
+    """
+    return {"list_name": list_spec.name,
+            "from_op": None if list_spec.personal_data else "create_list",
+            "personal_data": list_spec.personal_data}
 
 
 def _op_apply_fields(spec: AppSpec) -> tuple[Op, ...]:
@@ -1013,8 +1055,17 @@ def _op_apply_fields(spec: AppSpec) -> tuple[Op, ...]:
     resolved `section` (its own `FieldReq.section`, or its stage's implicit default) and its
     per-type `options` both ride along in the per-field dict — `_check_fields` has already
     guaranteed every stage/section reference here is valid, so this function only groups.
+
+    C1: every field also carries `referred_list` + `referred_list_from`, the pair that keeps the
+    governed path executable now that `graph.apply_changes` REFUSES a Select with no
+    `referred_list`. `referred_list` is ALWAYS None here (no id exists at compile time) and
+    `referred_list_from` is the binding the executor resolves — see `_referred_list_binding` for
+    why a binding and not a placeholder. A non-Select carries both as None: stating the ABSENCE
+    of a binding, rather than omitting the keys, is what makes "this field takes no list" a fact
+    a reader can check instead of a key nobody thought about.
     """
     stage_names = [s.name for s in spec.stages.stages]
+    lists_by_name = {l.name: l for l in spec.master_data.lists}
     by_stage: dict[str, list[FieldReq]] = {name: [] for name in stage_names}
     for f in spec.data_model.fields:
         by_stage[f.stage].append(f)
@@ -1032,13 +1083,27 @@ def _op_apply_fields(spec: AppSpec) -> tuple[Op, ...]:
                 "fields": tuple(
                     {"name": f.name, "type": f.type.value, "required": f.required,
                      "section": f.section if f.section is not None else name,
-                     "list_name": f.list_name, "options": dict(f.options)}
+                     "list_name": f.list_name, "options": dict(f.options),
+                     # no id can exist yet — `_check_select_fields_have_list` has already
+                     # guaranteed a Select's list_name resolves, so this lookup never fails.
+                     "referred_list": None,
+                     "referred_list_from": (_referred_list_binding(lists_by_name[f.list_name])
+                                            if f.type is FieldType.SELECT else None)}
                     for f in fields
                 ),
                 "sequence": None if sequence is None
                     else {"prefix": sequence.prefix, "padding": sequence.padding},
             },
-            why=f"fields for stage {name!r} (Node-graph invariants: Field needs Model + CreatedAt)",
+            why=f"fields for stage {name!r} (Node-graph invariants: Field needs Model + CreatedAt). "
+                f"Every Select carries `referred_list: None` plus a `referred_list_from` BINDING, "
+                f"never an id — a plan is compiled before anything is created. THE EXECUTOR MUST "
+                f"RESOLVE IT before calling forge_apply_fields: take the `_id` returned by the "
+                f"preceding create_list op for that `list_name` (OP_ORDER runs create_list first), "
+                f"or, when `from_op` is None (a personal_data list, human-made per PDPA), the id "
+                f"of the human-made list of that name read off the tenant. Left unresolved the "
+                f"write REFUSES the field loudly, which is the intended failure: a Select written "
+                f"with no ReferredList PUTs 200 and its publish dies 500 MetadataError with zero "
+                f"diagnostics",
         ))
     return tuple(ops)
 

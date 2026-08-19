@@ -618,6 +618,79 @@ def test_create_list_precedes_apply_fields() -> None:
     assert OP_ORDER.index("create_list") < OP_ORDER.index("apply_fields")
 
 
+# ---- C1: the create_list -> apply_fields BINDING, without which the governed path is dead ------
+# `graph.apply_changes` now REFUSES a Select with no `referred_list` (a bare Select PUTs 200 and
+# its publish dies 500 MetadataError with zero diagnostics). A compiled `apply_fields` op that
+# carries only `list_name` therefore hard-refuses at execution on EVERY dropdown — the documented
+# governed path (intake -> approve -> compile -> BuildPlan) broken for nearly every app. The op
+# must state, explicitly, where the id comes from; a plan compiled before anything exists can
+# never carry the id itself.
+
+def _apply_field(plan: BuildPlan, stage: str, field_name: str) -> dict:
+    op = next(o for o in plan.ops if o.kind == "apply_fields" and o.args["stage"] == stage)
+    return next(f for f in op.args["fields"] if f["name"] == field_name)
+
+
+def test_apply_fields_binds_every_select_to_the_list_the_plan_creates() -> None:
+    """The binding, stated in the payload: the Select names its list AND the op whose result
+    supplies the id. `referred_list` itself stays None — a compile-time id would be a fiction."""
+    plan = compile_spec(_full_spec())
+    created = {op.args["name"] for op in plan.ops if op.kind == "create_list"}
+    for stage, field, list_name in (("Intake", "Urgency", "Urgency Levels"),
+                                    ("Diagnose", "Repairable", "Yes No")):
+        got = _apply_field(plan, stage, field)
+        assert got["referred_list"] is None, "no id can exist at compile time"
+        assert got["referred_list_from"] == {"list_name": list_name, "from_op": "create_list",
+                                             "personal_data": False}
+        assert list_name in created, "the op the binding names must actually be in the plan"
+
+
+def test_apply_fields_states_the_substitution_contract_in_its_why() -> None:
+    """The contract travels with the op, not in a reader's head: WHO substitutes the id, from
+    WHERE, and what happens if nobody does."""
+    plan = compile_spec(_full_spec())
+    why = next(op for op in plan.ops
+               if op.kind == "apply_fields" and op.args["stage"] == "Intake").why
+    assert "referred_list_from" in why and "create_list" in why
+    assert "referred_list" in why
+
+
+def test_a_personal_data_list_binds_to_the_human_made_list_not_to_create_list() -> None:
+    """PDPA (D2/D9) survives the binding: a personal_data list is never routed into
+    forge_create_list, so its Select's id comes from the HUMAN-made list, and the binding says so
+    (`from_op` None) instead of naming an op that must not run."""
+    full = _full_spec()
+    flagged = tuple(dataclasses.replace(l, personal_data=(l.name == "Urgency Levels"))
+                    for l in full.master_data.lists)
+    plan = compile_spec(dataclasses.replace(
+        full, master_data=dataclasses.replace(full.master_data, lists=flagged)))
+    got = _apply_field(plan, "Intake", "Urgency")
+    assert got["referred_list_from"] == {"list_name": "Urgency Levels", "from_op": None,
+                                         "personal_data": True}
+    by_name = {op.args["name"]: op for op in plan.ops if op.kind == "create_list"}
+    assert "HUMAN-GATED" in by_name["Urgency Levels"].why  # the PDPA gate itself is untouched
+
+
+def test_a_non_select_field_carries_no_list_binding_at_all() -> None:
+    """The control: only a Select takes a ReferredList, so every other field states the ABSENCE
+    of a binding rather than leaving the key off and making 'no list' unaskable."""
+    plan = compile_spec(_full_spec())
+    got = _apply_field(plan, "Intake", "Unit Name")
+    assert got["referred_list"] is None and got["referred_list_from"] is None
+
+
+def test_a_select_with_no_backing_list_refuses_at_compile_naming_its_coverage_row() -> None:
+    """ADR-0004: a dropdown backed by no list at all is refused at COMPILE, naming its coverage
+    row — never left to fail at write time with a 500 nobody can read."""
+    full = _full_spec()
+    bad = _replace_data_model(full, fields=tuple(
+        dataclasses.replace(f, list_name=None) if f.name == "Urgency" else f
+        for f in full.data_model.fields
+    ))
+    with pytest.raises(ValueError, match="word-list-dropdown"):
+        compile_spec(bad)
+
+
 # ---- M3: gate polarity resolved against real fields, not a self-declared flag ------------------
 
 def test_check_loop_gate_unknown_field_raises() -> None:

@@ -2704,7 +2704,9 @@ def run_doctor(
     proves a Resource exists, never that anyone is in the role). The tool has the network, so it
     reads `GET .../member` and folds the verdict into the same `problems` list, its own `members`
     bucket, and `members_found`. A roster this tool could not READ is recorded in
-    `member_fetch_error` and never counted as populated.
+    `member_fetch_error`, never counted as populated, AND recorded in `unvalidated` — an
+    unreadable roster is UNKNOWN, not healthy, and the audit says so instead of reporting a clean
+    bill of health for a claim it never checked.
     """
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
@@ -2733,6 +2735,7 @@ def run_doctor(
 
     problems = list(report.problems)
     checked = dict(report.checked)
+    unvalidated = list(report.unvalidated)
 
     # the blind spot the graph cannot close: an AppRole assignee with nobody in the role
     assignees = [v for v in draft.values()
@@ -2745,6 +2748,20 @@ def run_doctor(
         roster = client.get_members(kind, flow_id)
         if isinstance(roster, Err):
             member_error = roster.message
+            # UNKNOWN is not healthy. Recording the error in its own key was only half the job:
+            # the audit still reported `ok` for the one claim it never managed to check, so
+            # "doctor is clean" could not distinguish a wired flow from an unreadable roster —
+            # which is the whole reason this rule exists. It lands in `unvalidated` rather than
+            # `problems` for the same reason a list whose items would not fetch does (the
+            # `list_fetch_errors` precedent above): the FLOW is not known to be broken, the TOOL
+            # failed to read, and flagging a network failure as a graph defect would false-flag a
+            # perfectly wired flow. Never silently accepted, never silently flagged.
+            unvalidated.append(
+                f"membership of {len(assignees)} AppRole assignee(s) NOT validated — the live "
+                f"member roster could not be read ({member_error}); a flow with assignees and an "
+                f"EMPTY roster fails publish with a bare metadata error (CLAUDE.md > Members "
+                f"first), and this run cannot tell you which case this is — re-run forge_doctor, "
+                f"or read the roster with forge_member_batch's own report")
         else:
             members_found = len(roster)
             if not roster:
@@ -2758,7 +2775,7 @@ def run_doctor(
         "ok": not problems,
         "problems": problems,
         "checked": checked,
-        "unvalidated": list(report.unvalidated),
+        "unvalidated": unvalidated,
         "unvalidatable_scripts": report.unvalidatable_scripts,
         "list_ids_checked": sorted(list_options),
         "list_fetch_errors": list_errors,
@@ -2811,14 +2828,14 @@ class MemberReport:
                                           # caller can remap a step->name table onto step->a00_id for
                                           # build_workflow's `roles=`/step assignees. Empty on the
                                           # sibling-harvest path (which carries ids in role_ids).
-    roles_seen: int = 0                  # app-scoped AppRole records the ACCOUNT list returned on
-                                          # this call -- the discovery population, reported next to
-                                          # `applied` so "granted 1 of the 2 roles that exist" can
-                                          # never be silent (live 2026-08-19: it was). 0 on any
-                                          # path that discovers nothing -- the sibling harvest,
-                                          # and apply_member_roles' caller-named set.
-    roles_unusable: tuple[str, ...] = ()  # seen by discovery, NOT grantable (no `_id` or no
-                                          # `Name` on the list record) -- the bucket that keeps
+    roles_seen: int = 0                  # every record discovery RECEIVED on this call, counted
+                                          # before any filter -- reported next to `applied` so
+                                          # "granted 1 of the 2 roles that exist" can never be
+                                          # silent (live 2026-08-19: it was). 0 on any path that
+                                          # discovers nothing -- the sibling harvest, and
+                                          # apply_member_roles' caller-named set.
+    roles_unusable: tuple[str, ...] = ()  # seen by discovery, NOT grantable (no `_id`, no `Name`,
+                                          # or not a record at all) -- the bucket that keeps
                                           # `roles_seen` == len(applied) + len(roles_unusable).
 
     def as_tool_result(self) -> dict[str, Any]:
@@ -2875,28 +2892,39 @@ def _apply_own_app_roles(client: KfClient, target_flow_id: str, kind: FlowKind) 
 
     Same read-verify-write shape as every other apply_* here: grant -> read back `get_members` ->
     every AppRole `_id` we posted lands in `verified` or `missing`, never silently unaccounted for.
+
+    ⚠️ `roles_seen` counts what the ROUTE returned, not what survived a type filter. A record that
+    is not a dict at all used to be dropped before the count — the route answered with two records
+    and the report said it saw one, so `seen == granted + unusable` held only because the dropped
+    record never entered it (the output-invariant bug, restated one bucket over). `list_app_roles`
+    only filters non-dicts when it is SCOPING to an app id; called with `app_id=None` it returns
+    the account route's bare array verbatim, so this is a reachable shape, not a hypothetical.
+    `apply_member_batch`'s harvest path already counted its own unusable records this way; the two
+    paths now agree.
     """
     app_id = client._cfg.app_id
     roles = client.list_app_roles(app_id)
     if isinstance(roles, Err):
         return roles
-    scoped = [r for r in roles if isinstance(r, dict)]
-    usable = [r for r in scoped if r.get("_id") and r.get("Name")]
-    # Every app-scoped record the account list returned lands in exactly one bucket: usable ->
-    # granted, or unusable -> named here. A record with no `_id` or no `Name` cannot be posted to
-    # member/batch at all, and dropping it silently is how "granted 1 of 2" reads as success.
+    usable = [r for r in roles if isinstance(r, dict) and r.get("_id") and r.get("Name")]
+    # Every record the account list returned lands in exactly one bucket: usable -> granted, or
+    # unusable -> named here. A record with no `_id`/`Name` — or one that is no record at all —
+    # cannot be posted to member/batch, and dropping it silently is how "granted 1 of 2" reads as
+    # success.
     unusable = tuple(sorted(
-        f"{r.get('_id') or r.get('Name') or '<blank>'} "
-        f"(no {'Name' if r.get('_id') else '_id'} on the account list record)"
-        for r in scoped if not (r.get("_id") and r.get("Name"))
+        (f"{r.get('_id') or r.get('Name') or '<blank>'} "
+         f"(no {'Name' if r.get('_id') else '_id'} on the account list record)"
+         if isinstance(r, dict) else
+         f"{r!r} (not a record — the account list returned a non-dict)")
+        for r in roles if not (isinstance(r, dict) and r.get("_id") and r.get("Name"))
     ))
     if not usable:
         return MemberReport(
             target_flow_id=target_flow_id, source_flow_id=None, harvested=(), applied=(),
-            verified=(), missing=(), roles_seen=len(scoped), roles_unusable=unusable,
+            verified=(), missing=(), roles_seen=len(roles), roles_unusable=unusable,
             note=f"no existing flow with members found in KF_APP to harvest from, and the "
                  f"account-level AppRole list has no usable role scoped to app {app_id!r} either "
-                 f"(saw {len(scoped)} app-scoped record(s)) — this is NOT a dead end and needs no "
+                 f"(saw {len(roles)} app-scoped record(s)) — this is NOT a dead end and needs no "
                  f"human: call forge_create_app_role to create one (POST /app_role/2/{{acct}}, "
                  f"PROVEN live 2026-08-08 — it scopes the role to KF_APP in a single call), then "
                  f"re-run forge_member_batch. forge_add_member_roles does both in one call.",
@@ -2924,13 +2952,13 @@ def _apply_own_app_roles(client: KfClient, target_flow_id: str, kind: FlowKind) 
     return MemberReport(
         target_flow_id=target_flow_id, source_flow_id=None, harvested=names, applied=role_ids,
         verified=verified, missing=missing, role_ids=role_ids,
-        roles_seen=len(scoped), roles_unusable=unusable,
+        roles_seen=len(roles), roles_unusable=unusable,
         # SAW vs GRANTED, always both, even when they agree. Live 2026-08-19 this path granted 1
         # of 2 AppRoles created minutes earlier against the same app and said nothing about the
         # second — with only a granted count in the note there is no way to tell a discovery gap
         # (the account list returned one role) from a grant gap (it returned two and one was
         # dropped). The two numbers make that unambiguous from the report alone.
-        note=f"saw {len(scoped)} AppRole(s) scoped to app {app_id!r} at the account level, "
+        note=f"saw {len(roles)} AppRole(s) scoped to app {app_id!r} at the account level, "
              f"granted {len(members)} (no sibling flow had members to harvest) — "
              f"Role={_ACCOUNT_GRANT_ROLE!r} "
              f"Permission={list(_ACCOUNT_GRANT_PERMISSION)!r}: {', '.join(names)}"
@@ -3411,7 +3439,11 @@ class FlowCreateReport:
     """What `create_flow_any` made. The three `template_*` buckets are populated only on the
     `process` branch, which is the one that clones the identity shell (S4a — the same blindness
     `ProcessCreateReport` fixes for create_process, on the other tool that runs that clone). They
-    stay empty for every born-live kind, which has no scaffold to inventory."""
+    stay empty for every born-live kind, which has no scaffold to inventory.
+
+    `template_read_error` is the same field, for the same reason, as `ProcessCreateReport`'s: an
+    inventory that could not be READ must never be indistinguishable from a template that brought
+    nothing in. The two reports now make that distinction identically."""
     kind: str
     flow_id: str
     name: str
@@ -3421,6 +3453,7 @@ class FlowCreateReport:
     template_sections: tuple[str, ...] = ()
     template_required_fields: tuple[str, ...] = ()
     template_steps: tuple[str, ...] = ()
+    template_read_error: str | None = None
 
     def as_tool_result(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -3430,9 +3463,14 @@ class FlowCreateReport:
             "template_sections": list(self.template_sections),
             "template_required_fields": list(self.template_required_fields),
             "template_steps": list(self.template_steps),
+            "template_read_error": self.template_read_error,
             "isError": not self.flow_id,
         }
-        if self.from_template:
+        if self.template_read_error:
+            out["note"] = (f"could not read the scaffold back to inventory it: "
+                           f"{self.template_read_error} — the three template_* buckets are empty "
+                           f"because nothing was READ, not because the shell brought nothing in")
+        elif self.from_template:
             out["note"] = (
                 f"the process template shell brought in {len(self.template_sections)} section(s) "
                 f"and {len(self.template_required_fields)} Required field(s) you did not ask for. "
@@ -3495,15 +3533,25 @@ def create_flow_any(
         if isinstance(written, Err):
             client.delete_flow("process", fid)
             return written
-        # what the scaffold ACTUALLY landed, off the write's own read-back (`put_draft` returns
-        # the server's copy) — never off the template file that was sent.
-        inv = scaffold_inventory(written if isinstance(written, dict) else scaffolded)
+        # What the scaffold ACTUALLY landed, off an explicit GET of the live flow — the same
+        # deliberate extra read `create_process` does, and for the same reason. This used to
+        # inventory the PUT RESPONSE with a fallback to `scaffolded`, the payload that was SENT:
+        # an inventory that can echo the request is not evidence (THE RULE), and a PUT that
+        # answers with an ack rather than the graph inventoried to three empty tuples with no
+        # error anywhere — indistinguishable from a template that genuinely brought nothing in,
+        # which is precisely the distinction `template_read_error` exists to make.
+        final = client.get_draft("process", fid)
+        if isinstance(final, Err):
+            inv, read_error = ScaffoldInventory((), (), ()), final.message
+        else:
+            inv, read_error = scaffold_inventory(final), None
         return FlowCreateReport(kind="process", flow_id=fid, name=name, status="Draft",
                                 born_live=False,
                                 from_template=bool(extra.get("from_template", True)),
                                 template_sections=inv.sections,
                                 template_required_fields=inv.required_fields,
-                                template_steps=inv.steps)
+                                template_steps=inv.steps,
+                                template_read_error=read_error)
 
     if kind == "list":
         got = client.create_list(name)

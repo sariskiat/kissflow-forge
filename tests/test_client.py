@@ -793,7 +793,13 @@ def test_run_doctor_never_reads_members_for_a_flow_with_no_approle_assignee() ->
 
 
 def test_run_doctor_records_a_member_fetch_failure_without_falsely_passing() -> None:
-    """A roster this tool could not read is recorded, never silently treated as populated."""
+    """A roster this tool could not read is recorded, never silently treated as populated.
+
+    G4: recording the error in its own key was only half of it — the audit went on reporting a
+    clean bill of health for a claim it never managed to check. An unreadable roster is UNKNOWN,
+    not healthy, so it lands in `unvalidated`, the module's own bucket for exactly this ("never
+    silently accepted, never silently flagged"), following the `list_fetch_errors` precedent: the
+    fetch failure is recorded AND the claim that depended on it stops counting as validated."""
     class _Broken(FakeClient):
         def get_members(self, kind, flow_id):  # type: ignore[override]
             return Err("http", "member roster fetch failed")
@@ -803,6 +809,22 @@ def test_run_doctor_records_a_member_fetch_failure_without_falsely_passing() -> 
     assert isinstance(got, dict)
     assert got["member_fetch_error"] == "member roster fetch failed"
     assert not any("ZERO members" in p for p in got["problems"]), got["problems"]
+
+    unvalidated = got["unvalidated"]
+    assert any("member" in u and "member roster fetch failed" in u for u in unvalidated), \
+        f"the un-checkable membership claim landed in NO bucket: {got}"
+    assert got["members_found"] is None                    # never counted as populated
+
+
+def test_run_doctor_leaves_the_membership_claim_out_of_unvalidated_when_it_was_read() -> None:
+    """The other half of G4's bucket rule: a roster that WAS read is validated, so nothing about
+    membership belongs in `unvalidated` — the entry must mean "could not check", not "checked"."""
+    c = FakeClient(_draft_with_an_approle_assignee())
+    c.members[("process", "F1")] = [{"_id": "Ro_lead_0003", "Name": "Lead", "Kind": "AppRole",
+                                     "Role": "Member", "Permission": "InitiateItems"}]
+    got = run_doctor(c, "F1")
+    assert isinstance(got, dict)
+    assert not any("member" in u for u in got["unvalidated"]), got["unvalidated"]
 
 
 # ---- apply_layout: the pure validation runs BEFORE the live GET -------------------------------
@@ -2518,6 +2540,60 @@ def test_harvest_path_stays_quiet_when_every_record_was_granted() -> None:
     assert rep.roles_seen == 1 and rep.as_tool_result()["roles_granted"] == 1
 
 
+class _NonDictRoleClient(FakeClient):
+    """A client whose account-level AppRole list returns a record that is not a dict at all.
+
+    Real, not hypothetical: `KfClient.list_app_roles` only filters non-dicts when it is SCOPING
+    to an app id — called with `app_id=None` (a config with no app scope) it returns the route's
+    bare array verbatim, whatever the account replies with. `FakeClient.list_app_roles` cannot
+    stand in here: its own scope filter calls `.get` on every record."""
+
+    def list_app_roles(self, app_id=None):  # type: ignore[override]
+        return list(self.app_roles)
+
+
+def test_a_non_dict_app_role_record_still_lands_in_a_counted_bucket() -> None:
+    """Doctrine 2, one line above where the same class was closed: `scoped = [r for r in roles if
+    isinstance(r, dict)]` dropped a non-dict record into NOTHING — the route returned two records
+    and the report said it saw one. `seen == granted + unusable` held only because the dropped
+    record never entered the count, which is exactly the bug that invariant exists to catch. The
+    harvest path already handles a non-dict correctly; the two must agree."""
+    c = _NonDictRoleClient(_bare_process_draft())
+    c.flows["process"] = []
+    c.app_roles = ["not-a-dict", {"_id": "R1", "Name": "Tech", "_application_id": "App"}]  # type: ignore[list-item]
+    rep = apply_member_batch(c, "F_target")
+    assert isinstance(rep, MemberReport)
+    assert rep.applied == ("R1",)
+    assert rep.roles_seen == 2, "the route returned TWO records — the report must say so"
+    assert len(rep.roles_unusable) == 1 and "not-a-dict" in rep.roles_unusable[0]
+    assert rep.roles_seen == len(rep.applied) + len(rep.roles_unusable)
+    assert rep.note is not None and "seen but NOT granted" in rep.note
+
+
+def test_a_non_dict_app_role_record_is_counted_even_when_nothing_is_grantable() -> None:
+    """The other arm of the same bucket rule: with NO usable role at all the early-return report
+    must still count what the route returned, or 'saw 0 app-scoped records' reads as an empty
+    account when the account actually answered with something unusable."""
+    c = _NonDictRoleClient(_bare_process_draft())
+    c.flows["process"] = []
+    c.app_roles = ["not-a-dict"]  # type: ignore[list-item]
+    rep = apply_member_batch(c, "F_target")
+    assert isinstance(rep, MemberReport)
+    assert rep.applied == () and rep.roles_seen == 1
+    assert len(rep.roles_unusable) == 1 and "not-a-dict" in rep.roles_unusable[0]
+    assert rep.roles_seen == len(rep.applied) + len(rep.roles_unusable)
+
+
+def test_every_app_role_record_is_counted_when_they_are_all_usable() -> None:
+    """The control: a clean account list grows no unusable bucket and still reconciles."""
+    c = _NonDictRoleClient(_bare_process_draft())
+    c.flows["process"] = []
+    c.app_roles = [{"_id": "R1", "Name": "Tech", "_application_id": "App"}]
+    rep = apply_member_batch(c, "F_target")
+    assert isinstance(rep, MemberReport)
+    assert rep.roles_seen == 1 and rep.applied == ("R1",) and rep.roles_unusable == ()
+
+
 # =================================================================================================
 # S3 — LIVE FINDING: ONE forge_set_visibility call returned ~15,000 TOKENS.
 #
@@ -2785,6 +2861,53 @@ def test_create_flow_any_process_also_states_the_template_inventory() -> None:
     assert got["template_required_fields"] == ["Branch", "Department", "Description",
                                                "Manager Display Name",
                                                "Requestor Employee Id Alt"]
+
+
+class _AckOnlyPutClient(_CreateProcessClient):
+    """A client whose draft PUT answers with an ACK, not the graph — `{"_id":..., "success":true}`.
+
+    The live API is under no obligation to echo the whole draft back, and `create_flow_any` read
+    its template inventory straight off that response. An ack inventories to three empty tuples
+    with no error anywhere: indistinguishable from a template that genuinely brought nothing in."""
+
+    def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+        super().put_draft(kind, flow_id, new, expect_version)
+        return {"_id": flow_id, "success": True}
+
+
+def test_create_flow_any_inventories_the_live_draft_never_the_put_response() -> None:
+    """THE RULE: an inventory that can fall back to what the caller SENT is not evidence. The whole
+    point of these three buckets is to state what the template silently injected — the trap that
+    broke a live build (four unexpected sections, three unexpected Required fields) — so they must
+    come off a real read of the flow, exactly as create_process's do."""
+    got = create_flow_any(_AckOnlyPutClient(), "process", "Expense Approval").as_tool_result()
+    assert got["template_sections"] == ["In-Kissflow Template", "Public Form Template",
+                                        "Request Details", "Request Info", "System"]
+    assert got["template_steps"] == ["Completed", "Manager Approve", "Start"]
+    assert got["template_required_fields"], "the shipped shell really does carry Required fields"
+    assert got["template_read_error"] is None
+
+
+def test_create_flow_any_states_an_unreadable_template_read() -> None:
+    """The sibling half of the distinction `ProcessCreateReport` was created to make: buckets that
+    are empty because nothing was READ must never look identical to buckets that are empty because
+    nothing was there. `create_flow_any` had no `template_read_error` field at all."""
+    class _NoReadBack(_CreateProcessClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reads = 0
+
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            self.reads += 1
+            if self.reads > 1:                     # the scaffold read succeeds, the read-back dies
+                return Err("http", "GET draft -> 503")
+            return self.draft
+
+    got = create_flow_any(_NoReadBack(), "process", "Expense Approval").as_tool_result()
+    assert got["flow_id"] == "F1", "the flow was created — an unreadable read-back is not a failure"
+    assert got["template_sections"] == [] and got["template_required_fields"] == []
+    assert got["template_read_error"] and "503" in got["template_read_error"]
+    assert "not because the shell brought nothing in" in got["note"]
 
 
 def test_create_flow_any_born_live_kinds_carry_no_template_inventory() -> None:

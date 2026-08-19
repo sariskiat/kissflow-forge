@@ -84,6 +84,11 @@ CLAIMS: dict[str, tuple[str, dict[str, Any], str]] = {
         {"flow_id": "F1", "fields": [{"name": "Tier", "type": "Select"}]},
         "referred_list",
     ),
+    "forge_add_table": (
+        "it is refused here instead, before any write",
+        {"flow_id": "F1", "name": "Items", "columns": [["Grade", "Select"]]},
+        "ReferredList",
+    ),
     "forge_add_goto_gate": (
         "rejected offline, before any write",
         {"flow_id": "F1", "target_activity_name": "Assess unit", "field_name": "Ticket No"},
