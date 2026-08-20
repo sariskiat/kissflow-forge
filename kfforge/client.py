@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter
 from collections.abc import Iterable
@@ -330,7 +331,15 @@ class KfClient:
         2026-08-12 (#52): `GET /user/2/{acct}/assignee?q=<query>` -> a bare array of assignee
         objects `{_id, Kind:"User", Email, Name}`, written onto a role VERBATIM."""
         c = self._cfg
-        return self._json("GET", f"{c.base}/user/2/{c.account}/assignee?q={query}")
+        # PERCENT-ENCODE the query. It is free caller text — a person's name — and this engine is
+        # driven in Thai (kfforge.intake.questions is a Thai interview script), so a non-ASCII
+        # query is the NORMAL case here, not an edge one. Interpolated raw, urllib.request encodes
+        # the URL as ASCII and a Thai name dies with UnicodeEncodeError, which crosses the tool
+        # boundary as an EXCEPTION rather than as data (doctrine: fail loud, but as `Err`). A
+        # space or `&` in a name was equally broken, just more quietly — it truncated the query.
+        # `safe=""` so `&`, `=`, `/` and `?` inside a name are escaped too, not treated as syntax.
+        return self._json("GET", f"{c.base}/user/2/{c.account}/assignee"
+                                 f"?q={urllib.parse.quote(query, safe='')}")
 
     def delete_member(self, kind: FlowKind, flow_id: str, role_id: str) -> Any | Err:
         """Remove an AppRole's grant on a flow entirely — the "No access" tier
@@ -3259,13 +3268,26 @@ class RoleUsersReport:
     already_present: tuple[str, ...]
     not_found: tuple[str, ...]
     user_count: int | None
+    groups_added: tuple[str, ...] = ()
+    groups_already_present: tuple[str, ...] = ()
+    groups_unverified: tuple[str, ...] = ()
+    group_count: int | None = None
+    groups_note: str | None = None
 
     def as_tool_result(self) -> dict[str, Any]:
-        return {
+        out = {
             "role_id": self.role_id, "added": list(self.added),
             "already_present": list(self.already_present), "not_found": list(self.not_found),
-            "user_count": self.user_count, "isError": bool(self.not_found),
+            "user_count": self.user_count,
+            "groups_added": list(self.groups_added),
+            "groups_already_present": list(self.groups_already_present),
+            "groups_unverified": list(self.groups_unverified),
+            "group_count": self.group_count,
+            "isError": bool(self.not_found) or bool(self.groups_unverified),
         }
+        if self.groups_note:
+            out["groups_note"] = self.groups_note
+        return out
 
 
 def apply_add_role_users(
@@ -3273,6 +3295,7 @@ def apply_add_role_users(
     role_id: str,
     user_query: str | None = None,
     user_ids: list[dict[str, Any]] | None = None,
+    groups: list[dict[str, Any]] | None = None,
     app_id: str | None = None,
 ) -> RoleUsersReport | Err:
     """Grant one or more users onto an AppRole (#52's assignee-lookup + asymmetric role-write).
@@ -3287,8 +3310,15 @@ def apply_add_role_users(
     is not a tool error on its own — it lands in `not_found`, the same "state it, never silently
     drop it" discipline as every other audit in this pack.
     """
-    if user_query is None and not user_ids:
-        return Err("verify", "apply_add_role_users: give user_query or user_ids")
+    if user_query is None and not user_ids and not groups:
+        return Err("verify", "apply_add_role_users: give user_query, user_ids or groups")
+
+    for g in groups or []:
+        if not isinstance(g, dict) or not g.get("_id"):
+            return Err("verify",
+                       f"apply_add_role_users: each group must be an assignee-shaped dict with an "
+                       f"_id, e.g. {{'_id': 'everyone', 'Kind': 'Group', 'Name': 'Everyone'}} — got "
+                       f"{g!r}")
 
     detail = client.get_app_role(role_id)
     if isinstance(detail, Err):
@@ -3311,12 +3341,34 @@ def apply_add_role_users(
     already = tuple(str(c["_id"]) for c in candidates if str(c.get("_id")) in existing_ids)
     new_ones = [c for c in candidates if str(c.get("_id")) not in existing_ids]
 
-    if not new_ones:
-        return RoleUsersReport(role_id=role_id, added=(), already_present=already,
-                               not_found=tuple(not_found), user_count=detail.get("UserCount"))
+    # GROUPS ride the SAME PUT under their own write key. Reported live by an operator and
+    # reproduced: a group object placed in `Users` is refused with UserDoesNotExistError — the
+    # endpoint validates that array as users only. The body must carry BOTH keys:
+    #   {"Users": [...], "Groups": [{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}]}
+    # `Groups` is a second asymmetric write key alongside `Users` (which reads back as `Members`).
+    # ⚠️ The READ key for groups is UNCAPTURED on this tenant: the detail route carries a
+    # `GroupCount` (nullable) but no group LIST that we have ever seen. So existing groups cannot
+    # be enumerated, and this write therefore CANNOT promise to preserve them the way the `Users`
+    # merge preserves members. That is stated in `groups_note` rather than assumed away, and the
+    # read-back verifies by `GroupCount` movement, never by claiming the group is present.
+    existing_groups = _existing_group_list(detail)
+    group_ids = [str(g["_id"]) for g in (groups or [])]
+    groups_already = tuple(gid for gid in group_ids
+                           if gid in {str(g.get("_id")) for g in existing_groups})
+    new_groups = [g for g in (groups or []) if str(g["_id"]) not in
+                  {str(e.get("_id")) for e in existing_groups}]
 
+    if not new_ones and not new_groups:
+        return RoleUsersReport(role_id=role_id, added=(), already_present=already,
+                               not_found=tuple(not_found), user_count=detail.get("UserCount"),
+                               groups_already_present=groups_already,
+                               group_count=detail.get("GroupCount"))
+
+    count_before = detail.get("GroupCount")
     body = _role_write_body(detail)
     body["Users"] = existing_members + new_ones
+    if new_groups or existing_groups:
+        body["Groups"] = existing_groups + new_groups
 
     written = client.put_app_role(role_id, body, app_id)
     if isinstance(written, Err):
@@ -3329,10 +3381,54 @@ def apply_add_role_users(
     added = tuple(str(c["_id"]) for c in new_ones if str(c["_id"]) in live_ids)
     unverified = tuple(str(c["_id"]) for c in new_ones if str(c["_id"]) not in live_ids)
 
+    # Group read-back: verify by the only signal this tenant exposes. A group list, if the detail
+    # ever grows one, wins; otherwise GroupCount MOVING is the evidence. When neither is available
+    # the group lands in `groups_unverified` — written, not proven — because a write we cannot read
+    # back is exactly what THE RULE says never to report as success.
+    live_groups = {str(g.get("_id")) for g in _existing_group_list(read_back)}
+    count_after = read_back.get("GroupCount")
+    groups_note = None
+    if live_groups:
+        g_added = tuple(str(g["_id"]) for g in new_groups if str(g["_id"]) in live_groups)
+        g_unver = tuple(str(g["_id"]) for g in new_groups if str(g["_id"]) not in live_groups)
+    elif new_groups and isinstance(count_after, int) and isinstance(count_before, int) \
+            and count_after > count_before:
+        g_added, g_unver = tuple(str(g["_id"]) for g in new_groups), ()
+        groups_note = (f"verified by GroupCount {count_before} -> {count_after} only — this tenant "
+                       f"exposes no group LIST on the role detail, so membership is proven by count "
+                       f"movement, not by naming the group back")
+    elif new_groups:
+        g_added, g_unver = (), tuple(str(g["_id"]) for g in new_groups)
+        groups_note = (f"WRITTEN BUT UNPROVEN: no group list on the role detail and GroupCount did "
+                       f"not move ({count_before!r} -> {count_after!r}). Confirm in the builder UI "
+                       f"before relying on it — a 200 from the write proves nothing (THE RULE)")
+    else:
+        g_added, g_unver = (), ()
+    if new_groups and not existing_groups and groups_note is None:
+        groups_note = ("existing groups could not be enumerated (no group list on the role detail), "
+                       "so this write cannot promise it preserved any that were already there")
+
     return RoleUsersReport(
         role_id=role_id, added=added, already_present=already,
         not_found=tuple(not_found) + unverified, user_count=read_back.get("UserCount"),
+        groups_added=g_added, groups_already_present=groups_already,
+        groups_unverified=g_unver, group_count=count_after, groups_note=groups_note,
     )
+
+
+def _existing_group_list(detail: dict[str, Any]) -> list[dict[str, Any]]:
+    """Whatever group LIST an AppRole detail exposes, or `[]` when it exposes none.
+
+    Checked under both the write key (`Groups`) and the users-style read key (`Members` has its
+    own asymmetry, so a group list could plausibly arrive under either). Returns only dicts
+    carrying an `_id`, mirroring how the member merge filters candidates. `[]` means "no list was
+    exposed" — NOT "there are no groups"; the caller must not read absence as emptiness, which is
+    why every path that uses this also reports `group_count` and a note."""
+    for key in ("Groups", "GroupMembers"):
+        raw = detail.get(key)
+        if isinstance(raw, list):
+            return [g for g in raw if isinstance(g, dict) and g.get("_id")]
+    return []
 
 
 # Tier -> (Role, Permission[]) wire map, FLOW-TYPE-DEPENDENT (shapes/app_role_grant.json note 0,

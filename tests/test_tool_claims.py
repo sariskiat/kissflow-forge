@@ -49,6 +49,11 @@ from test_client import FakeClient
 # it claims to check, and it stops the text quietly losing a promise the code still keeps.
 # --------------------------------------------------------------------------------------------
 CLAIMS: dict[str, tuple[str, dict[str, Any], str]] = {
+    "forge_add_role_users": (
+        "is refused",
+        {"role_id": "R1", "groups": [{"Name": "Everyone"}]},
+        "assignee-shaped dict with an _id",
+    ),
     "kf_plan_step_visibility": (
         "is refused as DATA here",
         {"draft": None, "owners": {"NoSuchSection": ["Start"]}},

@@ -7,6 +7,8 @@ import pytest
 
 from kfforge.client import (
     ApplyReport,
+    RoleUsersReport,
+    apply_add_role_users,
     BranchConditionReport,
     DeleteFieldsReport,
     Err,
@@ -2996,3 +2998,98 @@ def test_every_sibling_payload_stays_small_at_37_fields(label: str) -> None:
 
     body = json.dumps(_sibling_payloads()[label])
     assert len(body) < 3_000, f"{label} returned {len(body)} bytes for 37 fields"
+
+
+# ---- operator-reported bugs (2026-08-20) ------------------------------------------------------
+
+def test_get_assignee_percent_encodes_a_thai_query() -> None:
+    """Operator-reported: a Thai name died with UnicodeEncodeError — an EXCEPTION across the tool
+    boundary, not an Err (doctrine 7). This engine is driven in Thai (the intake interview is a
+    Thai script), so a non-ASCII assignee query is the NORMAL case, not an edge one."""
+    seen: dict[str, str] = {}
+    client = KfClient(KfConfig(key_id="k", key_secret="s", account="Ac1",
+                               domain="dev-x.example.com", app_id="A1"))
+    client._json = lambda m, u, d=None: seen.setdefault("url", u)      # type: ignore[assignment]
+
+    client.get_assignee("สมชาย")
+
+    seen["url"].encode("ascii")          # urllib does exactly this — it used to raise here
+    assert "%E0%B8%AA" in seen["url"], seen["url"]
+    assert "สมชาย" not in seen["url"]
+
+
+def test_get_assignee_escapes_characters_that_would_truncate_the_query() -> None:
+    """The quieter half of the same bug: a space or `&` in a name was not an error, it silently
+    truncated or corrupted the query, so the search returned the wrong people."""
+    seen: dict[str, str] = {}
+    client = KfClient(KfConfig(key_id="k", key_secret="s", account="Ac1",
+                               domain="dev-x.example.com", app_id="A1"))
+    client._json = lambda m, u, d=None: seen.setdefault("url", u)      # type: ignore[assignment]
+
+    client.get_assignee("a&b=c d")
+
+    assert seen["url"].endswith("?q=a%26b%3Dc%20d"), seen["url"]
+
+
+class _FakeRoleClient(KfClient):
+    """An AppRole whose detail exposes Members + a nullable GroupCount, and no group LIST — the
+    shape the live tenant actually returns."""
+
+    def __init__(self, group_count: int | None = 0) -> None:
+        self.detail = {"_id": "R1", "Name": "Tech", "Members": [], "UserCount": 0,
+                       "GroupCount": group_count}
+        self.body: dict[str, Any] | None = None
+        self._count = group_count
+
+    def get_app_role(self, role_id):                       # type: ignore[override]
+        d = dict(self.detail)
+        d["GroupCount"] = self._count
+        return d
+
+    def put_app_role(self, role_id, body, app_id=None):    # type: ignore[override]
+        self.body = body
+        if isinstance(self._count, int) and body.get("Groups"):
+            self._count = len(body["Groups"])
+        return {"ok": True}
+
+
+def test_add_role_users_writes_groups_under_their_own_key() -> None:
+    """Operator-reported: a group object placed in `Users` is refused UserDoesNotExistError. The
+    body must carry BOTH keys — Users for people, Groups for groups."""
+    c = _FakeRoleClient()
+    rep = apply_add_role_users(
+        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}])
+
+    assert isinstance(rep, RoleUsersReport)
+    assert c.body is not None
+    assert c.body["Groups"] == [{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}]
+    assert c.body["Users"] == [], "a group must never be smuggled into the Users array"
+    assert rep.groups_added == ("everyone",)
+    assert rep.as_tool_result()["isError"] is False
+
+
+def test_add_role_users_reports_a_group_it_cannot_prove_landed() -> None:
+    """THE RULE, applied to the weaker group read-back: GroupCount is the only signal this tenant
+    exposes. If it does not move, the group is WRITTEN BUT UNPROVEN — never reported as success."""
+    c = _FakeRoleClient(group_count=None)          # tenant exposes no usable count
+    rep = apply_add_role_users(
+        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}])
+
+    assert isinstance(rep, RoleUsersReport)
+    assert rep.groups_added == () and rep.groups_unverified == ("everyone",)
+    assert rep.as_tool_result()["isError"] is True
+    assert "UNPROVEN" in (rep.groups_note or "")
+
+
+def test_add_role_users_refuses_a_malformed_group_before_any_write() -> None:
+    c = _FakeRoleClient()
+    got = apply_add_role_users(c, "R1", groups=[{"Name": "Everyone"}])      # no _id
+
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "'_id'" in got.message or "_id" in got.message
+    assert c.body is None, "a refusal must not write first"
+
+
+def test_add_role_users_still_requires_at_least_one_grant() -> None:
+    got = apply_add_role_users(_FakeRoleClient(), "R1")
+    assert isinstance(got, Err) and "groups" in got.message

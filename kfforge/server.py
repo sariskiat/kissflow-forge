@@ -1578,13 +1578,28 @@ def forge_add_role_users(
     role_id: str,
     user_query: str | None = None,
     user_ids: list[dict[str, Any]] | None = None,
+    groups: Annotated[list[dict[str, Any]] | None, Field(description=(
+        "Groups to grant, as assignee-shaped dicts carrying an _id, e.g. "
+        "[{\"_id\": \"everyone\", \"Kind\": \"Group\", \"Name\": \"Everyone\"}] for the "
+        "whole-tenant grant. Rides the same write as `user_ids` but under its own wire key: a "
+        "group placed in `user_ids` is refused UserDoesNotExistError. Read-back is weaker than "
+        "for users \u2014 see the tool description."))] = None,
     app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only): grant one or more users onto an AppRole (#52). Give EITHER
     `user_query` (a name/email substring searched via `GET /user/2/{acct}/assignee?q=...`) OR
     `user_ids` (assignee objects `{_id, Kind, Email, Name}` a caller already resolved elsewhere)
-    — at least one is required. Existing members are never dropped: the write merges onto the
-    role's current `Members`, never replaces it.
+    — or `groups`, at least one of the three is required. Existing members are never dropped: the
+    write merges onto the role's current `Members`, never replaces it.
+
+    `groups` grants a GROUP rather than a person, e.g. `[{"_id": "everyone", "Kind": "Group",
+    "Name": "Everyone"}]` — the whole-tenant grant. Groups ride the SAME write under their own
+    key: a group object placed in `user_ids` is refused `UserDoesNotExistError`, because the
+    endpoint validates that array as users only. ⚠️ Read-back for groups is WEAKER than for
+    users: this tenant exposes a nullable `GroupCount` on the role detail but no group LIST, so a
+    granted group is verified by that count MOVING, lands in `groups_unverified` when it does not,
+    and `groups_note` states which happened. For the same reason this call cannot promise to
+    preserve groups that were already on the role — it cannot enumerate them.
 
     ⚠️ Asymmetric wire keys (CLAUDE.md Pages, RESOLVED 2026-08-12): the role reads back under
     `Members` but must be WRITTEN under `Users` — a body carrying `Members` instead 200s and
@@ -1596,7 +1611,7 @@ def forge_add_role_users(
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(apply_add_role_users(c, role_id, user_query=user_query, user_ids=user_ids,
-                                        app_id=app_id))
+                                        groups=groups, app_id=app_id))
 
 
 @mcp.tool(title="Grant permission tier", annotations=_LIVE_REPLACE)
