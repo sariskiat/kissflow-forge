@@ -745,8 +745,18 @@ PUT /app_role/2/{acct}/{role_id}?_application_id={app}
   read key is `Members` (mixed Users+Groups); `GroupCount` counts the groups
 ```
 
-- `forge_add_role_users` writes only `Users`; passing a Group through it fails
-  `UserDoesNotExistError`. Groups need the separate `Groups` key above.
+- ✅ **`forge_add_role_users` DOES support groups** — via its own `groups=`
+  parameter, which rides the same write under the `Groups` key and is REFUSED
+  unless `confirm_group_notification=True` is passed in the same call (a
+  fail-closed gate, verified live 2026-08-20: the call returns
+  `isError` and writes nothing without it). A group placed in `user_ids`
+  instead is correctly refused `UserDoesNotExistError` — that is the guardrail
+  working, NOT a missing capability.
+- 🚫 **Do not route around it.** Writing the `Groups` key yourself with a raw
+  `PUT /app_role/...` bypasses the confirmation gate entirely. That is exactly
+  how the 2026-08-20 incident happened: the tool refused, and the raw write was
+  used instead. If a tool refuses you, the refusal IS the answer — take it back
+  to the human, never re-implement the call underneath it.
 - Sending a SHORTER `Users`/`Groups` list does NOT prune the difference, and
   `{"Groups": []}`, `{"Groups": null}`, `{"RemoveUsers": [...]}`,
   `{"DeleteUsers": [...]}`, `{"Members": [...]}` all return
