@@ -51,8 +51,8 @@ from test_client import FakeClient
 CLAIMS: dict[str, tuple[str, dict[str, Any], str]] = {
     "forge_add_role_users": (
         "is refused",
-        {"role_id": "R1", "groups": [{"Name": "Everyone"}]},
-        "assignee-shaped dict with an _id",
+        {"role_id": "R1", "groups": [{"_id": "everyone", "Name": "Everyone"}]},
+        "confirm_group_notification=True",
     ),
     "kf_plan_step_visibility": (
         "is refused as DATA here",

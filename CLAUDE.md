@@ -712,6 +712,56 @@ live 37-column x 6-step case: 18,396 bytes of opaque `Column_x@Activity_y` pairs
 
 ## Members first
 
+🚨 **NEVER grant a broad group (`everyone`, an org-wide group, "All users") to
+an AppRole or to app membership. Kissflow FANS OUT A NOTIFICATION TO EVERY
+MEMBER the moment you do** — on a shared dev tenant that is a notification to
+the whole company, from an automated agent, for a throwaway PoC. Learned the
+hard way 2026-08-20: `everyone` was added to three AppRoles plus app
+membership to satisfy a "make it visible to everyone in dev" request, and every
+user on the tenant got pinged. The request was for VISIBILITY; the effect was
+BROADCAST. They are not the same thing, and the blast radius is other people's
+attention, which you cannot un-spend.
+
+- **Default to the acting user alone.** Add named individuals only, and only
+  the ones the human explicitly listed.
+- **A membership grant is an outward-facing action.** Treat "share this with
+  everyone / the whole team / the department" as requiring explicit human
+  confirmation of the RECIPIENT LIST first, the same as sending mail. Name the
+  people back to the human and wait, even when the request sounds routine.
+- **There is no undo.** See the removal gap below: you cannot take a user or a
+  group back out of an AppRole through this API at all. The only proven
+  recovery is to CREATE a replacement role, re-point the workflow's assignees
+  at it (`forge_build_workflow`, then rebuild the visibility matrix because
+  that wipes it), and `forge_delete_app_role` the polluted one. Verified live
+  2026-08-20 after the incident above.
+
+⚠️ **AppRole membership writes are ADD-ONLY, and the wire keys are asymmetric**
+(all proven live 2026-08-20):
+
+```
+PUT /app_role/2/{acct}/{role_id}?_application_id={app}
+  {"Users":  [{_id, Kind:"User"}, ...]}    -> adds users;  never removes
+  {"Groups": [{_id, Kind:"Group", Name}]}  -> adds a group; never removes
+  read key is `Members` (mixed Users+Groups); `GroupCount` counts the groups
+```
+
+- `forge_add_role_users` writes only `Users`; passing a Group through it fails
+  `UserDoesNotExistError`. Groups need the separate `Groups` key above.
+- Sending a SHORTER `Users`/`Groups` list does NOT prune the difference, and
+  `{"Groups": []}`, `{"Groups": null}`, `{"RemoveUsers": [...]}`,
+  `{"DeleteUsers": [...]}`, `{"Members": [...]}` all return
+  `{"status":"success"}` while changing nothing. `DELETE .../{role_id}/user/{id}`,
+  `/member/{id}` and `/users/{id}` all 404. Nine shapes tried, none remove.
+  **Assume every membership write is permanent** and get the list right the
+  first time.
+- App-level membership has the same one-way property: `POST
+  /flow/2/{acct}/application/{app}/member/batch` adds (and only accepts
+  `Role:"Admin"` — `User`/`Member`/`Viewer`/`ViewApp`/`DataAdmin` are all
+  rejected), so a group added there lands as a full Admin for everyone in it.
+  `DELETE /flow/2/{acct}/application/{app}/member/{id}` DOES work here, which
+  is the one removal route that exists anywhere in this area.
+
+
 **An API-created flow has zero members**, so the acting user has no
 permission on it at all, and the builder refuses to render it — this is the
 single most common reason a freshly-created flow "does nothing" in the UI.

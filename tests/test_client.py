@@ -3058,7 +3058,8 @@ def test_add_role_users_writes_groups_under_their_own_key() -> None:
     body must carry BOTH keys — Users for people, Groups for groups."""
     c = _FakeRoleClient()
     rep = apply_add_role_users(
-        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}])
+        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}],
+        confirm_group_notification=True)
 
     assert isinstance(rep, RoleUsersReport)
     assert c.body is not None
@@ -3073,7 +3074,8 @@ def test_add_role_users_reports_a_group_it_cannot_prove_landed() -> None:
     exposes. If it does not move, the group is WRITTEN BUT UNPROVEN — never reported as success."""
     c = _FakeRoleClient(group_count=None)          # tenant exposes no usable count
     rep = apply_add_role_users(
-        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}])
+        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}],
+        confirm_group_notification=True)
 
     assert isinstance(rep, RoleUsersReport)
     assert rep.groups_added == () and rep.groups_unverified == ("everyone",)
@@ -3083,7 +3085,8 @@ def test_add_role_users_reports_a_group_it_cannot_prove_landed() -> None:
 
 def test_add_role_users_refuses_a_malformed_group_before_any_write() -> None:
     c = _FakeRoleClient()
-    got = apply_add_role_users(c, "R1", groups=[{"Name": "Everyone"}])      # no _id
+    got = apply_add_role_users(c, "R1", groups=[{"Name": "Everyone"}],     # no _id
+                               confirm_group_notification=True)
 
     assert isinstance(got, Err) and got.kind == "verify"
     assert "'_id'" in got.message or "_id" in got.message
@@ -3093,3 +3096,44 @@ def test_add_role_users_refuses_a_malformed_group_before_any_write() -> None:
 def test_add_role_users_still_requires_at_least_one_grant() -> None:
     got = apply_add_role_users(_FakeRoleClient(), "R1")
     assert isinstance(got, Err) and "groups" in got.message
+
+
+def test_group_grant_is_refused_without_explicit_confirmation() -> None:
+    """A group grant NOTIFIES every member, cannot be recalled, and cannot be undone (membership
+    writes are add-only — CLAUDE.md Members first, learned the hard way 2026-08-20). It is the one
+    effect on this surface that reaches PEOPLE rather than the graph, so it fails CLOSED."""
+    c = _FakeRoleClient()
+
+    got = apply_add_role_users(
+        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}])
+
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "Everyone" in got.message, "must name what it refused to grant"
+    assert "CANNOT BE UNDONE" in got.message
+    assert "user_query" in got.message, "must name the safe way to test this tool"
+    assert c.body is None, "a refusal must not write first"
+
+
+def test_group_grant_proceeds_once_confirmed() -> None:
+    """The flag is a speed bump, not a wall — an intended grant still works."""
+    c = _FakeRoleClient()
+
+    rep = apply_add_role_users(
+        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}],
+        confirm_group_notification=True)
+
+    assert isinstance(rep, RoleUsersReport) and rep.groups_added == ("everyone",)
+    assert c.body is not None and c.body["Groups"]
+
+
+def test_granting_a_single_user_needs_no_confirmation() -> None:
+    """The safe path stays frictionless: adding one named person notifies only that person."""
+    c = _FakeRoleClient()
+    c.get_assignee = lambda q: [{"_id": "U1", "Kind": "User", "Name": q}]  # type: ignore[assignment]
+
+    rep = apply_add_role_users(c, "R1", user_query="Somchai")
+
+    assert isinstance(rep, RoleUsersReport)
+    assert c.body is not None and c.body["Users"] == [{"_id": "U1", "Kind": "User",
+                                                       "Name": "Somchai"}]
+    assert "Groups" not in c.body, "a user-only grant must never write a Groups key"

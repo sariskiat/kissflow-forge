@@ -25,6 +25,21 @@ Run `forge_doctor` after EVERY edit. Never say "it works" on a 200. Never gate o
 reply text. When told "it still errors," do not re-diff the part you already checked — go find
 the layer you have not checked (config payload, membership, per-node keys, the UI's own network).
 
+## Never broadcast — membership is an outward-facing action
+
+🚨 **NEVER add a broad group (`everyone`, an org-wide group, "All users") to an
+AppRole or to app membership. Kissflow notifies EVERY member on the spot** — on
+a shared dev tenant that is a company-wide ping from an automated agent for a
+throwaway build. It happened 2026-08-20 and it cannot be undone: AppRole
+membership writes are ADD-ONLY (nine removal shapes tried, none work — see
+CLAUDE.md > Members first).
+
+"Make it visible to everyone" means VISIBILITY, not BROADCAST. Add named
+individuals only — the ones the human explicitly listed — and confirm the
+recipient list back to them before granting it, the same as you would before
+sending mail. When you need a role for a PoC, the acting user alone is the
+correct default.
+
 ## Design is YOUR job
 
 The user is not expected to hand you a finished design. Grill them, then map their intent onto
@@ -75,7 +90,13 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
    An API-created flow has ZERO members, so the acting user has no permission and the builder
    refuses to render it — the #1 reason a fresh flow "does nothing." Grant `Permission:["InitiateItems"]`
    (a LIST, never a bare string; `[]` PUTs 200 but the initiator still gets 403 on submit). Then
-   add the ACTING USER to the assignee role via `forge_add_role_users` — the creator is NOT
+   ⚠️ Grant to NAMED INDIVIDUALS only — never a broad group (see the broadcast rule above).
+   `forge_add_role_users` now REFUSES a `groups` grant unless `confirm_group_notification=True`
+   is passed in the same call: a group grant notifies every member, cannot be recalled, and
+   membership writes are ADD-ONLY so it cannot be undone. **Never test with a group** — test by
+   granting ONE named developer (`user_query="<your name>"`). Set the flag only after a human has
+   confirmed the actual recipient list, the same as sending mail.
+   Then add the ACTING USER to the assignee role via `forge_add_role_users` — the creator is NOT
    auto-added, and that gap is THE reproducible submit-403 (KISSFLOW_ERROR_050302). Write key is
    `Users`, read key is `Members` (a `Members` write is silently ignored). `Role` vocabulary is
    flow-type-scoped (process: Admin|DataAdmin|Member) — read the rejection error, don't re-guess.
@@ -248,6 +269,7 @@ these, say so and name the reason; do not fake success.
 | Aggregate / arbitrary live-number KPI binding on a page | No shape reaches a freely-bound single live value through engine+API. The native `stepmetrics` widget (a fixed per-step analytics table) is the only buildable live-number substitute. |
 | Custom-component install | A custom component needs an installed bundle; there is NO API install path. |
 | Environment "Deploy" on dev | Deploy = dev→UAT/prod promotion. Publish (`forge_publish_app`) is the dev-local go-live; NEVER trigger Deploy. |
+| Adding `everyone` / any broad group to an AppRole or app membership | Kissflow notifies every member instantly, and AppRole membership writes are add-only — there is no removal route, so it cannot be undone. Add named individuals only; confirm the list with the human first. |
 | Bare `User` field without a QueryDefinition | A `User` field blocks publish until its `Field::QueryDefinition{FlowType:"User"}` is wired against a real user source. |
 
 NOT refused anymore: adding a user to a role — that's solved via `forge_add_role_users`

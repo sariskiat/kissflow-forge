@@ -690,3 +690,39 @@ def test_forge_list_app_roles_is_the_read_back_forge_delete_app_role_names(
 def test_forge_list_app_roles_fails_gracefully_with_no_credentials(no_kf_env: None) -> None:
     got = srv.forge_list_app_roles()
     assert got["isError"] is True and got["error"].startswith("config:")
+
+
+def test_every_client_is_told_the_group_rule_in_the_handshake() -> None:
+    """The group broadcast is the one mistake on this surface whose cost lands on OTHER PEOPLE,
+    and it cannot be undone (membership writes are add-only). A tool description is read only when
+    that tool is considered and `forge_playbook` only when someone thinks to fetch it, so the rule
+    also has to travel in `instructions` — the one channel every connecting client receives in the
+    initialize handshake, before any tool is listed or called."""
+    import asyncio
+
+    from fastmcp import Client
+
+    from kfforge.server import mcp
+
+    async def _handshake() -> str:
+        async with Client(mcp) as client:
+            return client.initialize_result.instructions or ""
+
+    instructions = asyncio.run(_handshake())
+
+    assert instructions.strip(), "the server must ship instructions"
+    assert "NEVER GRANT A GROUP" in instructions
+    assert "CANNOT BE UNDONE" in instructions
+    assert "user_query" in instructions, "must name the safe way to test membership"
+    assert "confirm_group_notification" in instructions, "must name the flag that gates it"
+
+
+def test_the_group_rule_also_rides_the_tool_that_enforces_it() -> None:
+    """Belt and braces: an agent that skips the handshake briefing still meets the rule on the
+    tool itself, and on the parameter it applies to."""
+    tool = _emitted()["forge_add_role_users"]
+
+    assert "confirm_group_notification" in (tool.description or "")
+    props = (tool.inputSchema or {}).get("properties") or {}
+    assert "EMAILS every member" in (props["groups"].get("description") or "")
+    assert "email every member" in (props["confirm_group_notification"].get("description") or "")

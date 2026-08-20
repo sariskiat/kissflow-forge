@@ -3296,6 +3296,7 @@ def apply_add_role_users(
     user_query: str | None = None,
     user_ids: list[dict[str, Any]] | None = None,
     groups: list[dict[str, Any]] | None = None,
+    confirm_group_notification: bool = False,
     app_id: str | None = None,
 ) -> RoleUsersReport | Err:
     """Grant one or more users onto an AppRole (#52's assignee-lookup + asymmetric role-write).
@@ -3306,12 +3307,40 @@ def apply_add_role_users(
     EXISTING `Members` (never drop current membership) -> ONE `put_app_role` write under the
     WRITE key `Users` -> read back and verify by `Members`/`UserCount`.
 
+    🚨 A `groups` grant NOTIFIES every member of that group, cannot be recalled, and cannot be
+    UNDONE (membership writes are add-only — see CLAUDE.md Members first). It is refused unless
+    `confirm_group_notification=True` is passed in the same call. Test this tool with ONE named
+    developer (`user_query`), never with a group.
+
     Requires at least one of `user_query`/`user_ids`. A `user_query` with zero assignee matches
     is not a tool error on its own — it lands in `not_found`, the same "state it, never silently
     drop it" discipline as every other audit in this pack.
     """
     if user_query is None and not user_ids and not groups:
         return Err("verify", "apply_add_role_users: give user_query, user_ids or groups")
+
+    # A GROUP GRANT NOTIFIES EVERY MEMBER OF THAT GROUP BY EMAIL, and an email cannot be recalled.
+    # On a whole-tenant group ("everyone") that is every person in the account. This is the one
+    # effect on this surface that reaches PEOPLE rather than the graph, so it fails CLOSED: the
+    # caller must say, in the call itself, that they mean it. Granting a single USER
+    # (`user_query`/`user_ids`) is unaffected — that is the safe way to test this tool, and the
+    # refusal below says so, because a refusal a caller cannot act on is just a dead end.
+    if groups and not confirm_group_notification:
+        named = ", ".join(str(g.get("Name") or g.get("_id")) for g in groups
+                          if isinstance(g, dict)) or "<unnamed>"
+        return Err(
+            "verify",
+            f"refusing to grant group(s) [{named}] without confirm_group_notification=True — "
+            f"Kissflow FANS OUT A NOTIFICATION TO EVERY MEMBER the moment the grant lands, and on "
+            f"a whole-tenant group that is every person in the account (CLAUDE.md Members first: "
+            f"this happened, 2026-08-20). AND IT CANNOT BE UNDONE: membership writes are ADD-ONLY "
+            f"— nine removal shapes were probed live and none of them remove a group, so the only "
+            f"recovery is to build a REPLACEMENT role, re-point the workflow assignees at it, "
+            f"rebuild the visibility matrix that re-point wipes, and delete the polluted role. "
+            f"To TEST this tool, grant ONE named developer instead: user_query='<your name>'. "
+            f"Pass confirm_group_notification=True only after a human has confirmed the actual "
+            f"recipient list, the same as sending mail.",
+        )
 
     for g in groups or []:
         if not isinstance(g, dict) or not g.get("_id"):

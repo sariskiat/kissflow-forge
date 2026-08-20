@@ -128,7 +128,34 @@ from .pages_live import (
     create_page_flow,
 )
 
-mcp = FastMCP("kissflow-forge")
+# `instructions` reaches EVERY connecting client in the initialize handshake, before any tool is
+# listed or called. It is the only channel on this surface that an agent cannot fail to receive:
+# a tool description is read only when that tool is considered, `forge_playbook` only when someone
+# thinks to fetch it, and CLAUDE.md never deploys at all. So the one rule whose cost lands on
+# OTHER PEOPLE — the group broadcast — lives here, not only in the tool that enforces it.
+# Deliberately short: this is a briefing, not the manual. The manual is `forge_playbook`.
+_INSTRUCTIONS = """Kissflow Forge builds real Kissflow apps on a DEV tenant through an
+undocumented builder API. Read this before your first tool call.
+
+🚨 NEVER GRANT A GROUP TO TEST ANYTHING. Granting a group to an AppRole or to app membership
+makes Kissflow notify EVERY MEMBER of that group — on a whole-tenant group ("everyone", "All
+users", any org-wide group) that is every person in the account, from an automated agent. It
+happened on this tenant on 2026-08-20 and everyone got pinged. It CANNOT BE UNDONE: membership
+writes are add-only, and nine removal shapes were probed live with none of them working. The
+blast radius is other people's attention, which you cannot un-spend.
+  * To test membership, grant ONE NAMED DEVELOPER: forge_add_role_users(user_query="<their name>").
+  * `groups` is refused unless you also pass confirm_group_notification=True — set that flag ONLY
+    after a human has confirmed the actual recipient list, exactly as you would before sending
+    mail. "Make it visible to everyone" is a request for VISIBILITY, not for BROADCAST.
+
+THE RULE: an HTTP 200 and a clean publish prove NOTHING. The builder UI is a stricter validator
+than the write API — a flow can accept every write, publish clean, and still render as an error
+screen. Trust a read-back, never a status code. Run forge_doctor after every edit.
+
+Call forge_playbook FIRST for the build order, the intent->tool map and the refuse-loudly table.
+Deep wire shapes are in forge_capabilities(<id>)."""
+
+mcp = FastMCP("kissflow-forge", instructions=_INSTRUCTIONS)
 
 
 # Some MCP clients (observed live: Cowork) serialize nested object/array tool args as a JSON
@@ -1583,7 +1610,13 @@ def forge_add_role_users(
         "[{\"_id\": \"everyone\", \"Kind\": \"Group\", \"Name\": \"Everyone\"}] for the "
         "whole-tenant grant. Rides the same write as `user_ids` but under its own wire key: a "
         "group placed in `user_ids` is refused UserDoesNotExistError. Read-back is weaker than "
-        "for users \u2014 see the tool description."))] = None,
+        "for users \u2014 see the tool description. REFUSED unless "
+        "confirm_group_notification=True, because granting a group EMAILS every member."))] = None,
+    confirm_group_notification: Annotated[bool, Field(description=(
+        "Required to be True before any `groups` grant will be written. Granting a group makes "
+        "Kissflow email every member of it, and the mail cannot be recalled \u2014 on a "
+        "whole-tenant group that is everyone in the account. Leave False and grant a single "
+        "developer with `user_query` when testing."))] = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only): grant one or more users onto an AppRole (#52). Give EITHER
@@ -1601,6 +1634,12 @@ def forge_add_role_users(
     and `groups_note` states which happened. For the same reason this call cannot promise to
     preserve groups that were already on the role — it cannot enumerate them.
 
+    🚨 A GROUP GRANT EMAILS EVERY MEMBER OF THAT GROUP, and the mail cannot be recalled — on a
+    whole-tenant group ("everyone") that is every person in the account. This is the only effect
+    on this surface that reaches PEOPLE rather than the graph, so it fails CLOSED: `groups` is
+    REFUSED unless `confirm_group_notification=True` is passed in the same call. NEVER test this
+    tool with a group. Test it by granting ONE developer: `user_query="<your name>"`.
+
     ⚠️ Asymmetric wire keys (CLAUDE.md Pages, RESOLVED 2026-08-12): the role reads back under
     `Members` but must be WRITTEN under `Users` — a body carrying `Members` instead 200s and
     silently no-ops; this tool writes the correct key for you. Verified by re-reading
@@ -1610,8 +1649,9 @@ def forge_add_role_users(
     c = _client(app_id)
     if isinstance(c, Err):
         return c.as_tool_result()
-    return _result(apply_add_role_users(c, role_id, user_query=user_query, user_ids=user_ids,
-                                        groups=groups, app_id=app_id))
+    return _result(apply_add_role_users(
+        c, role_id, user_query=user_query, user_ids=user_ids, groups=groups,
+        confirm_group_notification=confirm_group_notification, app_id=app_id))
 
 
 @mcp.tool(title="Grant permission tier", annotations=_LIVE_REPLACE)
