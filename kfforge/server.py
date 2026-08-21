@@ -61,8 +61,11 @@ from fastmcp import FastMCP
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
+from starlette.middleware import Middleware as ASGIMiddleware  # aliased: fastmcp.server.middleware.Middleware owns the bare name here
 
 from . import tools
+from .auth import CaptureTokenBody, creds_from_token
+from .auth import provider_from_env as auth_provider_from_env
 from .capabilities import search_capabilities
 from .playbook import load_playbook
 from .client import (
@@ -97,6 +100,7 @@ from .client import (
     create_application_verified,
     create_flow_any,
     create_process,
+    create_template_app,
     delete_anything,
     delete_fields,
     publish_application_verified,
@@ -128,6 +132,12 @@ from .pages_live import (
     create_page_flow,
 )
 
+# HTTP mode authenticates per user: the connector's OAuth Client ID / Client Secret fields carry
+# the CALLER's own Kissflow access-key pair, so nobody shares a key and Kissflow's own role model
+# bounds each caller (see kfforge.auth). Unset MCP_OAUTH_BASE_URL leaves the endpoint exactly as
+# unauthenticated as it was, warned about in main().
+_oauth = auth_provider_from_env() if os.environ.get("MCP_HTTP") else None
+
 # `instructions` reaches EVERY connecting client in the initialize handshake, before any tool is
 # listed or called. It is the only channel on this surface that an agent cannot fail to receive:
 # a tool description is read only when that tool is considered, `forge_playbook` only when someone
@@ -155,7 +165,7 @@ screen. Trust a read-back, never a status code. Run forge_doctor after every edi
 Call forge_playbook FIRST for the build order, the intent->tool map and the refuse-loudly table.
 Deep wire shapes are in forge_capabilities(<id>)."""
 
-mcp = FastMCP("kissflow-forge", instructions=_INSTRUCTIONS)
+mcp = FastMCP("kissflow-forge", auth=_oauth, instructions=_INSTRUCTIONS)
 
 
 # Some MCP clients (observed live: Cowork) serialize nested object/array tool args as a JSON
@@ -259,7 +269,19 @@ def _client(app_id: str | None = None, require_app: bool = True) -> KfClient | E
     # the KF_APP env as a single-app default. STATELESS by design — no server-side "current app"
     # global, so one running process can serve many apps (and, under the multi-user HTTP model,
     # many users) with zero risk of one call's app bleeding into another's.
-    cfg = KfConfig.from_env(app_id_override=app_id)
+    # Whose Kissflow identity this call runs as: the caller's own pair when they authenticated
+    # (HTTP + OAuth), else the process env (stdio local dev). Over HTTP the env key is NEVER a
+    # fallback — a silent one would let someone believe they act as themselves while actually
+    # spending the shared key, so an unauthenticated HTTP call is refused by name.
+    pair = creds_from_token()
+    if pair is not None:
+        cfg = KfConfig.from_user(pair[0], pair[1], app_id_override=app_id)
+    elif os.environ.get("MCP_HTTP") and os.environ.get("MCP_OAUTH_BASE_URL", "").strip():
+        return Err("config", "not authenticated — paste your own Kissflow access-key ID into "
+                             "this connector's 'OAuth Client ID' field and your access-key "
+                             "secret into 'OAuth Client Secret', then reconnect")
+    else:
+        cfg = KfConfig.from_env(app_id_override=app_id)
     if isinstance(cfg, Err):
         return cfg
     if require_app and not cfg.app_id:
@@ -1617,6 +1639,13 @@ def forge_add_role_users(
         "Kissflow email every member of it, and the mail cannot be recalled \u2014 on a "
         "whole-tenant group that is everyone in the account. Leave False and grant a single "
         "developer with `user_query` when testing."))] = False,
+    force_regrant_groups: Annotated[bool, Field(description=(
+        "Overrides the GroupCount-based duplicate-group refusal. When the role detail already "
+        "reports GroupCount > 0, a repeat `groups` grant is refused and reported under "
+        "`groups_refused` — this tenant exposes no group LIST, so a re-grant cannot be proven "
+        "new and re-sending it would re-email every member (the 2026-08-20 fan-out). Pass True "
+        "only when granting a genuinely DIFFERENT group to a role that already carries one. "
+        "Still requires confirm_group_notification=True in the same call."))] = False,
     app_id: str | None = None,
 ) -> dict[str, Any]:
     """LIVE write (dev only): grant one or more users onto an AppRole (#52). Give EITHER
@@ -1651,7 +1680,8 @@ def forge_add_role_users(
         return c.as_tool_result()
     return _result(apply_add_role_users(
         c, role_id, user_query=user_query, user_ids=user_ids, groups=groups,
-        confirm_group_notification=confirm_group_notification, app_id=app_id))
+        confirm_group_notification=confirm_group_notification,
+        force_regrant_groups=force_regrant_groups, app_id=app_id))
 
 
 @mcp.tool(title="Grant permission tier", annotations=_LIVE_REPLACE)
@@ -1715,6 +1745,29 @@ def forge_publish_app(app_id: str) -> dict[str, Any]:
     if isinstance(c, Err):
         return c.as_tool_result()
     return _result(publish_application_verified(c, app_id))
+
+
+@mcp.tool(title="Create template app", annotations=_LIVE_ADD_ONCE)
+def forge_create_template_app(
+    name: Annotated[str, Field(description=(
+        "Display name for the new application — the only argument. A duplicate name surfaces "
+        "the platform's FlowNameAlreadyExists error loud; pick another name, never auto-rename."
+    ))],
+) -> dict[str, Any]:
+    """LIVE (dev only): ONE call — create a fresh Template App carrying the transplanted source
+    template process (ADR-0006, spec #10), published end to end, and return its builder URL.
+    Runs as the CALLING user's own Kissflow identity (per-user OAuth over HTTP; env pair on
+    stdio) — never a shared credential beyond what _client already allows. `name` is the only
+    argument; a duplicate app name surfaces the platform's FlowNameAlreadyExists loud (no
+    auto-rename). The response carries the post-publish doctor read-back (`doctor`), the member
+    grant audit (`members`), and `app_url`/`process_url`. `app_url` uses a derived,
+    not-yet-live-verified route pattern — `url_verified: False`. A failed run archives+deletes the
+    half-built app (and its created AppRole) rather than leaving junk in the tenant.
+    """
+    c = _client(require_app=False)
+    if isinstance(c, Err):
+        return c.as_tool_result()
+    return _result(create_template_app(c, name))
 
 
 @mcp.tool(title="Dataform records", annotations=_LIVE_REPLACE_ONCE)
@@ -2342,13 +2395,19 @@ def forge_plan_app(spec: dict[str, Any], approval_token: str) -> dict[str, Any]:
 
 def main() -> None:
     if os.environ.get("MCP_HTTP"):
-        # Google OAuth removed by request: this HTTP endpoint is UNAUTHENTICATED and writes to a
-        # live Kissflow tenant, so it MUST be protected at the network layer (private ingress /
+        # Unset MCP_OAUTH_BASE_URL means no app auth at all: this endpoint writes to a live
+        # Kissflow tenant, so it MUST then be protected at the network layer (private ingress /
         # IAM / VPC). Anyone who can reach the URL can build or delete. Warn loudly, never silent.
-        print("WARNING: MCP_HTTP serving WITHOUT app auth — the live-tenant write API is open to "
-              "anyone who can reach this URL. Protect it at the network layer.",
-              file=sys.stderr, flush=True)
-        mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+        if _oauth is None:
+            print("WARNING: MCP_HTTP serving WITHOUT app auth — the live-tenant write API is open "
+                  "to anyone who can reach this URL. Set MCP_OAUTH_BASE_URL (plus "
+                  "MCP_OAUTH_SIGNING_KEY) for per-user Kissflow auth, or protect it at the "
+                  "network layer.", file=sys.stderr, flush=True)
+        # CaptureTokenBody must wrap /token: the pasted secret is otherwise unreachable from the
+        # provider (see kfforge.auth). Harmless on every other path.
+        mcp.run(transport="streamable-http", host="0.0.0.0",
+                port=int(os.environ.get("PORT", "8080")),
+                middleware=[ASGIMiddleware(CaptureTokenBody)])
     else:
         mcp.run()
 

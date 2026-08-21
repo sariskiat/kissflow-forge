@@ -235,6 +235,7 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
 | Discover existing objects (sweep first) | `forge_sweep` |
 | Exact wire shape for anything uncertain | `forge_capabilities(query)` |
 | Create app / page | `forge_create_app`, `forge_create_page` |
+| Template App in one call (transplanted source template process, published, builder URL back) | `forge_create_template_app` |
 | Create process (from template default) | `forge_create_process`, `forge_create_flow` |
 | Create board (case) / dataform (dataset) | `forge_create_flow(kind="case"|"dataset")` |
 | Create list + fill records | `forge_create_list`, `forge_dataset_records` |

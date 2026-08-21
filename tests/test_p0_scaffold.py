@@ -60,6 +60,16 @@ def test_client_requires_explicit_app(monkeypatch):
     assert not isinstance(srv._client("App_X"), Err)
 
 
+def test_image_declares_forwarded_allow_ips():
+    """The shipped image must carry FORWARDED_ALLOW_IPS=*, or the deployed endpoint 307s Claude
+    Desktop to an http:// location and the connector refuses it. tests/test_proxy_headers.py
+    proves the mechanism; this assertion proves it is switched on in the artefact that ships, so
+    the two cannot drift apart. A run-time value still overrides an image default."""
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    assert re.search(r"^ENV\b.*\bFORWARDED_ALLOW_IPS=\*", dockerfile, re.MULTILINE), \
+        "Dockerfile ENV line must declare FORWARDED_ALLOW_IPS=*"
+
+
 def test_server_exposes_original_8_tools():
     import kfforge.server as srv
     expected = {"kf_list_field_types", "kf_plan_field_change", "kf_get_flow_schema",

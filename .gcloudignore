@@ -10,7 +10,6 @@
 *.key
 
 # Blindness / local-only tenant traces.
-HANDOFF.md
 image*.png
 kissflowfield-info-gatherlist/
 .vscode/

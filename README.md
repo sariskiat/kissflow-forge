@@ -9,3 +9,6 @@ Target app comes from `KF_APP` (no default). Secrets live in `.env` (never commi
 
     uv run --with pytest --with fastmcp --no-project pytest -q   # offline suite
     # MCP: .mcp.json boots kfforge.server for any Claude Code session in this folder
+
+Setting it up on a new machine: `docs/notes/SETUP.md`. Using an already-hosted server as a
+non-technical end user: `docs/connect-claude-desktop.md`.

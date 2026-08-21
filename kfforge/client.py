@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from .expr import build_branch_condition, build_goto_gate, remove_condition
@@ -51,6 +51,7 @@ from .graph import (
     set_required,
     set_section_style,
     set_step_permissions,
+    transplant_template,
     validate_layout_spans,
 )
 from .types import (
@@ -102,6 +103,27 @@ class KfConfig:
             cfg = KfConfig(
                 key_id=os.environ["KF_DEV_ACCESS_KEY_ID"],
                 key_secret=os.environ["KF_DEV_ACCESS_KEY_SECRET"],
+                account=os.environ["KF_DEV_ACCOUNT_ID"],
+                domain=domain,
+                app_id=(app_id_override or os.environ.get("KF_APP", "")),
+            )
+        except KeyError as e:
+            return Err("config", f"missing env var {e.args[0]}")
+        if "dev-" not in domain:
+            return Err("config", f"refusing non-dev domain {domain!r}")
+        return cfg
+
+    @staticmethod
+    def from_user(key_id: str, key_secret: str, app_id_override: str | None = None) -> KfConfig | Err:
+        """Same config, but the ACCESS-KEY PAIR comes from the calling user (kfforge.auth carries
+        it in over OAuth) instead of the process env. Domain and account stay env-side on purpose:
+        the caller picks their own Kissflow identity, never the tenant, so the `dev-` refusal
+        below is exactly as unskippable as it is in `from_env`."""
+        try:
+            domain = os.environ["KF_DEV_DOMAIN"]
+            cfg = KfConfig(
+                key_id=key_id,
+                key_secret=key_secret,
                 account=os.environ["KF_DEV_ACCOUNT_ID"],
                 domain=domain,
                 app_id=(app_id_override or os.environ.get("KF_APP", "")),
@@ -176,6 +198,12 @@ class KfClient:
 
     def __init__(self, cfg: KfConfig) -> None:
         self._cfg = cfg
+
+    def scoped_to_app(self, app_id: str) -> "KfClient":
+        """Re-scope the SAME caller identity (same access-key pair, same dev-guarded domain) to a
+        different application. `KfConfig` is frozen, so this mints a new config rather than
+        mutating the one in hand."""
+        return KfClient(replace(self._cfg, app_id=app_id))
 
     # --- transport -------------------------------------------------------
     def _req(self, method: str, url: str, data: Any | None = None) -> tuple[int, str]:
@@ -3271,6 +3299,7 @@ class RoleUsersReport:
     groups_added: tuple[str, ...] = ()
     groups_already_present: tuple[str, ...] = ()
     groups_unverified: tuple[str, ...] = ()
+    groups_refused: tuple[str, ...] = ()
     group_count: int | None = None
     groups_note: str | None = None
 
@@ -3282,6 +3311,7 @@ class RoleUsersReport:
             "groups_added": list(self.groups_added),
             "groups_already_present": list(self.groups_already_present),
             "groups_unverified": list(self.groups_unverified),
+            "groups_refused": list(self.groups_refused),
             "group_count": self.group_count,
             "isError": bool(self.not_found) or bool(self.groups_unverified),
         }
@@ -3297,6 +3327,7 @@ def apply_add_role_users(
     user_ids: list[dict[str, Any]] | None = None,
     groups: list[dict[str, Any]] | None = None,
     confirm_group_notification: bool = False,
+    force_regrant_groups: bool = False,
     app_id: str | None = None,
 ) -> RoleUsersReport | Err:
     """Grant one or more users onto an AppRole (#52's assignee-lookup + asymmetric role-write).
@@ -3311,6 +3342,18 @@ def apply_add_role_users(
     UNDONE (membership writes are add-only — see CLAUDE.md Members first). It is refused unless
     `confirm_group_notification=True` is passed in the same call. Test this tool with ONE named
     developer (`user_query`), never with a group.
+
+    🚨 This tenant exposes no group LIST on the role detail (only a nullable `GroupCount`), so a
+    repeat `groups` grant can never be told apart from a fresh one by enumeration — every call used
+    to re-issue the SAME `Groups` write, re-fanning the notification out to every member all over
+    again (CLAUDE.md Members first: this happened, 2026-08-20). When `GroupCount` already shows a
+    group present (`> 0`), a grant is refused and reported under `groups_refused` instead of
+    written, unless `force_regrant_groups=True` is passed — fail closed: a write we cannot prove
+    is new is treated as a duplicate, not as safe to resend. `GroupCount` is a COUNT, not a
+    membership list, so this guard also refuses a genuinely DIFFERENT group when any group is
+    already present — over-blocking (recoverable via the override) beats re-broadcasting
+    (not recoverable); `groups_refused` never claims the group is present, only that it was not
+    written.
 
     Requires at least one of `user_query`/`user_ids`. A `user_query` with zero assignee matches
     is not a tool error on its own — it lands in `not_found`, the same "state it, never silently
@@ -3387,11 +3430,35 @@ def apply_add_role_users(
     new_groups = [g for g in (groups or []) if str(g["_id"]) not in
                   {str(e.get("_id")) for e in existing_groups}]
 
+    # `_existing_group_list` is always `[]` on this tenant (see its own docstring), so the merge
+    # above never actually drops a group that's already there — `new_groups` still equals `groups`
+    # on every repeat call. `GroupCount` is the one signal this tenant's detail DOES carry, so gate
+    # the repeat write on IT: a role that already reports `GroupCount > 0` has some group on it
+    # already, and this SAME `groups` argument is treated as a duplicate rather than resent, unless
+    # the caller passes `force_regrant_groups=True` in the same call — the identical
+    # "state your intent" discipline `confirm_group_notification` already uses above.
+    blocked_note: str | None = None
+    groups_refused: tuple[str, ...] = ()
+    if new_groups and force_regrant_groups is False \
+            and isinstance(detail.get("GroupCount"), int) and detail["GroupCount"] > 0:
+        # GroupCount is a COUNT, not a membership check — a role with any group reads > 0, so this
+        # cannot prove the requested group is the same one already present. The refused group lands
+        # in its OWN `groups_refused` bucket, never `groups_already_present`: reporting a group as
+        # "present" that was never proven present is exactly the invariant this pack forbids.
+        groups_refused = tuple(str(g["_id"]) for g in new_groups)
+        new_groups = []
+        blocked_note = (
+            f"refused to re-issue the Groups write for {', '.join(groups_refused)}: GroupCount is "
+            f"already {detail['GroupCount']} on this role and no group LIST exists to prove these "
+            f"are different groups, so a repeat grant is assumed to be a duplicate and skipped to "
+            f"avoid re-broadcasting the notification — pass force_regrant_groups=True to override"
+        )
+
     if not new_ones and not new_groups:
         return RoleUsersReport(role_id=role_id, added=(), already_present=already,
                                not_found=tuple(not_found), user_count=detail.get("UserCount"),
-                               groups_already_present=groups_already,
-                               group_count=detail.get("GroupCount"))
+                               groups_already_present=groups_already, groups_refused=groups_refused,
+                               group_count=detail.get("GroupCount"), groups_note=blocked_note)
 
     count_before = detail.get("GroupCount")
     body = _role_write_body(detail)
@@ -3436,12 +3503,14 @@ def apply_add_role_users(
     if new_groups and not existing_groups and groups_note is None:
         groups_note = ("existing groups could not be enumerated (no group list on the role detail), "
                        "so this write cannot promise it preserved any that were already there")
+    groups_note = groups_note or blocked_note
 
     return RoleUsersReport(
         role_id=role_id, added=added, already_present=already,
         not_found=tuple(not_found) + unverified, user_count=read_back.get("UserCount"),
         groups_added=g_added, groups_already_present=groups_already,
-        groups_unverified=g_unver, group_count=count_after, groups_note=groups_note,
+        groups_unverified=g_unver, groups_refused=groups_refused,
+        group_count=count_after, groups_note=groups_note,
     )
 
 
@@ -3738,6 +3807,139 @@ def publish_application_verified(client: KfClient, app_id: str) -> dict[str, Any
             "unconfirmed on this tenant; ponytail: not verified live yet, do not treat absence "
             "as proof either way"
         ),
+    }
+
+
+def create_template_app(client: KfClient, name: str) -> dict[str, Any] | Err:
+    """ONE call, under the caller's own identity, creates a fresh Template App on the dev tenant
+    carrying the transplanted source template process (ADR-0006, spec #10 seam 2, ticket #13), published end
+    to end. `client` is account-level (no app selected required) — every step after the first
+    scopes onto the app it just created via `scoped_to_app`. Composed ONLY of existing live
+    primitives plus the pure `transplant_template` op, in the proven build order (CLAUDE.md >
+    Build order): create application -> create a BARE process flow -> members FIRST -> write the
+    transplanted graph (assignees ride in that write) -> publish the process with a status
+    read-back (THE RULE: a 200 proves nothing) -> app-level publish with its own read-back ->
+    doctor. A failed run after the application exists archives+deletes the half-built app, so a
+    refused build leaves no junk in the tenant. A duplicate name surfaces the platform's own
+    FlowNameAlreadyExists loud — no auto-rename, no retry.
+
+    ⚠️ `app_url`'s `/view/app/{id}` pattern is a prod hyperlink found inside the vendored
+    template's own rich-text Description field — prose written by a human into a field, not a
+    route this codebase has ever captured off the builder itself. `url_verified: False` in the
+    response reflects that honestly; the first human to actually open the URL should confirm or
+    correct the pattern.
+    """
+    created = create_application_verified(client, name)
+    if isinstance(created, Err):
+        return created
+    if created.get("isError"):
+        return created
+    app_id = created["app_id"]
+    app = client.scoped_to_app(app_id)
+
+    role_id: str | Err | None = None
+
+    def _abandon(err: Err) -> Err:
+        # fail loud on the cleanup too: the returned Err must say whether the half-built app is
+        # really gone, never imply "no junk left" while the delete or its verify actually failed
+        cleanup = delete_anything(app, "application", app_id)
+        outcome = ("deleted+verified" if cleanup.get("verified")
+                   else "deleted, NOT verified" if cleanup.get("deleted")
+                   else "NOT deleted")
+        notes = [f"app {app_id} {outcome}"]
+        if cleanup.get("error"):
+            notes.append(str(cleanup["error"]))
+        if isinstance(role_id, str):
+            role_gone = app.delete_app_role(role_id)  # best-effort, same convention as create_process's cleanup
+            if isinstance(role_gone, Err) and not cleanup.get("verified"):
+                notes.append(f"role {role_id} delete failed: {role_gone.message}")
+        return Err(err.kind, f"{err.message} [cleanup: {'; '.join(notes)}]", status=err.status)
+
+    role_name = f"{name} Role"
+    role_id = app.create_app_role(role_name)
+    if isinstance(role_id, Err):
+        return _abandon(role_id)
+
+    # Bare flow, NOT create_process: the transplant needs a bare draft (no RootProcessDef yet).
+    flow_id = app.create_flow("process", name)
+    if isinstance(flow_id, Err):
+        return _abandon(flow_id)
+
+    # Members FIRST (CLAUDE.md > Members first): assignees ride in the graph write below. A fresh
+    # app has no sibling flow to harvest from, so this falls back to granting the app's own
+    # AppRoles discovered at the account level — exactly the role just created.
+    members = apply_member_batch(app, flow_id)
+    if isinstance(members, Err):
+        return _abandon(members)
+    if members.missing or role_id not in members.role_ids:
+        return _abandon(Err(
+            "verify",
+            f"member grant did not land the created AppRole {role_id!r}: "
+            f"missing={list(members.missing)!r} role_ids={list(members.role_ids)!r}",
+        ))
+
+    draft = app.get_draft("process", flow_id)
+    if isinstance(draft, Err):
+        return _abandon(draft)
+    try:
+        grafted = transplant_template(draft, app_role=(role_id, role_name))
+    except ValueError as e:
+        return _abandon(Err("verify", str(e)))
+
+    written = app.put_draft("process", flow_id, grafted, expect_version=draft.get(_META_VERSION))
+    if isinstance(written, Err):
+        return _abandon(written)
+
+    # A PUT that 200s proves nothing about what actually persisted (THE RULE) — read the draft
+    # back and confirm every transplanted node is really there before trusting the write.
+    read_back = app.get_draft("process", flow_id)
+    if isinstance(read_back, Err):
+        return _abandon(Err("verify", f"graph write read-back failed: {read_back.message}"))
+    graft_node_ids = [nid for nid in grafted if nid not in ("Root", _META_VERSION)]
+    missing = [nid for nid in graft_node_ids if nid not in read_back]
+    if missing:
+        return _abandon(Err("verify",
+            f"graph write did not land: {len(missing)} of {len(graft_node_ids)} nodes missing "
+            f"from the live draft read-back (first few: {missing[:5]!r})"))
+
+    # Publish the process WITH a status read-back — THE RULE, not a bare 200.
+    pub = app.publish("process", flow_id)
+    if isinstance(pub, Err):
+        return _abandon(pub)
+    detail = app.get_flow_detail("process", flow_id)
+    if isinstance(detail, Err):
+        return _abandon(Err(
+            "verify", f"publish succeeded but status read-back failed: {detail.message}"
+        ))
+    status = detail.get("Status")
+    if status != "Live":
+        return _abandon(Err("verify", f"process publish read-back status {status!r}, not Live"))
+
+    app_pub = publish_application_verified(app, app_id)
+    if isinstance(app_pub, Err):
+        return _abandon(app_pub)
+    if app_pub.get("isError"):
+        return _abandon(Err("verify", f"app publish read-back failed: {app_pub.get('error')}"))
+
+    # Doctor read-back rides in the response — never a separate call the caller must remember.
+    # Its own findings do NOT flip this tool's isError: the vendored capture ships known problems
+    # (the differential bar) on purpose, reported as data for the caller/test to judge.
+    doctor_report = run_doctor(app, flow_id)
+    if isinstance(doctor_report, Err):
+        return _abandon(doctor_report)
+
+    return {
+        "app_id": app_id, "name": name, "flow_id": flow_id,
+        "role_id": role_id, "role_name": role_name,
+        "members": members.as_tool_result(),
+        "process_status": status,
+        "app_publish": app_pub,
+        "doctor": doctor_report,
+        "app_url": f"{client._cfg.base}/view/app/{app_id}",
+        "process_url": f"{client._cfg.base}/view/process/{flow_id}",
+        "url_verified": False,
+        "graph_nodes_verified": len(graft_node_ids),
+        "isError": False,
     }
 
 

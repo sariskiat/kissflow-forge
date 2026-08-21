@@ -8,3 +8,4 @@ dist/
 .env.deploy
 bestonesource.html
 brokesoruce.html
+uat-key.json

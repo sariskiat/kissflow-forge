@@ -3137,3 +3137,65 @@ def test_granting_a_single_user_needs_no_confirmation() -> None:
     assert c.body is not None and c.body["Users"] == [{"_id": "U1", "Kind": "User",
                                                        "Name": "Somchai"}]
     assert "Groups" not in c.body, "a user-only grant must never write a Groups key"
+
+
+def test_group_regrant_is_blocked_when_group_count_already_present() -> None:
+    """FIX: `_existing_group_list` is always `[]` on this tenant (no group LIST field), so the
+    idempotency check based on it never actually blocked a repeat write — every identical call
+    re-issued the SAME Groups write, re-fanning the notification out to every member all over
+    again (the 2026-08-20 incident). The guard now gates on `GroupCount`: once it shows a group
+    already present, a second identical grant must be refused, not resent."""
+    c = _FakeRoleClient()
+    first = apply_add_role_users(
+        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}],
+        confirm_group_notification=True)
+    assert isinstance(first, RoleUsersReport) and first.groups_added == ("everyone",)
+    assert c.body is not None and c.body.get("Groups")
+    c.body = None  # reset so a second write would be visible
+
+    second = apply_add_role_users(
+        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}],
+        confirm_group_notification=True)
+
+    assert isinstance(second, RoleUsersReport)
+    assert c.body is None, "GroupCount already shows a group present — must not re-issue the write"
+    # A refused group lands in its OWN bucket, never `groups_already_present` — GroupCount cannot
+    # prove the requested group is the one already there, so we never claim it is present.
+    assert second.groups_refused == ("everyone",)
+    assert second.groups_already_present == ()
+    assert "force_regrant_groups" in (second.groups_note or ""), second.groups_note
+
+
+def test_group_regrant_refusal_survives_a_mixed_call_with_new_users() -> None:
+    """The refused group must land in `groups_refused` on EVERY path. A mixed call (new user
+    grants alongside the blocked group) skips the groups-only early return and exits through the
+    final report — which used to drop the bucket, leaving the group in no counted bucket at all."""
+    c = _FakeRoleClient(group_count=1)
+
+    rep = apply_add_role_users(
+        c, "R1", user_ids=[{"_id": "U9", "Kind": "User", "Name": "Somchai"}],
+        groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}],
+        confirm_group_notification=True)
+
+    assert isinstance(rep, RoleUsersReport)
+    assert c.body is not None, "the user grant must still be written"
+    assert "Groups" not in c.body, "the blocked group must not ride along on the user write"
+    assert rep.groups_refused == ("everyone",)
+    assert rep.groups_added == () and rep.groups_already_present == ()
+    assert "force_regrant_groups" in (rep.groups_note or ""), rep.groups_note
+
+
+def test_group_regrant_proceeds_with_explicit_override() -> None:
+    """The guard is a speed bump, not a wall — `force_regrant_groups=True` still writes."""
+    c = _FakeRoleClient()
+    apply_add_role_users(
+        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}],
+        confirm_group_notification=True)
+    c.body = None
+
+    rep = apply_add_role_users(
+        c, "R1", groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}],
+        confirm_group_notification=True, force_regrant_groups=True)
+
+    assert isinstance(rep, RoleUsersReport)
+    assert c.body is not None and c.body.get("Groups"), "override must still issue the write"

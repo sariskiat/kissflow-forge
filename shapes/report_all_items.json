@@ -1,0 +1,40 @@
+{
+  "kind": "Report",
+  "description": "System \"All Items\" report graph of a process: Report + one Column and one ReportField per visible column. ReportField.FieldId/ModelId are the only link back to the process schema.",
+  "source_capture": "report.all-items.md",
+  "template": {
+    "Report_Sample01": {
+      "Id": "Report_Sample01",
+      "Name": "Sample Case All Items",
+      "Kind": "Report",
+      "FlowType": "Report",
+      "Model": "Sample_Case_A14",
+      "Type": "TabularReport",
+      "ViewType": "Tabular",
+      "IsAllItem": true,
+      "Report::ReportField": ["ReportField_Sample01"],
+      "Report::Column": ["Column_Sample01"]
+    },
+    "Column_Sample01": {
+      "Id": "Column_Sample01",
+      "Kind": "Column",
+      "Report": "Report_Sample01",
+      "ReportField": "ReportField_Sample01"
+    },
+    "ReportField_Sample01": {
+      "Id": "ReportField_Sample01",
+      "Kind": "ReportField",
+      "FieldId": "Field_Sample01",
+      "ModelId": "Sample_Case_A14",
+      "Report": "Report_Sample01",
+      "ReportField::Column": ["Column_Sample01"]
+    }
+  },
+  "notes": [
+    "Transcribed from the live GET /metadata/2/{acct}/process/{flow_id}/report/{report_id}/draft read recorded in docs/capabilities/report.all-items.md (dev tenant, 2026-08-17). Ids minted; tenant names replaced with placeholders.",
+    "Read-only knowledge: the engine never builds a report (refused at compile, ADR-0004). This shape exists so a reader can recognise the graph, not so a writer can mint one.",
+    "The report graph's Column is a DIFFERENT node kind from the process graph's Column (a section holder). Same word, unrelated shapes.",
+    "The list record spells the flag IsAllItemsReport; the graph node spells it IsAllItem. Both are real, on two different surfaces — do not 'fix' one to match the other.",
+    "Report.Model and ReportField.ModelId both hold the parent PROCESS flow id, not a table model id."
+  ]
+}

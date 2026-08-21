@@ -660,8 +660,8 @@ def test_a_personal_data_list_binds_to_the_human_made_list_not_to_create_list() 
     forge_create_list, so its Select's id comes from the HUMAN-made list, and the binding says so
     (`from_op` None) instead of naming an op that must not run."""
     full = _full_spec()
-    flagged = tuple(dataclasses.replace(l, personal_data=(l.name == "Urgency Levels"))
-                    for l in full.master_data.lists)
+    flagged = tuple(dataclasses.replace(lst, personal_data=(lst.name == "Urgency Levels"))
+                    for lst in full.master_data.lists)
     plan = compile_spec(dataclasses.replace(
         full, master_data=dataclasses.replace(full.master_data, lists=flagged)))
     got = _apply_field(plan, "Intake", "Urgency")

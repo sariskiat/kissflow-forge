@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from .pages import _instantiate
+from .pages import _instantiate, _mint
 from .types import FieldSpec, FieldType, ParsedField, Visibility
 
 Draft = dict[str, Any]
@@ -317,6 +317,152 @@ def clone_template_shell(draft: Draft, template_path: str | None = None) -> Draf
     return new
 
 
+_TEMPLATE_FULL_PATH = _SHAPES_DIR / "process_template_full.json"
+_TEMPLATE_FULL_ROOT_KEY = "Model_Sample01"
+# Same family as _TEMPLATE_ROOT_LIST_KEYS, minus "Model::Appearance" -- this fuller capture has
+# no root Appearance/Style chain at all (synthesized below), see shape notes[4].
+_TEMPLATE_FULL_ROOT_LIST_KEYS = ("Model::Row", "Model::Field", "Model::ProcessDef", "Model::Component",
+                                "Button::Row")
+_SAMPLE_TOKEN_RE = re.compile(r"[A-Za-z]+_Sample\d+")
+
+
+def _rewrite_sample_tokens(value: Any, lookup: dict[str, str]) -> Any:
+    """Every `<Kind>_SampleNN` SUBSTRING anywhere under `value` (not just a leaf that IS one, whole
+    string) rewritten via `lookup`, recursively over dicts/lists; dict KEYS untouched, only values.
+
+    `_instantiate`'s own remap only ever replaces a leaf string that EXACTLY equals a mapped id --
+    this template's own ExpressionStr formulas ('if(_Field_Sample12, ...)') and one System-field
+    Node's underscore-prefixed `Field` value ('_Field_Sample12') embed an id as a SUBSTRING of a
+    larger string, which that exact-match remap silently leaves alone (CLAUDE.md > Expressions).
+    A token not present in `lookup` (ordinary prose that merely LOOKS like one) is left unchanged.
+    """
+    if isinstance(value, str):
+        return _SAMPLE_TOKEN_RE.sub(lambda m: lookup.get(m.group(0), m.group(0)), value)
+    if isinstance(value, list):
+        return [_rewrite_sample_tokens(v, lookup) for v in value]
+    if isinstance(value, dict):
+        return {k: _rewrite_sample_tokens(v, lookup) for k, v in value.items()}
+    return value
+
+
+def transplant_template(
+    draft: Draft,
+    *,
+    app_role: tuple[str, str],
+    template_path: str | pathlib.Path | None = None,
+    force_ids: dict[str, str] | None = None,
+) -> Draft:
+    """Graft the FULL deidentified production-template capture (shapes/process_template_full.json,
+    ADR-0006, spec #10 / ticket #12) onto a bare dev draft. Unlike `clone_template_shell` (the
+    small identity-shell scaffold), this carries the WHOLE captured graph -- every field, the
+    branch/goto Condition/Criteria/Expression/Node subtrees, and the source capture's own quirks
+    (a duplicate suspended "Manager Approve" step, an orphaned SendBackToInitiator dangling out of
+    ProcessDef::Activity) -- verbatim modulo a fresh id mapping. Then repairs the thing the capture
+    deliberately ships broken (shape note[4]): the mandatory root Model::Appearance -> Appearance ->
+    Style chain (missing entirely, or the whole form fails to render -- CLAUDE.md > Node-graph
+    invariants), and the workflow's assignee, re-pointed from the source tenant's Resource at
+    `app_role` (the dev AppRole) on every UserTask step. Notes[7]/[8] (external tenant refs) pass
+    through untouched -- a later seam, not this op's job. Pure: deep-copies `draft`, returns a new
+    Draft; raises ValueError if `draft` already has a RootProcessDef (this op needs a bare draft to
+    graft onto).
+
+    `force_ids` is a `{old_id: new_id}` map covering the template's node ids (an id absent from it
+    is minted fresh, kfforge.pages._mint). Passing the SAME map twice reproduces an IDENTICAL output
+    graph (byte for byte, including the synthesized Appearance/Style ids) ONLY when the map is
+    COMPLETE (covers every template id) -- a partial map still mints the uncovered ids fresh each
+    call. Omitting `force_ids` entirely mints every id at random, so two calls never collide.
+    """
+    new: Draft = copy.deepcopy(draft)
+    model_id = _model_id(new)
+    model = new[model_id]
+    if model.get("RootProcessDef"):
+        raise ValueError("transplant_template needs a bare draft (no RootProcessDef yet)")
+
+    path = pathlib.Path(template_path) if template_path else _TEMPLATE_FULL_PATH
+    if not path.is_file():
+        raise ValueError(f"process template not found: {path}")
+    shape = json.loads(path.read_text(encoding="utf-8"))
+    template = shape.get("template")
+    if not isinstance(template, dict) or not template:
+        raise ValueError(f"{path}: not a valid shapes/*.json shape (no non-empty 'template')")
+    root_node = template.get(_TEMPLATE_FULL_ROOT_KEY)
+    if not isinstance(root_node, dict) or root_node.get("Kind") != "Model":
+        raise ValueError(f"{path}: template has no root Model node keyed {_TEMPLATE_FULL_ROOT_KEY!r}")
+
+    subset = {k: v for k, v in template.items() if k != _TEMPLATE_FULL_ROOT_KEY}
+    external = {_TEMPLATE_FULL_ROOT_KEY: model_id}
+    force_ids = force_ids or {}
+    # Mirror _instantiate's OWN idmap formula up front (force_ids override, else mint), so the
+    # substring pre-rewrite below and _instantiate's later exact-match remap land on the identical
+    # ids -- passing this same dict back in as `force_ids=` makes _instantiate reuse it verbatim
+    # rather than minting a second, divergent, set.
+    idmap = {old: force_ids.get(old) or _mint(old.split("_")[0]) for old in subset}
+    # An exact-leaf reference to the template's root Model (e.g. an AST Node's "FieldModel"
+    # self-reference) is NOT rewritten here -- it falls through to _instantiate's `external` map and
+    # lands on the real target model, like every other node's Model backref.
+    rewritten = {k: _rewrite_sample_tokens(v, idmap) for k, v in subset.items()}
+    cloned, _ = _instantiate(rewritten, external=external, force_ids=idmap)
+    new.update(cloned)
+
+    def _remap(v: str) -> str:
+        return idmap.get(v, external.get(v, v))
+
+    for key in _TEMPLATE_FULL_ROOT_LIST_KEYS:
+        if key in root_node:
+            model[key] = [_remap(v) for v in root_node[key]]
+    if "RootProcessDef" in root_node:
+        model["RootProcessDef"] = _remap(root_node["RootProcessDef"])
+
+    # The capture's own audit node (Kind:"User") carries only {Kind, Name, _id} -- _instantiate
+    # force-sets "Id" on every node it clones; strip it back off wherever the template original
+    # never had one (its "_id" VALUE is already remapped, exact-match, by _instantiate itself).
+    for old_id, old_node in subset.items():
+        if "Id" not in old_node:
+            new[idmap[old_id]].pop("Id", None)
+
+    # Mandatory root style chain (CLAUDE.md > Node-graph invariants): the capture ships without it
+    # on purpose (shape notes[4]) -- synthesize or the form will not render. Deterministic under
+    # force_ids (so the SAME mapping source reproduces an identical graph); random otherwise (two
+    # force_ids-less transplants must never mint colliding ids).
+    if not model.get("Model::Appearance"):
+        if force_ids:
+            basis = "|".join(f"{k}={v}" for k, v in sorted(idmap.items()))
+            app_id = "Appearance_" + hashlib.sha1(
+                f"{basis}:Appearance".encode(), usedforsecurity=False).hexdigest()[:10]
+            style_id = "Style_" + hashlib.sha1(
+                f"{basis}:Style".encode(), usedforsecurity=False).hexdigest()[:10]
+        else:
+            app_id, style_id = _mint("Appearance"), _mint("Style")
+        new[app_id] = {"Id": app_id, "Kind": "Appearance", "Model": model_id, "Appearance::Style": [style_id]}
+        new[style_id] = {"Id": style_id, "Kind": "Style", "Appearance": app_id}
+        model["Model::Appearance"] = [app_id]
+
+    # Re-point every Resource at the dev AppRole: the capture's own Resource is a dynamic assignee
+    # (ValueType "Field" + a Field scalar) whose source does not exist on this (dev-only) tenant.
+    # Flattening to an AppRole assignee keeps exactly the captured AppRole-Resource shape
+    # (shapes/app_role_grant.json): no stale Field key, no Field::Resource back-link left behind.
+    role_id, role_name = app_role
+    repointed = 0
+    for node in new.values():
+        if not isinstance(node, dict) or node.get("Kind") != "Resource":
+            continue
+        node["ValueType"] = "AppRole"
+        node["Value"] = role_id
+        node["DisplayValue"] = role_name
+        stale_field = node.pop("Field", None)
+        if stale_field and isinstance(new.get(stale_field), dict):
+            kept = [r for r in new[stale_field].get("Field::Resource") or [] if r != node["Id"]]
+            if kept:
+                new[stale_field]["Field::Resource"] = kept
+            else:
+                new[stale_field].pop("Field::Resource", None)
+        repointed += 1
+    if repointed == 0:
+        raise ValueError("transplant found no Resource node to re-point at the dev AppRole")
+
+    return new
+
+
 def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.") + f"{datetime.now(UTC).microsecond // 1000:03d}Z"
 
@@ -522,6 +668,20 @@ def apply_exact_layout(
                 if fname not in col_of:
                     raise ValueError(f"layout places a field not in the draft: {fname!r} @ {title!r}")
                 cid = col_of[fname]
+                # a field pulled in from a section NOT named in this layout still sits in that
+                # section's row — detach it there, or the column ends up listed in two rows
+                # (the corruption doctor rule 8b flags). Same-section rows are already popped.
+                old_rid = new[cid].get("Row")
+                old_row = new.get(old_rid) if isinstance(old_rid, str) and old_rid != rid else None
+                if isinstance(old_row, dict):
+                    old_cols = old_row.get("Row::Column") or []
+                    if cid in old_cols:
+                        old_cols.remove(cid)
+                    if not old_cols:
+                        old_sec = new.get(old_row.get("Column") or "")
+                        if isinstance(old_sec, dict) and old_rid in (old_sec.get("Column::Row") or []):
+                            old_sec["Column::Row"].remove(old_rid)
+                        new.pop(old_rid, None)
                 new[cid].update({"Row": rid, "Start": start, "End": end})
                 new[rid]["Row::Column"].append(cid)
                 placed.add(cid)

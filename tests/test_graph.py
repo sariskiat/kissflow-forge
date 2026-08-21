@@ -493,6 +493,30 @@ def test_apply_exact_layout_preserves_field_and_column_ids() -> None:
     assert ids == ids2
 
 
+def test_apply_exact_layout_detaches_a_field_pulled_from_an_unnamed_section() -> None:
+    """A field whose current section is NOT named in the layout must leave its old row behind:
+    keeping the column listed in both the old section's row and the new one is the
+    one-column-two-rows corruption doctor rule 8b exists to flag."""
+    from kfforge.graph import apply_exact_layout, regroup_into_sections
+
+    base = regroup_into_sections(_draft_with_fields("a", "b"), [("A", ["a"]), ("B", ["b"])])
+    got = apply_exact_layout(base, {"B": [[("a", 0, 3), ("b", 3, 6)]]})
+
+    owners: dict[str, list[str]] = {}
+    for rid, node in got.items():
+        if isinstance(node, dict) and node.get("Kind") == "Row":
+            for cid in node.get("Row::Column") or []:
+                owners.setdefault(cid, []).append(rid)
+    assert all(len(rows) == 1 for rows in owners.values()), (
+        f"a column is listed by more than one row: {owners}"
+    )
+    sec_a = next(v for v in got.values()
+                 if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "A")
+    for rid in sec_a.get("Column::Row") or []:
+        assert rid in got, f"section A lists a row that no longer exists: {rid}"
+        assert got[rid].get("Row::Column"), f"section A keeps an emptied row: {rid}"
+
+
 def _section_rows(draft: dict, section_name: str = "S") -> list[list[tuple[str, int, int]]]:
     """One inner list per Row of the named section: `(field name, Start, End)` in row order.
 

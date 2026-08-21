@@ -286,11 +286,20 @@ def doctor(
     # REPORT-ONLY, deliberately, and NOT mirrored into `graph._sweep_dangling`: that sweep DELETES,
     # and deleting a dangling `Field.Column` or `Permission.Activity` would strand the node rather
     # than repair it. The list sweep stays list-only; the scalar surface is named here instead.
+    # A "_"-prefixed value is the platform's SYSTEM-FIELD reference namespace, not a node id:
+    # `Node.Field = "_Field_x"` while the node is keyed "Field_x", and `"_created_by"` names a
+    # system field with no node at all (both real shapes in shapes/process_template_full.json).
+    # Skipped from the missing-check, counted in their own bucket — resolving `ref[1:]` would
+    # still fabricate a problem for every node-less system field on a cleanly published flow.
     scalar_refs = 0
+    system_scalar_refs = 0
     for nid, node in N.items():
         for key in _SCALAR_REF_KEYS.get(node.get("Kind"), ()):
             ref = node.get(key)
             if not isinstance(ref, str) or not ref:
+                continue
+            if ref.startswith("_"):
+                system_scalar_refs += 1
                 continue
             scalar_refs += 1
             if ref not in draft:
@@ -298,6 +307,7 @@ def doctor(
                     f"{nid}.{key} -> missing {ref} (scalar reference — the list-only sweep never "
                     f"visits it; PUT 200s, publish dies 500 MetadataError with zero diagnostics)")
     checked["scalar_refs"] = scalar_refs
+    checked["system_scalar_refs"] = system_scalar_refs
 
     # 4. a section nobody can ever edit, and Required fields nobody can ever fill
     malformed_permissions: list[str] = []

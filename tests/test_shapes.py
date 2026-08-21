@@ -20,14 +20,16 @@ SHAPES_DIR = ROOT / "shapes"
 # live in the widget-palette / page-graph captures (research/watch/capture_page_testallbutton_A00_
 # full.json, research/watch/capture_page_qa_general_masterdetail.json, research/watch/capture_page_
 # qa_general_repeater.json), so a minted id using one of them is a documented literal exception, not
-# real-capture entropy.
+# real-capture entropy. Report/ReportField join the same list: both are real Kind names on the
+# report graph (GET /metadata/2/{acct}/process/{flow}/report/{rid}/draft), captured live and
+# recorded in docs/capabilities/report.all-items.md.
 CORE_ID_PREFIXES = (
     "Field", "Column", "Row", "Model", "Activity", "Event", "Permission", "Resource",
     "Expression", "Node", "Property", "Style", "Appearance", "Page", "Container", "Component",
     "Popup", "Tabs", "Tab", "Menu", "Navigation", "Variable", "VariableRef", "EventMapping",
     "Criteria", "Condition", "StartEvent", "ProcessDef", "Button", "User", "QueryDefinition",
 )
-EXTRA_ID_PREFIXES = ("Breadcrumbs", "BreadcrumbItem", "MasterDetail", "Repeater")
+EXTRA_ID_PREFIXES = ("Breadcrumbs", "BreadcrumbItem", "MasterDetail", "Repeater", "Report", "ReportField")
 
 CORE_ID_RE = re.compile(r"^(" + "|".join(CORE_ID_PREFIXES) + r")[_A-Za-z0-9]*$")
 EXTRA_ID_RE = re.compile(r"^(" + "|".join(EXTRA_ID_PREFIXES) + r")[_A-Za-z0-9]*$")
