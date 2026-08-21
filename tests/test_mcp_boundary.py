@@ -18,7 +18,6 @@ Four axes:
 from __future__ import annotations
 
 import asyncio
-import inspect
 from typing import Any
 
 import pytest
@@ -46,6 +45,7 @@ MINIMAL_ARGS: dict[str, dict[str, Any]] = {
     "kf_set_step_visibility": {"flow_id": "F", "owners": {}},
     "kf_publish": {"flow_kind": "process", "flow_id": "F"},
     "forge_create_process": {"name": "N"},
+    "forge_create_template_app": {"name": "N"},
     "forge_member_batch": {"target_flow_id": "F"},
     "forge_add_member_roles": {"target_flow_id": "F", "roles": {}},
     "forge_create_app_role": {"name": "R"},
@@ -221,10 +221,21 @@ def test_every_tool_carries_all_four_hints_and_a_title() -> None:
             assert getattr(a, hint) is not None, f"{t.name} is missing {hint}"
 
 
-def test_read_only_is_never_claimed_by_a_tool_that_writes_something() -> None:
+def test_read_only_is_never_claimed_by_a_tool_that_writes_something(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """readOnlyHint true ONLY if the body writes neither the tenant nor the filesystem. The four
     render/confirm tools are the trap: every one of them says "OFFLINE" in its own description and
-    then writes files to disk, which is precisely why these hints are derived from the body."""
+    then writes files to disk, which is precisely why these hints are derived from the body.
+
+    Proven behaviorally, not by grepping tool source: each readOnly-claiming tool RUNS against a
+    FakeClient and a recording artifact writer, and any write it performs on either surface — a
+    draft PUT, a publish, a member batch, an app/role/page create, a file — disproves the claim,
+    however the body reached it. A tool that errors mid-call still proves the property: whatever
+    it did before returning is on the fake's counters."""
+    from synthetic import synthetic_process_draft
+    from test_client import FakeClient
+
     writes_files = {"forge_render_flow_diagram", "forge_render_schema_diagram",
                     "forge_render_mockups", "forge_request_confirmation"}
     by_name = {t.name: t for t in _listed()}
@@ -235,17 +246,26 @@ def test_read_only_is_never_claimed_by_a_tool_that_writes_something() -> None:
         )
         assert by_name[name].annotations.openWorldHint is False, f"{name} touches no tenant"
 
-    # ...and no tool claiming readOnlyHint may call a WRITE entrypoint or write a file. Reading
-    # the tenant is read-only; writing it is not, and that distinction is what the hint is for.
-    for name, t in by_name.items():
+    artifacts: list[str] = []
+    monkeypatch.setattr(
+        srv, "_write_artifact",
+        lambda directory, filename, content: (artifacts.append(filename), str(directory))[1],
+    )
+    for name, t in sorted(by_name.items()):
         if not t.annotations.readOnlyHint:
             continue
-        body = inspect.getsource(getattr(srv, name))
-        assert "_write_artifact(" not in body, f"{name} claims readOnlyHint but writes a file"
-        for writer in sorted(_LIVE_WRITE_ENTRYPOINTS):
-            assert f"{writer}(" not in body, (
-                f"{name} claims readOnlyHint but its body calls {writer}()"
-            )
+        fake = FakeClient(synthetic_process_draft())
+        monkeypatch.setattr(srv, "_client", lambda app_id=None, require_app=True, f=fake: f)
+        artifacts.clear()
+        try:
+            getattr(srv, name)(**MINIMAL_ARGS[name])
+        except Exception:
+            pass  # an error is not a write — only the counters below disprove the claim
+        wrote_tenant = (fake.puts or fake.published or fake.member_batches
+                        or fake.report_member_batches or fake.applications
+                        or fake.app_roles or fake.pages)
+        assert not wrote_tenant, f"{name} claims readOnlyHint but wrote the (fake) tenant"
+        assert not artifacts, f"{name} claims readOnlyHint but wrote a file: {artifacts}"
 
 
 def test_destructive_hint_is_set_on_every_tool_that_replaces_or_deletes_state() -> None:
@@ -281,12 +301,30 @@ def test_destructive_hint_is_set_on_every_tool_that_replaces_or_deletes_state() 
         assert by_name[name].annotations.destructiveHint is False, name
 
 
-def test_open_world_is_exactly_the_tenant_touching_set() -> None:
+def test_open_world_is_exactly_the_tenant_touching_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """openWorldHint true for anything that reaches the Kissflow tenant — which is exactly the set
-    of tools that resolve a client, plus nothing else."""
+    of tools that resolve a client, plus nothing else. Proven behaviorally: `_client` is swapped
+    for a recorder that refuses before any tenant traffic, every tool is CALLED with its minimal
+    args, and the hint must match whether the tool actually tried to resolve a client — however
+    it reached `_client`, helper or not."""
+    from kfforge.client import Err
+
+    resolved: list[str] = []
+
+    def probe(app_id: str | None = None, require_app: bool = True) -> Err:
+        resolved.append("hit")
+        return Err("config", "openWorld probe — refused before any tenant traffic")
+
+    monkeypatch.setattr(srv, "_client", probe)
     for t in _listed():
-        body = inspect.getsource(getattr(srv, t.name))
-        touches_tenant = "_client(" in body
+        resolved.clear()
+        try:
+            getattr(srv, t.name)(**MINIMAL_ARGS[t.name])
+        except Exception:
+            pass  # a raise past the probe still tells us whether a client was resolved
+        touches_tenant = bool(resolved)
         assert t.annotations.openWorldHint is touches_tenant, (
             f"{t.name}: openWorldHint={t.annotations.openWorldHint} but "
             f"{'it resolves a KfClient' if touches_tenant else 'it never touches the tenant'}"
@@ -303,20 +341,6 @@ def test_the_four_render_tools_no_longer_advertise_themselves_as_offline_only() 
 # =================================================================================================
 # 3. CLOSED-SET ENUMS (A2)
 # =================================================================================================
-
-# Every live-WRITE orchestration entrypoint this module exposes, derived from the module itself
-# rather than hand-listed, so a new writer joins the check the day it is imported. `run_doctor` /
-# `run_sweep` / `search_capabilities` are reads and do not match the verb prefixes.
-_LIVE_WRITE_ENTRYPOINTS = {
-    name for name in dir(srv)
-    if getattr(getattr(srv, name), "__module__", "") in ("kfforge.client", "kfforge.pages_live")
-    and name.split("_")[0] in ("apply", "create", "delete", "rename", "publish")
-} - {
-    # a MISNOMER, not an exception to the rule: `apply_copilot_check` only reads — the copilot
-    # thread, the flow inventory, and one draft per scattered flow. Nothing in it writes.
-    "apply_copilot_check",
-}
-
 
 def _param_schema(tool_name: str, param: str) -> dict[str, Any]:
     t = next(t for t in _listed() if t.name == tool_name)
@@ -683,7 +707,6 @@ def test_a_dataform_draft_is_still_readable_and_field_writable() -> None:
 def test_the_widened_sets_are_still_closed_and_still_reject_junk() -> None:
     """Widening is not opening: every set stays an enum, and nothing outside it gets through."""
     from fastmcp import Client
-    from fastmcp.exceptions import ToolError
 
     async def _run() -> Any:
         async with Client(srv.mcp) as client:
@@ -694,3 +717,31 @@ def test_the_widened_sets_are_still_closed_and_still_reject_junk() -> None:
     result = asyncio.run(_run())
     assert result.is_error is True
     assert "spreadsheet" in str(result.content) or "enum" in str(result.content).lower()
+
+
+def test_force_regrant_groups_is_forwarded_through_the_tool_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The GroupCount re-grant refusal's documented override must be reachable from the WIRE, not
+    just the client layer: the same tool call that gets refused must succeed once
+    force_regrant_groups=True rides along. A dropped or misspelled forward of that parameter in
+    forge_add_role_users fails here instead of silently bricking the override again."""
+    from test_client import _FakeRoleClient
+
+    everyone = {"_id": "everyone", "Kind": "Group", "Name": "Everyone"}
+    fake = _FakeRoleClient(group_count=1)
+    monkeypatch.setattr(srv, "_client", lambda app_id=None, require_app=True: fake)
+
+    refused = srv.forge_add_role_users(
+        role_id="R1", groups=[everyone], confirm_group_notification=True)
+    assert refused["groups_refused"] == ["everyone"]
+    assert fake.body is None, "the refused grant must not write"
+
+    forced = srv.forge_add_role_users(
+        role_id="R1", groups=[everyone], confirm_group_notification=True,
+        force_regrant_groups=True)
+    assert forced["groups_refused"] == []
+    assert fake.body is not None and fake.body.get("Groups"), (
+        "force_regrant_groups=True from the tool boundary must reach the client layer "
+        "and re-issue the Groups write"
+    )

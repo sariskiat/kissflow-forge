@@ -551,6 +551,36 @@ def test_scalar_rule_never_resolves_an_id_shaped_value_that_is_not_a_reference()
     assert not any("scalar reference" in p for p in rep.problems), rep.problems
 
 
+def test_scalar_rule_treats_underscore_refs_as_system_fields_not_node_ids() -> None:
+    """The platform writes system-field refs with a leading underscore: `Node.Field = "_Field_x"`
+    while the node is keyed "Field_x", and `"_created_by"` names a system field with NO node at
+    all (both real shapes in shapes/process_template_full.json). Neither is a dangling reference —
+    they land in their own checked bucket, never in problems."""
+    d: Draft = {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"},
+        "Field_x01": {"Id": "Field_x01", "Kind": "Field", "Type": "Text", "Name": "X",
+                      "Model": "M1"},
+        "Node_One01": {"Id": "Node_One01", "Kind": "Node", "Field": "_Field_x01"},
+        "Node_Two01": {"Id": "Node_Two01", "Kind": "Node", "Field": "_created_by"},
+    }
+    rep = doctor(d)
+    assert not any("scalar reference" in p for p in rep.problems), rep.problems
+    assert rep.checked["system_scalar_refs"] == 2
+
+
+def test_transplanted_template_raises_no_scalar_reference_problem() -> None:
+    """The regression that shipped: doctor read 11 fabricated 'missing _Field_...' problems off
+    the very graph forge_create_template_app had just built and published clean."""
+    from kfforge.graph import transplant_template
+
+    base: Draft = {"Root": "M1", "_meta_version": "v1",
+                   "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"}}
+    rep = doctor(transplant_template(base, app_role=("Ro123", "R")))
+    assert not any("scalar reference" in p for p in rep.problems), rep.problems
+    assert rep.checked["system_scalar_refs"] > 0
+
+
 def test_scalar_rule_is_silent_on_the_shipped_template_shell() -> None:
     """The strongest available oracle: the identity shell is a de-identified capture of a REAL
     published production process template. A scalar rule that fires here fires on every process

@@ -1,7 +1,7 @@
 {
   "kind": "Model",
   "description": "Structure-only process-template identity/initiate shell, de-identified from a real production process template (280 nodes, captured live off a real prod tenant, issue #59): field types, section/row/column layout, the mandatory Model::Appearance/Style chain, a single \"Manager Approve\" UserTask, and Button::Row. Every process this engine creates with from_template=True (kfforge.graph.clone_template_shell) starts by cloning this shell (fresh minted ids) instead of the bare ensure_process_def scaffold; callers add their own fields on top. See docs/capabilities/process-template.md and CLAUDE.md Build order.",
-  "source_capture": "template_cj_pi_raw.json",
+  "source_capture": "template_raw.json",
   "template": {
     "Model_Sample01": {
       "Id": "Model_Sample01",

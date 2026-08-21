@@ -121,11 +121,11 @@ from enum import StrEnum
 # can import without the engine depending on intake. Re-exported, not re-declared: every
 # existing `from kfforge.intake.schema import EventTrigger` still resolves to the one enum.
 from ..types import (
-    TRIGGER_LIVE_CONFIRMED,
+    TRIGGER_LIVE_CONFIRMED as TRIGGER_LIVE_CONFIRMED,
     EventTrigger,
     FieldType,
     Visibility,
-    trigger_for,
+    trigger_for as trigger_for,
 )
 
 # Canonical 1..11 dimension names, used to prefix every gap sentence so a caller can tell at a

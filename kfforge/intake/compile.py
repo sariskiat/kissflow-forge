@@ -1065,7 +1065,7 @@ def _op_apply_fields(spec: AppSpec) -> tuple[Op, ...]:
     a reader can check instead of a key nobody thought about.
     """
     stage_names = [s.name for s in spec.stages.stages]
-    lists_by_name = {l.name: l for l in spec.master_data.lists}
+    lists_by_name = {lst.name: lst for lst in spec.master_data.lists}
     by_stage: dict[str, list[FieldReq]] = {name: [] for name in stage_names}
     for f in spec.data_model.fields:
         by_stage[f.stage].append(f)

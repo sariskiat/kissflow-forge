@@ -1,7 +1,10 @@
-"""Checklist test for the engine CLAUDE.md — the manual a fresh-context agent
-uses to build ANY Kissflow app through this engine. Verifies structure
-(mandatory section headings), substance (marker phrases per section), size,
-and blindness (no leaked identity from the app-specific source repo)."""
+"""Checklist test for the engine manual — what a fresh-context agent uses to
+build ANY Kissflow app through this engine. The manual is CLAUDE.md (router +
+always-loaded rules) plus one file per section under docs/engine/, because a
+single 82KB CLAUDE.md reloads on every message. Verifies structure (mandatory
+section headings), substance (marker phrases per section), size, and blindness
+(no leaked identity from the app-specific source repo) across the whole corpus.
+"""
 from __future__ import annotations
 
 import pathlib
@@ -9,6 +12,7 @@ import re
 
 ROOT = pathlib.Path(__file__).parent.parent
 DOC_PATH = ROOT / "CLAUDE.md"
+SECTIONS_DIR = ROOT / "docs" / "engine"
 
 # Exact heading strings, in the order the build proceeds. Order here is only
 # documentation of intent — the slicing logic below tolerates any doc order.
@@ -51,8 +55,20 @@ HEADING_LINE = re.compile(r"^(## .+?)[ \t]*$", re.MULTILINE)
 
 
 def _doc_text() -> str:
+    """CLAUDE.md followed by every docs/engine/*.md, in filename order.
+
+    Concatenating is safe for the checks below because section headings are
+    unique across the corpus, so `_section_slice` still lands in exactly one
+    file's text. A section may live in either place; what must not happen is
+    its content disappearing.
+    """
     assert DOC_PATH.exists(), f"missing {DOC_PATH} — the engine manual must exist at worktree root"
-    return DOC_PATH.read_text(encoding="utf-8")
+    assert SECTIONS_DIR.is_dir(), f"missing {SECTIONS_DIR} — the split engine sections must exist"
+    parts = [DOC_PATH.read_text(encoding="utf-8")]
+    section_files = sorted(SECTIONS_DIR.glob("*.md"))
+    assert section_files, f"no section files in {SECTIONS_DIR}"
+    parts.extend(p.read_text(encoding="utf-8") for p in section_files)
+    return "\n\n".join(parts)
 
 
 def _section_slice(doc: str, heading: str) -> str:
@@ -67,7 +83,22 @@ def _section_slice(doc: str, heading: str) -> str:
 
 def test_doc_exists_and_min_length():
     text = _doc_text()
-    assert len(text) > 8000, f"CLAUDE.md too short: {len(text)} chars (need > 8000)"
+    assert len(text) > 8000, f"engine manual too short: {len(text)} chars (need > 8000)"
+
+
+# CLAUDE.md reloads on every single message, so its size is a running cost, not
+# a one-off. At 82KB it cost ~21k tokens per message. Detail belongs in
+# docs/engine/, which is read on demand.
+CLAUDE_MD_MAX_CHARS = 20_000
+
+
+def test_claude_md_stays_a_router():
+    size = len(DOC_PATH.read_text(encoding="utf-8"))
+    assert size <= CLAUDE_MD_MAX_CHARS, (
+        f"CLAUDE.md is {size} chars (max {CLAUDE_MD_MAX_CHARS}). It is reloaded on "
+        "every message — move the new detail into docs/engine/ and link it from "
+        "the section index."
+    )
 
 
 def test_all_section_headings_present():
