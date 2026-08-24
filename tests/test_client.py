@@ -311,6 +311,116 @@ def test_apply_fields_and_layout_adds_fields_and_lands_the_named_section() -> No
     assert section["Name"] == "Group A"
 
 
+def test_apply_fields_and_layout_no_groups_adds_fields_without_regrouping() -> None:
+    c = FakeClient(_bare_form_draft())
+    rep = apply_fields_and_layout(
+        c, "form", "F1",
+        [FieldSpec(name="alpha", type=FieldType.TEXT)],
+        groups=None,
+    )
+    assert isinstance(rep, ApplyReport)
+    assert rep.verified == ("alpha",) and rep.missing == ()
+    assert c.puts == 1
+
+
+def test_apply_fields_and_layout_no_op_does_not_put_when_no_added_and_no_groups() -> None:
+    c = FakeClient(_bare_form_draft())
+    spec = [FieldSpec(name="alpha", type=FieldType.TEXT)]
+    apply_fields_and_layout(c, "form", "F1", spec, groups=None)
+    assert c.puts == 1
+
+    rep = apply_fields_and_layout(c, "form", "F1", spec, groups=None)
+    assert isinstance(rep, ApplyReport)
+    assert rep.added == () and rep.skipped == ("alpha",)
+    assert c.puts == 1
+
+
+def test_apply_fields_and_layout_publishes_when_requested_and_clean() -> None:
+    c = FakeClient(_bare_form_draft())
+    rep = apply_fields_and_layout(
+        c, "form", "F1",
+        [FieldSpec(name="alpha", type=FieldType.TEXT)],
+        publish=True,
+    )
+    assert isinstance(rep, ApplyReport)
+    assert rep.published is True
+    assert c.published is True
+
+
+def test_apply_fields_and_layout_publish_failure_returns_err() -> None:
+    class FailPublish(FakeClient):
+        def publish(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "publish rejected")
+
+    c = FailPublish(_bare_form_draft())
+    got = apply_fields_and_layout(
+        c, "form", "F1",
+        [FieldSpec(name="alpha", type=FieldType.TEXT)],
+        publish=True,
+    )
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_fields_and_layout_initial_get_draft_error_returns_err() -> None:
+    class FailGet(FakeClient):
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "draft fetch failed")
+
+    c = FailGet(_bare_form_draft())
+    got = apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)]
+    )
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_fields_and_layout_put_draft_error_returns_err() -> None:
+    class FailPut(FakeClient):
+        def put_draft(
+            self, kind, flow_id, new, expect_version
+        ):  # type: ignore[override]
+            return Err("conflict", "draft changed under us")
+
+    c = FailPut(_bare_form_draft())
+    got = apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)]
+    )
+    assert isinstance(got, Err) and got.kind == "conflict"
+
+
+def test_apply_fields_and_layout_read_back_error_returns_err() -> None:
+    class FailReadBack(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            self._calls += 1
+            if self._calls > 1:
+                return Err("http", "read-back failed")
+            return self.draft
+
+    c = FailReadBack(_bare_form_draft())
+    got = apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)]
+    )
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_fields_and_layout_not_implemented_error_caught_as_verify_err(
+    monkeypatch,
+) -> None:
+    def fake_apply_changes(draft, specs):
+        raise NotImplementedError("unsupported field type")
+
+    monkeypatch.setattr("kfforge.client.apply_changes", fake_apply_changes)
+    c = FakeClient(_bare_form_draft())
+    got = apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)]
+    )
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "offline apply rejected" in got.message
+
+
 def test_apply_fields_and_layout_always_writes_when_groups_given_even_with_zero_new_fields() -> None:
     """Unlike plain apply_fields, a re-layout with no new fields must still PUT — a section move
     is a real change even when every field already existed."""
