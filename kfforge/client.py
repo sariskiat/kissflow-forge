@@ -1978,6 +1978,150 @@ def apply_word_list(
     )
 
 
+def _is_table_host(node: Any, name: str) -> bool:
+    if not isinstance(node, dict):
+        return False
+    return node.get("Type") == "Model" and node.get("Name") == name
+
+
+def _find_table_host(draft: Draft, name: str) -> dict[str, Any] | None:
+    for node in draft.values():
+        if _is_table_host(node, name):
+            return node
+    return None
+
+
+def _table_model_node(draft: Draft, host_col: dict[str, Any]) -> dict[str, Any] | None:
+    table_ids = host_col.get("Column::Model", [])
+    if not table_ids:
+        return None
+    node = draft.get(table_ids[0])
+    if isinstance(node, dict):
+        return node
+    return None
+
+
+def _table_child_field_names(draft: Draft, table_node: dict[str, Any]) -> set[str]:
+    field_ids = table_node.get("Model::Field", [])
+    names: set[str] = set()
+    for fid in field_ids:
+        field = draft.get(fid)
+        if isinstance(field, dict):
+            name = field.get("Name")
+            if name is not None:
+                names.add(name)
+    return names
+
+
+def _table_live_columns(draft: Draft, name: str) -> set[str]:
+    host = _find_table_host(draft, name)
+    if host is None:
+        return set()
+    table_node = _table_model_node(draft, host)
+    if table_node is None:
+        return set()
+    return _table_child_field_names(draft, table_node)
+
+
+def _audit_table_columns(
+    wanted: tuple[str, ...],
+    live: set[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    verified: list[str] = []
+    missing: list[str] = []
+    for col in wanted:
+        if col in live:
+            verified.append(col)
+        else:
+            missing.append(col)
+    return tuple(verified), tuple(missing)
+
+
+def _prepare_table_draft(
+    draft: Draft,
+    name: str,
+    columns: list[tuple[str, str]] | list[tuple[str, str, dict[str, Any] | None]],
+    max_rows: int | None,
+    allow_import: bool,
+    after_section: str | None,
+) -> tuple[Draft, bool] | Err:
+    already = _find_table_host(draft, name) is not None
+    try:
+        new_draft = add_table(
+            draft, name, columns, max_rows=max_rows, allow_import=allow_import,
+            after_section=after_section,
+        )
+    except ValueError as e:
+        return Err("verify", f"offline add_table rejected the spec: {e}")
+    return new_draft, already
+
+
+def _sync_table_changes(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    draft: Draft,
+    name: str,
+    columns: list[tuple[str, str]] | list[tuple[str, str, dict[str, Any] | None]],
+    max_rows: int | None,
+    allow_import: bool,
+    after_section: str | None,
+) -> tuple[bool, Err | None]:
+    prep = _prepare_table_draft(draft, name, columns, max_rows, allow_import, after_section)
+    if isinstance(prep, Err):
+        return False, prep
+    new_draft, already = prep
+    if already:
+        return False, None
+    written = client.put_draft(kind, flow_id, new_draft, expect_version=draft.get(_META_VERSION))
+    if isinstance(written, Err):
+        return False, written
+    return True, None
+
+
+def _publish_table(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    publish: bool,
+    missing: tuple[str, ...],
+) -> tuple[bool, Err | None]:
+    if not publish or missing:
+        return False, None
+    pub = client.publish(kind, flow_id)
+    if isinstance(pub, Err):
+        return False, pub
+    return True, None
+
+
+def _verify_and_publish_table(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    name: str,
+    columns: list[tuple[str, str]] | list[tuple[str, str, dict[str, Any] | None]],
+    created: bool,
+    publish: bool,
+) -> TableReport | Err:
+    read_back = client.get_draft(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+
+    wanted_cols = tuple(c[0] for c in columns)
+    live_cols = _table_live_columns(read_back, name)
+    verified, missing = _audit_table_columns(wanted_cols, live_cols)
+
+    published, pub_err = _publish_table(client, kind, flow_id, publish, missing)
+    if pub_err is not None:
+        return pub_err
+
+    return TableReport(
+        flow_id=flow_id, table_name=name, created=created, columns=wanted_cols,
+        verified_columns=verified, missing_columns=missing,
+        meta_version=read_back.get(_META_VERSION), published=published,
+    )
+
+
 def apply_table(
     client: KfClient,
     kind: FlowKind,
@@ -1999,55 +2143,14 @@ def apply_table(
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
         return draft
-    version = draft.get(_META_VERSION)
-    wanted_cols = tuple(c[0] for c in columns)
 
-    already = any(isinstance(v, dict) and v.get("Type") == "Model" and v.get("Name") == name
-                 for v in draft.values())
-    try:
-        new = add_table(draft, name, columns, max_rows=max_rows, allow_import=allow_import,
-                        after_section=after_section)
-    except ValueError as e:
-        return Err("verify", f"offline add_table rejected the spec: {e}")
-
-    if not already:
-        written = client.put_draft(kind, flow_id, new, expect_version=version)
-        if isinstance(written, Err):
-            return written
-
-    read_back = client.get_draft(kind, flow_id)
-    if isinstance(read_back, Err):
-        return read_back
-
-    # graph.add_table's OWN idempotency check matches the HOST COLUMN (Type:"Model", Name:<name>)
-    # — the table's own Model node carries Kind:"Model" but no Type key at all. Follow the SAME
-    # path add_table itself uses: host column -> Column::Model[0] -> the real table Model node ->
-    # Model::Field, rather than re-deriving a different (wrong) lookup here.
-    host_col = next((v for v in read_back.values()
-                     if isinstance(v, dict) and v.get("Type") == "Model"
-                     and v.get("Name") == name), None)
-    live_col_names: set[Any] = set()
-    if host_col is not None:
-        table_ids = host_col.get("Column::Model") or []
-        table_node = read_back.get(table_ids[0]) if table_ids else None
-        if table_node is not None:
-            child_field_ids = table_node.get("Model::Field") or []
-            live_col_names = {read_back.get(fid, {}).get("Name") for fid in child_field_ids}
-    verified = tuple(c for c in wanted_cols if c in live_col_names)
-    missing = tuple(c for c in wanted_cols if c not in live_col_names)
-
-    published = False
-    if publish and not missing:
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
-
-    return TableReport(
-        flow_id=flow_id, table_name=name, created=not already, columns=wanted_cols,
-        verified_columns=verified, missing_columns=missing,
-        meta_version=read_back.get(_META_VERSION), published=published,
+    created, sync_err = _sync_table_changes(
+        client, kind, flow_id, draft, name, columns, max_rows, allow_import, after_section
     )
+    if sync_err is not None:
+        return sync_err
+
+    return _verify_and_publish_table(client, kind, flow_id, name, columns, created, publish)
 
 
 @dataclass(frozen=True)
