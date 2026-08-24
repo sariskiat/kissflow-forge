@@ -2552,6 +2552,122 @@ class ValidationReport:
         }
 
 
+def _node_child_ids(draft: Draft, node_id: str, key: str) -> list[str]:
+    node = draft.get(node_id)
+    if not isinstance(node, dict):
+        return []
+    items = node.get(key)
+    return items if isinstance(items, list) else []
+
+
+def _condition_rule(cond: Any) -> tuple[str, str] | None:
+    if isinstance(cond, dict) and isinstance(cond.get("Operator"), str):
+        return (cond["Operator"], str(cond.get("RHSValue")))
+    return None
+
+
+def _criteria_conditions(read_back: Draft, cid: str) -> set[tuple[str, str]]:
+    out: set[tuple[str, str]] = set()
+    for condid in _node_child_ids(read_back, cid, "Criteria::Condition"):
+        rule = _condition_rule(read_back.get(condid))
+        if rule is not None:
+            out.add(rule)
+    return out
+
+
+def _field_live_rules(read_back: Draft, field_node: dict[str, Any]) -> set[tuple[str, str]]:
+    criteria_ids = field_node.get("FieldValidation::Criteria")
+    if not isinstance(criteria_ids, list):
+        return set()
+    live: set[tuple[str, str]] = set()
+    for cid in criteria_ids:
+        live.update(_criteria_conditions(read_back, cid))
+    return live
+
+
+def _field_map(draft: Draft) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for v in draft.values():
+        if isinstance(v, dict) and v.get("Kind") == "Field":
+            out[v.get("Name")] = v
+    return out
+
+
+def _audit_all_field_rules(
+    read_back: Draft,
+    rules: dict[str, list[tuple[str, str]]],
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    by_name = _field_map(read_back)
+    flat: list[tuple[str, str]] = []
+    verified: list[tuple[str, str]] = []
+    for fname, fl_rules in rules.items():
+        flat.extend(fl_rules)
+        live = _field_live_rules(read_back, by_name.get(fname, {}))
+        for rule in fl_rules:
+            if rule in live:
+                verified.append(rule)
+    return flat, verified
+
+
+def _calc_missing(
+    flat: list[tuple[str, str]],
+    verified: list[tuple[str, str]],
+) -> tuple[tuple[str, str], ...]:
+    verified_set = set(verified)
+    missing: list[tuple[str, str]] = []
+    for r in flat:
+        if r not in verified_set:
+            missing.append(r)
+    return tuple(missing)
+
+
+def _apply_field_validation_offline(
+    draft: Draft,
+    rules: dict[str, list[tuple[str, str]]],
+) -> Draft | Err:
+    try:
+        new = draft
+        for fname, fl_rules in rules.items():
+            for operator, value in fl_rules:
+                new = add_field_validation(new, fname, operator, value)
+        return new
+    except ValueError as e:
+        return Err("verify", f"offline add_field_validation rejected the spec: {e}")
+
+
+def _sync_field_validation_draft(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    rules: dict[str, list[tuple[str, str]]],
+) -> Draft | Err:
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    new = _apply_field_validation_offline(draft, rules)
+    if isinstance(new, Err):
+        return new
+    written = client.put_draft(kind, flow_id, new, expect_version=draft.get(_META_VERSION))
+    if isinstance(written, Err):
+        return written
+    return client.get_draft(kind, flow_id)
+
+
+def _publish_validation(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    publish: bool,
+    missing: tuple[tuple[str, str], ...],
+) -> bool | Err:
+    if not publish or bool(missing):
+        return False
+    pub = client.publish(kind, flow_id)
+    if isinstance(pub, Err):
+        return pub
+    return True
+
+
 def apply_field_validation(
     client: KfClient,
     flow_id: str,
@@ -2563,53 +2679,25 @@ def apply_field_validation(
     reusing the field's existing Criteria) -> guarded PUT -> read-back verify each rule landed ->
     optional publish. `rules` is `{field_name: [(operator, value), ...]}`.
     """
-    draft = client.get_draft(kind, flow_id)
-    if isinstance(draft, Err):
-        return draft
-    version = draft.get(_META_VERSION)
-
-    new = draft
-    try:
-        for fname, fl_rules in rules.items():
-            for operator, value in fl_rules:
-                new = add_field_validation(new, fname, operator, value)
-    except ValueError as e:
-        return Err("verify", f"offline add_field_validation rejected the spec: {e}")
-
-    written = client.put_draft(kind, flow_id, new, expect_version=version)
-    if isinstance(written, Err):
-        return written
-
-    read_back = client.get_draft(kind, flow_id)
+    read_back = _sync_field_validation_draft(client, kind, flow_id, rules)
     if isinstance(read_back, Err):
         return read_back
-    by_name = {v.get("Name"): v for v in read_back.values()
-               if isinstance(v, dict) and v.get("Kind") == "Field"}
-    flat: tuple[tuple[str, str], ...] = tuple((op, val) for _, rs in rules.items() for op, val in rs)
-    verified: list[tuple[str, str]] = []
-    for fname, fl_rules in rules.items():
-        fld = by_name.get(fname, {})
-        live: set[tuple[str, str]] = set()
-        for cid in fld.get("FieldValidation::Criteria") or []:
-            for condid in (read_back.get(cid, {}).get("Criteria::Condition") or []):
-                c = read_back.get(condid, {})
-                if isinstance(c.get("Operator"), str):
-                    live.add((c["Operator"], str(c.get("RHSValue"))))
-        for op, val in fl_rules:
-            if (op, val) in live:
-                verified.append((op, val))
-    missing = tuple(r for r in flat if r not in verified)
 
-    published = False
-    if publish and not missing:
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
+    flat, verified = _audit_all_field_rules(read_back, rules)
+    missing = _calc_missing(flat, verified)
+    pub_result = _publish_validation(client, kind, flow_id, publish, missing)
+    if isinstance(pub_result, Err):
+        return pub_result
 
-    return ValidationReport(flow_id=flow_id, field_name=",".join(rules), rules=flat,
-                            verified=tuple(verified), missing=missing,
-                            meta_version=read_back.get(_META_VERSION), published=published)
+    return ValidationReport(
+        flow_id=flow_id,
+        field_name=",".join(rules),
+        rules=tuple(flat),
+        verified=tuple(verified),
+        missing=missing,
+        meta_version=read_back.get(_META_VERSION),
+        published=pub_result,
+    )
 
 
 @dataclass(frozen=True)
