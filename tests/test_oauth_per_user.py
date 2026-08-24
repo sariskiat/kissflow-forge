@@ -272,3 +272,62 @@ def test_redirect_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not auth._allowed_redirect("https://corp.example.com.evil.net/cb"), (
         "an env prefix must only match at a '/' boundary, never as a bare startswith"
     )
+
+
+def test_raw_redirect_uris(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kfforge import auth
+
+    token = auth._TOKEN_FORM.set({})
+    try:
+        monkeypatch.setattr(auth, "_http_request", lambda: None)
+        assert auth._raw_redirect_uris() == []
+
+        auth._TOKEN_FORM.set({"redirect_uri": "http://localhost:1234/cb"})
+        assert auth._raw_redirect_uris() == ["http://localhost:1234/cb"]
+
+        auth._TOKEN_FORM.set({})
+        mock_req = type("Req", (), {"query_params": {"redirect_uri": "http://localhost:5678/cb"}})()
+        monkeypatch.setattr(auth, "_http_request", lambda: mock_req)
+        assert auth._raw_redirect_uris() == ["http://localhost:5678/cb"]
+
+        mock_req_empty = type("Req", (), {"query_params": {}})()
+        monkeypatch.setattr(auth, "_http_request", lambda: mock_req_empty)
+        assert auth._raw_redirect_uris() == []
+
+        auth._TOKEN_FORM.set({"redirect_uri": "http://localhost:1234/cb"})
+        monkeypatch.setattr(auth, "_http_request", lambda: mock_req)
+        assert auth._raw_redirect_uris() == ["http://localhost:1234/cb", "http://localhost:5678/cb"]
+    finally:
+        auth._TOKEN_FORM.reset(token)
+
+
+def test_requested_redirect_uris(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pydantic import AnyUrl
+    from kfforge import auth
+
+    monkeypatch.delenv(auth.REDIRECTS_ENV, raising=False)
+    token = auth._TOKEN_FORM.set({})
+    try:
+        monkeypatch.setattr(auth, "_http_request", lambda: None)
+        assert auth._requested_redirect_uris() == [AnyUrl(auth.PLACEHOLDER_REDIRECT)]
+
+        auth._TOKEN_FORM.set({"redirect_uri": "http://localhost:1234/cb"})
+        assert auth._requested_redirect_uris() == [AnyUrl("http://localhost:1234/cb")]
+
+        auth._TOKEN_FORM.set({"redirect_uri": "https://evil.example.com/cb"})
+        assert auth._requested_redirect_uris() is None
+
+        auth._TOKEN_FORM.set({})
+        mock_req = type("Req", (), {"query_params": {"redirect_uri": "https://claude.ai/cb"}})()
+        monkeypatch.setattr(auth, "_http_request", lambda: mock_req)
+        assert auth._requested_redirect_uris() == [AnyUrl("https://claude.ai/cb")]
+
+        mock_req_evil = type("Req", (), {"query_params": {"redirect_uri": "https://evil.example.com/cb"}})()
+        monkeypatch.setattr(auth, "_http_request", lambda: mock_req_evil)
+        assert auth._requested_redirect_uris() is None
+
+        auth._TOKEN_FORM.set({"redirect_uri": "http://localhost:1234/cb"})
+        monkeypatch.setattr(auth, "_http_request", lambda: mock_req_evil)
+        assert auth._requested_redirect_uris() == [AnyUrl("http://localhost:1234/cb")]
+    finally:
+        auth._TOKEN_FORM.reset(token)
