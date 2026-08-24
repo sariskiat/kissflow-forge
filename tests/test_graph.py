@@ -2137,3 +2137,145 @@ def test_an_empty_owner_list_is_still_legal() -> None:
 
     matrix = progressive_matrix(_visibility_draft(), {"Other": []})
     assert set(matrix["Other"].values()) == {Visibility.READONLY}
+
+
+def test_repack_layout_pure_does_not_mutate_input() -> None:
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+
+    draft = synthetic_process_draft()
+    before = copy.deepcopy(draft)
+    out = repack_layout(draft)
+    assert draft == before
+    assert out is not draft
+
+
+def test_repack_layout_default_widths_and_column_stretching() -> None:
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+
+    draft = synthetic_process_draft()
+    repacked = repack_layout(draft)
+
+    # In synthetic draft:
+    # "Intake" has Ticket No (Text, 3), Contact Date (Date, 3), Unit Serial (Text, 3), Problem (Textarea, 6)
+    # Row 0: Ticket No (0, 3), Contact Date (3, 6)
+    # Row 1: Unit Serial (0, 6) -> stretched to 6
+    # Row 2: Problem (0, 6)
+    intake_sec = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "Intake")
+    row_ids = intake_sec["Column::Row"]
+    assert len(row_ids) == 3
+
+    r0 = repacked[row_ids[0]]
+    assert len(r0["Row::Column"]) == 2
+    c0_0, c0_1 = r0["Row::Column"]
+    assert (repacked[c0_0]["Start"], repacked[c0_0]["End"]) == (0, 3)
+    assert (repacked[c0_1]["Start"], repacked[c0_1]["End"]) == (3, 6)
+
+    r1 = repacked[row_ids[1]]
+    assert len(r1["Row::Column"]) == 1
+    c1_0 = r1["Row::Column"][0]
+    assert (repacked[c1_0]["Start"], repacked[c1_0]["End"]) == (0, 6)
+
+    r2 = repacked[row_ids[2]]
+    assert len(r2["Row::Column"]) == 1
+    c2_0 = r2["Row::Column"][0]
+    assert (repacked[c2_0]["Start"], repacked[c2_0]["End"]) == (0, 6)
+
+
+def test_repack_layout_custom_widths_and_capping() -> None:
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+
+    draft = synthetic_process_draft()
+    repacked = repack_layout(draft, widths={"Text": 6, "Select": 2, "Uncapped": 10})
+
+    # "Wrap-up" has Wrap Summary (Textarea, 6), Outcome (Select, 2), Handoff Owner (Text, 6)
+    # Row 0: Wrap Summary (0, 6)
+    # Row 1: Outcome (0, 6) -> stretched from 2 to 6
+    # Row 2: Handoff Owner (0, 6)
+    wrap_sec = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "Wrap-up")
+    row_ids = wrap_sec["Column::Row"]
+    assert len(row_ids) == 3
+
+
+def test_repack_layout_section_and_step_descriptions() -> None:
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+
+    draft = synthetic_process_draft()
+    sec_desc = {"Intake": "Intake Subtitle", "UnmatchedSec": "No-op"}
+    step_desc = {"Ticket arrives": "Step 1 Subtitle", "UnmatchedStep": "No-op"}
+
+    repacked = repack_layout(draft, section_descriptions=sec_desc, step_descriptions=step_desc)
+
+    intake_sec = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "Intake")
+    assert intake_sec.get("Description") == "Intake Subtitle"
+
+    step_node = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Kind") == "Activity" and v.get("Name") == "Ticket arrives")
+    assert step_node.get("Description") == "Step 1 Subtitle"
+
+    other_sec = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "Other")
+    assert "Description" not in other_sec
+
+
+def test_repack_layout_edge_cases_and_unknown_types() -> None:
+    from kfforge.graph import repack_layout
+
+    # Edge cases:
+    # 1. Section with empty Column::Row or None Column::Row
+    # 2. Section with Row having empty Row::Column or dangling row id
+    # 3. Field without Column reference
+    # 4. Column of non-Section type (e.g. Model or Field)
+    # 5. Column with unknown field type (falls back to DEFAULT_WIDTH)
+    synthetic_draft = {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "FlowType": "Process"},
+        "Sec_Empty": {"Id": "Sec_Empty", "Kind": "Column", "Type": "Section", "Name": "EmptySec", "Column::Row": []},
+        "Sec_NoneRows": {"Id": "Sec_NoneRows", "Kind": "Column", "Type": "Section", "Name": "NoneRowsSec", "Column::Row": None},
+        "Sec_Dangling": {
+            "Id": "Sec_Dangling",
+            "Kind": "Column",
+            "Type": "Section",
+            "Name": "DanglingSec",
+            "Column::Row": ["Row_Ghost", "Row_With_Unknown", "Row_Ghost2"],
+        },
+        "Row_Ghost2": None,
+        "Row_With_Unknown": {
+            "Id": "Row_With_Unknown",
+            "Kind": "Row",
+            "Column": "Sec_Dangling",
+            "Row::Column": ["Col_Unknown", "Col_NoField"],
+        },
+        "Col_Unknown": {"Id": "Col_Unknown", "Kind": "Column", "Type": "Field"},
+        "Field_Unknown": {"Id": "Field_Unknown", "Kind": "Field", "Type": "CustomUnknownType", "Column": "Col_Unknown"},
+        "Col_NoField": {"Id": "Col_NoField", "Kind": "Column", "Type": "Field"},
+        "Field_NoCol": {"Id": "Field_NoCol", "Kind": "Field", "Type": "Text"},
+        "Col_Model": {"Id": "Col_Model", "Kind": "Column", "Type": "Model"},
+    }
+
+    repacked = repack_layout(synthetic_draft, widths={})
+    assert repacked["Sec_Empty"]["Column::Row"] == []
+    assert repacked["Sec_NoneRows"]["Column::Row"] == []
+
+    dangling_sec = repacked["Sec_Dangling"]
+    assert len(dangling_sec["Column::Row"]) == 1
+    new_rid = dangling_sec["Column::Row"][0]
+    assert repacked[new_rid]["Row::Column"] == ["Col_Unknown", "Col_NoField"]
+    # Unknown field type gets DEFAULT_WIDTH (2), Col_NoField gets DEFAULT_WIDTH (2)
+    # Row packing: 2 + 2 = 4 <= 6 -> placed in same row
+    # Col_Unknown gets (0, 2), Col_NoField stretched from 2 to 6 -> (2, 6)
+    assert (repacked["Col_Unknown"]["Start"], repacked["Col_Unknown"]["End"]) == (0, 2)
+    assert (repacked["Col_NoField"]["Start"], repacked["Col_NoField"]["End"]) == (2, 6)
+
+
+def test_repack_layout_passes_doctor_audit() -> None:
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+    from kfforge.verify import doctor
+
+    draft = synthetic_process_draft()
+    repacked = repack_layout(draft)
+    report = doctor(repacked)
+    assert report.ok, report.violations
+

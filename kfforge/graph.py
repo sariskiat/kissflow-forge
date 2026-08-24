@@ -722,6 +722,114 @@ FIELD_WIDTH: dict[str, int] = {
 DEFAULT_WIDTH = 2
 
 
+def _resolve_widths(widths: dict[str, int] | None) -> dict[str, int]:
+    if not widths:
+        return dict(FIELD_WIDTH)
+    return {**FIELD_WIDTH, **widths}
+
+
+def _field_by_column(draft: Draft) -> dict[str, dict[str, Any]]:
+    return {v["Column"]: v for v in _kind(draft, "Field").values() if v.get("Column")}
+
+
+def _section_columns(draft: Draft) -> dict[str, dict[str, Any]]:
+    return {k: v for k, v in _kind(draft, "Column").items() if v.get("Type") == "Section"}
+
+
+def _ordered_section_columns(draft: Draft, sec: dict[str, Any]) -> list[str]:
+    cols: list[str] = []
+    row_ids = sec.get("Column::Row")
+    if not isinstance(row_ids, list):
+        return cols
+    for rid in row_ids:
+        row_node = draft.get(rid)
+        if isinstance(row_node, dict):
+            cols.extend(row_node.get("Row::Column", []))
+    return cols
+
+
+def _column_width(col: str, field_of_col: dict[str, dict[str, Any]], width_of: dict[str, int]) -> int:
+    ftype = str(field_of_col.get(col, {}).get("Type", ""))
+    return min(width_of.get(ftype, DEFAULT_WIDTH), ROW_UNITS)
+
+
+def _pack_repack_rows(
+    ordered: list[str],
+    field_of_col: dict[str, dict[str, Any]],
+    width_of: dict[str, int],
+) -> list[list[tuple[str, int]]]:
+    rows: list[list[tuple[str, int]]] = []
+    used = ROW_UNITS
+    for col in ordered:
+        w = _column_width(col, field_of_col, width_of)
+        if used + w > ROW_UNITS:
+            rows.append([])
+            used = 0
+        rows[-1].append((col, w))
+        used += w
+    return rows
+
+
+def _write_repacked_row(
+    draft: Draft,
+    sid: str,
+    sec_name: str,
+    row_index: int,
+    row: list[tuple[str, int]],
+) -> str:
+    rid = _new_id("Row", sid, 4000 + row_index, sec_name)
+    draft[rid] = {"Id": rid, "Kind": "Row", "Column": sid, "Row::Column": [c for c, _ in row]}
+    start = 0
+    last_idx = len(row) - 1
+    for j, (col, w) in enumerate(row):
+        # stretch the last column to the row edge, so a short tail never leaves a ragged
+        # gap (a 2 + 3 row would otherwise end at 5 with one dead unit)
+        end = ROW_UNITS if j == last_idx else start + w
+        draft[col].update({"Row": rid, "Start": start, "End": end})
+        start = end
+    return rid
+
+
+def _apply_section_description(sec: dict[str, Any], descriptions: dict[str, str] | None) -> None:
+    if not descriptions:
+        return
+    name = sec.get("Name")
+    if name in descriptions:
+        sec["Description"] = descriptions[name]
+
+
+def _repack_section(
+    draft: Draft,
+    sid: str,
+    sec: dict[str, Any],
+    field_of_col: dict[str, dict[str, Any]],
+    width_of: dict[str, int],
+    section_descriptions: dict[str, str] | None,
+) -> None:
+    ordered = _ordered_section_columns(draft, sec)
+    row_ids = sec.get("Column::Row")
+    if isinstance(row_ids, list):
+        for rid in row_ids:
+            draft.pop(rid, None)
+
+    rows = _pack_repack_rows(ordered, field_of_col, width_of)
+    sec_name = sec.get("Name", "")
+    sec["Column::Row"] = [
+        _write_repacked_row(draft, sid, sec_name, i, row)
+        for i, row in enumerate(rows)
+    ]
+    _apply_section_description(sec, section_descriptions)
+
+
+def _apply_step_descriptions(draft: Draft, step_descriptions: dict[str, str] | None) -> None:
+    if not step_descriptions:
+        return
+    for act in _kind(draft, "Activity").values():
+        name = act.get("Name")
+        if name in step_descriptions:
+            act["Description"] = step_descriptions[name]
+
+
 def repack_layout(
     draft: Draft,
     widths: dict[str, int] | None = None,
@@ -737,50 +845,13 @@ def repack_layout(
     whole flow (observed live: 17 columns at Start=0 in a single Row).
     """
     new: Draft = copy.deepcopy(draft)
-    width_of = {**FIELD_WIDTH, **(widths or {})}
+    width_of = _resolve_widths(widths)
+    field_of_col = _field_by_column(new)
 
-    field_of_col = {v["Column"]: v for v in new.values()
-                    if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Column")}
-    sections = {k: v for k, v in _kind(new, "Column").items() if v.get("Type") == "Section"}
+    for sid, sec in _section_columns(new).items():
+        _repack_section(new, sid, sec, field_of_col, width_of, section_descriptions)
 
-    for sid, sec in sections.items():
-        ordered = [c for r in sec.get("Column::Row") or []
-                   for c in (new.get(r) or {}).get("Row::Column") or []]
-        for rid in sec.get("Column::Row") or []:     # drop the old rows, keep the columns
-            new.pop(rid, None)
-
-        rows: list[list[tuple[str, int]]] = []
-        used = 0
-        for col in ordered:
-            ftype = str(field_of_col.get(col, {}).get("Type", ""))
-            w = min(width_of.get(ftype, DEFAULT_WIDTH), ROW_UNITS)
-            if not rows or used + w > ROW_UNITS:
-                rows.append([])
-                used = 0
-            rows[-1].append((col, w))
-            used += w
-
-        row_ids: list[str] = []
-        for i, row in enumerate(rows):
-            rid = _new_id("Row", sid, 4000 + i, sec.get("Name", ""))
-            new[rid] = {"Id": rid, "Kind": "Row", "Column": sid, "Row::Column": [c for c, _ in row]}
-            start = 0
-            for j, (col, w) in enumerate(row):
-                # stretch the last column to the row edge, so a short tail never leaves a ragged
-                # gap (a 2 + 3 row would otherwise end at 5 with one dead unit)
-                end = ROW_UNITS if j == len(row) - 1 else start + w
-                new[col].update({"Row": rid, "Start": start, "End": end})
-                start = end
-            row_ids.append(rid)
-        sec["Column::Row"] = row_ids
-
-        if section_descriptions and sec.get("Name") in section_descriptions:
-            sec["Description"] = section_descriptions[sec["Name"]]
-
-    if step_descriptions:
-        for act in _kind(new, "Activity").values():
-            if act.get("Name") in step_descriptions:
-                act["Description"] = step_descriptions[act["Name"]]
+    _apply_step_descriptions(new, step_descriptions)
     return new
 
 
