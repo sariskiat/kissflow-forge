@@ -7,8 +7,6 @@ import pytest
 
 from kfforge.client import (
     ApplyReport,
-    RoleUsersReport,
-    apply_add_role_users,
     BranchConditionReport,
     DeleteFieldsReport,
     Err,
@@ -20,12 +18,16 @@ from kfforge.client import (
     MemberReport,
     RenameFieldsReport,
     RequiredReport,
+    RoleUsersReport,
     StyleReport,
     TableReport,
+    ValidationReport,
     WorkflowReport,
+    apply_add_role_users,
     apply_branch_conditions,
     apply_dataset_records,
     apply_field_events,
+    apply_field_validation,
     apply_fields,
     apply_fields_and_layout,
     apply_fields_full,
@@ -687,6 +689,150 @@ def test_apply_field_events_offline_rejection_never_reaches_put() -> None:
     got = apply_field_events(c, "F1", {"NoSuchField": [("onChange", "1;")]})
     assert isinstance(got, Err) and got.kind == "verify"
     assert c.puts == 0
+
+
+# ---- apply_field_validation ------------------------------------------------------------------
+
+def test_apply_field_validation_wires_and_verifies() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    rep = apply_field_validation(c, "F1", {"Notes": [("CONTAINS", "important"), ("MAX_LENGTH", "200")]})
+    assert isinstance(rep, ValidationReport)
+    assert rep.flow_id == "F1"
+    assert rep.field_name == "Notes"
+    assert rep.rules == (("CONTAINS", "important"), ("MAX_LENGTH", "200"))
+    assert rep.verified == (("CONTAINS", "important"), ("MAX_LENGTH", "200"))
+    assert rep.missing == ()
+    assert rep.published is False
+    assert rep.meta_version == "v2"
+    assert rep.as_tool_result()["isError"] is False
+    assert c.puts == 1
+
+
+def test_apply_field_validation_with_publish_publishes_when_clean() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    rep = apply_field_validation(c, "F1", {"Notes": [("MAX_LENGTH", "100")]}, publish=True)
+    assert isinstance(rep, ValidationReport)
+    assert rep.published is True
+    assert c.published is True
+
+
+def test_apply_field_validation_publish_failure_returns_err() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    c.publish = lambda kind, fid: Err("http", "publish fail")  # type: ignore[assignment]
+    got = apply_field_validation(c, "F1", {"Notes": [("MAX_LENGTH", "100")]}, publish=True)
+    assert isinstance(got, Err)
+    assert got.kind == "http"
+
+
+def test_apply_field_validation_offline_rejection_never_reaches_put() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    got = apply_field_validation(c, "F1", {"NoSuchField": [("CONTAINS", "x")]})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "offline add_field_validation rejected" in got.message
+    assert c.puts == 0
+
+
+def test_apply_field_validation_get_draft_err_returns_err() -> None:
+    c = FakeClient(_bare_form_draft())
+    c.get_draft = lambda kind, fid: Err("http", "get draft 500")  # type: ignore[assignment]
+    got = apply_field_validation(c, "F1", {"Notes": [("CONTAINS", "x")]})
+    assert isinstance(got, Err)
+    assert got.kind == "http"
+    assert c.puts == 0
+
+
+def test_apply_field_validation_put_draft_conflict_returns_err() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    c.put_draft = lambda kind, fid, new, expect_version: Err("conflict", "version drift")  # type: ignore[assignment]
+    got = apply_field_validation(c, "F1", {"Notes": [("CONTAINS", "x")]})
+    assert isinstance(got, Err)
+    assert got.kind == "conflict"
+
+
+def test_apply_field_validation_read_back_err_returns_err() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    calls = 0
+
+    def get_draft_mock(kind: Any, fid: str) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return draft
+        return Err("http", "read-back 500")
+
+    c.get_draft = get_draft_mock  # type: ignore[assignment]
+    got = apply_field_validation(c, "F1", {"Notes": [("CONTAINS", "x")]})
+    assert isinstance(got, Err)
+    assert got.kind == "http"
+
+
+def test_apply_field_validation_reports_missing_when_read_back_lacks_condition() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+
+    def put_draft_mock(kind: Any, fid: str, new: Any, expect_version: str | None) -> Any:
+        c.puts += 1
+        c.draft = draft
+        return new
+
+    c.put_draft = put_draft_mock  # type: ignore[assignment]
+    rep = apply_field_validation(c, "F1", {"Notes": [("CONTAINS", "xyz")]}, publish=True)
+    assert isinstance(rep, ValidationReport)
+    assert rep.verified == ()
+    assert rep.missing == (("CONTAINS", "xyz"),)
+    assert rep.published is False
+    assert c.published is False
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_apply_field_validation_handles_multiple_fields_and_corrupt_nodes() -> None:
+    draft = _apply_changes(
+        _bare_form_draft(),
+        [FieldSpec(name="A", type=FieldType.TEXT), FieldSpec(name="B", type=FieldType.TEXT)],
+    )
+    c = FakeClient(draft)
+    rep = apply_field_validation(
+        c, "F1", {"A": [("CONTAINS", "1")], "B": [("MAX_LENGTH", "50")]}
+    )
+    assert isinstance(rep, ValidationReport)
+    assert rep.verified == (("CONTAINS", "1"), ("MAX_LENGTH", "50"))
+    assert rep.missing == ()
+
+    # Inject corrupt node references into read-back to exercise edge case guards
+    draft_with_corrupt = dict(c.draft)
+    draft_with_corrupt["corrupt_crit_str"] = "not a dict"
+    draft_with_corrupt["crit_bad_cond_list"] = {"Kind": "Criteria", "Criteria::Condition": "not a list"}
+    draft_with_corrupt["bad_cond_op"] = {"Kind": "Condition", "Operator": 123}
+    draft_with_corrupt["dangling_cond_crit"] = {"Kind": "Criteria", "Criteria::Condition": ["nonexistent_cond"]}
+    fld_a = next(v for v in draft_with_corrupt.values() if isinstance(v, dict) and v.get("Name") == "A")
+    fld_a["FieldValidation::Criteria"] = [
+        "corrupt_crit_str",
+        "crit_bad_cond_list",
+        "dangling_cond_crit",
+        fld_a["FieldValidation::Criteria"][0],
+    ]
+    fld_b = next(v for v in draft_with_corrupt.values() if isinstance(v, dict) and v.get("Name") == "B")
+    fld_b["FieldValidation::Criteria"] = "not a list"
+
+    c2 = FakeClient(draft)
+
+    def put_corrupt(kind: Any, fid: str, new: Any, expect_version: str | None) -> Any:
+        c2.puts += 1
+        c2.draft = draft_with_corrupt
+        return new
+
+    c2.put_draft = put_corrupt  # type: ignore[assignment]
+    # Read-back with corrupt nodes doesn't crash and still audits correctly
+    rep2 = apply_field_validation(c2, "F1", {"A": [("CONTAINS", "1")], "B": [("MAX_LENGTH", "50")]})
+    assert isinstance(rep2, ValidationReport)
+    assert ("CONTAINS", "1") in rep2.verified
+    assert ("MAX_LENGTH", "50") in rep2.missing
 
 
 # ---- apply_section_style ----------------------------------------------------------------------
