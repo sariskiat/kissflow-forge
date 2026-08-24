@@ -5569,6 +5569,125 @@ def _root_field_nodes(draft: Draft) -> dict[str, dict[str, Any]]:
             if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Model") == root}
 
 
+def _unfillable_required_reason(node: dict[str, Any]) -> str | None:
+    if node.get("Field::Expression"):
+        return "computed"
+    return "SequenceNumber" if node.get("Type") == "SequenceNumber" else None
+
+
+def _unsatisfiable_required_fields(
+    root_fields: dict[str, dict[str, Any]],
+    wanted: set[str],
+) -> list[str]:
+    unsatisfiable: list[str] = []
+    for name in sorted(wanted):
+        node = root_fields.get(name)
+        reason = _unfillable_required_reason(node) if node is not None else None
+        if reason is not None:
+            unsatisfiable.append(f"{name} ({reason})")
+    return unsatisfiable
+
+
+def _cleared_required_fields(
+    root_fields: dict[str, dict[str, Any]],
+    wanted: set[str],
+) -> tuple[str, ...]:
+    cleared = [
+        name for name, node in root_fields.items()
+        if node.get("Required") and name not in wanted
+    ]
+    return tuple(sorted(cleared))
+
+
+def _prepare_required_draft(
+    draft: Draft,
+    wanted: set[str],
+) -> tuple[Draft, tuple[str, ...]] | Err:
+    root_fields = _root_field_nodes(draft)
+    unsatisfiable = _unsatisfiable_required_fields(root_fields, wanted)
+    if unsatisfiable:
+        return Err("verify", f"refusing to mark un-fillable field(s) Required: {unsatisfiable} — "
+                             "a value the user cannot type makes that step permanently "
+                             "unsubmittable (graph.set_required, CLAUDE.md Visibility)")
+    try:
+        new = set_required(draft, wanted)
+    except ValueError as e:
+        return Err("verify", f"offline set_required rejected the spec: {e}")
+    return new, _cleared_required_fields(root_fields, wanted)
+
+
+def _sync_required_draft(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    new: Draft,
+    version: str | None,
+) -> Draft | Err:
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+    return client.get_draft(kind, flow_id)
+
+
+def _is_required_verified(node: dict[str, Any] | None, wanted: bool) -> bool:
+    return node is not None and bool(node.get("Required", False)) is wanted
+
+
+def _audit_required_readback(
+    live: dict[str, dict[str, Any]],
+    wanted: set[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    # The audit unit is EVERY root field the read-back knows about, UNION every name the caller
+    # REQUESTED. The union is the load-bearing half: iterating the read-back population alone
+    # (what this used to do) means a requested name that was on the form before the write and is
+    # NOT in the read-back lands in no bucket at all — `{"required": ["A"], "verified": ["B"],
+    # "missing": [], "published": true}`. Every sibling here (delete_fields, rename_form_fields,
+    # apply_fields) iterates the REQUESTED set; this one used to invert it. Keeping the read-back
+    # side too is deliberate and is what `apply_required` alone needs: a SET operation that
+    # flipped a field the caller never mentioned is exactly what this report exists to surface.
+    verified: list[str] = []
+    missing: list[str] = []
+    for name in sorted(set(live) | wanted):
+        target = verified if _is_required_verified(live.get(name), name in wanted) else missing
+        target.append(name)
+    return tuple(verified), tuple(missing)
+
+
+def _publish_required_flow(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+) -> bool | Err:
+    pub = client.publish(kind, flow_id)
+    if isinstance(pub, Err):
+        return pub
+    return True
+
+
+def _finalize_required_report(
+    client: KfClient,
+    flow_id: str,
+    kind: FlowKind,
+    required: tuple[str, ...],
+    cleared: tuple[str, ...],
+    read_back: Draft,
+    wanted: set[str],
+    publish: bool,
+) -> RequiredReport | Err:
+    verified, missing = _audit_required_readback(_root_field_nodes(read_back), wanted)
+    if publish and not missing:
+        pub = _publish_required_flow(client, kind, flow_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+    else:
+        published = False
+    return RequiredReport(
+        flow_id=flow_id, required=required, verified=verified, missing=missing,
+        cleared=cleared, meta_version=read_back.get(_META_VERSION), published=published,
+    )
+
+
 def apply_required(
     client: KfClient,
     flow_id: str,
@@ -5593,59 +5712,17 @@ def apply_required(
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
         return draft
-    version = draft.get(_META_VERSION)
 
-    root_fields = _root_field_nodes(draft)
     wanted = set(required)
-    unsatisfiable = sorted(
-        f"{name} ({'computed' if node.get('Field::Expression') else 'SequenceNumber'})"
-        for name, node in root_fields.items()
-        if name in wanted and (node.get("Field::Expression") or node.get("Type") == "SequenceNumber")
-    )
-    if unsatisfiable:
-        return Err("verify", f"refusing to mark un-fillable field(s) Required: {unsatisfiable} — "
-                             "a value the user cannot type makes that step permanently "
-                             "unsubmittable (graph.set_required, CLAUDE.md Visibility)")
+    prepared = _prepare_required_draft(draft, wanted)
+    if isinstance(prepared, Err):
+        return prepared
+    new, cleared = prepared
 
-    was_required = {name for name, node in root_fields.items() if node.get("Required")}
-
-    try:
-        new = set_required(draft, wanted)
-    except ValueError as e:
-        return Err("verify", f"offline set_required rejected the spec: {e}")
-
-    written = client.put_draft(kind, flow_id, new, expect_version=version)
-    if isinstance(written, Err):
-        return written
-
-    read_back = client.get_draft(kind, flow_id)
+    read_back = _sync_required_draft(client, kind, flow_id, new, draft.get(_META_VERSION))
     if isinstance(read_back, Err):
         return read_back
 
-    # The audit unit is EVERY root field the read-back knows about, UNION every name the caller
-    # REQUESTED. The union is the load-bearing half: iterating the read-back population alone
-    # (what this used to do) means a requested name that was on the form before the write and is
-    # NOT in the read-back lands in no bucket at all — `{"required": ["A"], "verified": ["B"],
-    # "missing": [], "published": true}`. Every sibling here (delete_fields, rename_form_fields,
-    # apply_fields) iterates the REQUESTED set; this one used to invert it. Keeping the read-back
-    # side too is deliberate and is what `apply_required` alone needs: a SET operation that
-    # flipped a field the caller never mentioned is exactly what this report exists to surface.
-    live = _root_field_nodes(read_back)
-    audited = sorted(set(live) | wanted)
-    verified = tuple(n for n in audited
-                     if n in live and bool(live[n].get("Required", False)) is (n in wanted))
-    missing = tuple(n for n in audited
-                    if n not in live or bool(live[n].get("Required", False)) is not (n in wanted))
-    cleared = tuple(sorted(was_required - wanted))
-
-    published = False
-    if publish and not missing:
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
-
-    return RequiredReport(
-        flow_id=flow_id, required=tuple(required), verified=verified, missing=missing,
-        cleared=cleared, meta_version=read_back.get(_META_VERSION), published=published,
+    return _finalize_required_report(
+        client, flow_id, kind, required, cleared, read_back, wanted, publish,
     )
