@@ -439,6 +439,32 @@ def build_bank() -> list[Query]:
     return bank
 
 
+def _filter_sweep(bank: list[Query], sweep: str | None) -> list[Query]:
+    if not sweep:
+        return bank
+    return [q for q in bank if q.sweep == sweep]
+
+
+def _filter_observable(bank: list[Query], observable: str | None) -> list[Query]:
+    if not observable:
+        return bank
+    return [q for q in bank if q.observable == observable]
+
+
+def _print_counts(bank: list[Query]) -> None:
+    counts: dict[str, int] = {}
+    for q in bank:
+        counts[q.sweep] = counts.get(q.sweep, 0) + 1
+    for sweep in sorted(counts):
+        print(f"{sweep}\t{counts[sweep]}")
+    print(f"total\t{len(bank)}")
+
+
+def _print_queries(bank: list[Query]) -> None:
+    for q in bank:
+        print(json.dumps(asdict(q), ensure_ascii=False))
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Copilot query bank (ticket #44)")
     ap.add_argument("--sweep", choices=sorted(SWEEPS))
@@ -447,22 +473,13 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     bank = build_bank()
-    if args.sweep:
-        bank = [q for q in bank if q.sweep == args.sweep]
-    if args.observable:
-        bank = [q for q in bank if q.observable == args.observable]
-
+    bank = _filter_sweep(bank, args.sweep)
+    bank = _filter_observable(bank, args.observable)
     if args.count:
-        counts: dict[str, int] = {}
-        for q in bank:
-            counts[q.sweep] = counts.get(q.sweep, 0) + 1
-        for sweep in sorted(counts):
-            print(f"{sweep}\t{counts[sweep]}")
-        print(f"total\t{len(bank)}")
+        _print_counts(bank)
         return 0
 
-    for q in bank:
-        print(json.dumps(asdict(q), ensure_ascii=False))
+    _print_queries(bank)
     return 0
 
 
