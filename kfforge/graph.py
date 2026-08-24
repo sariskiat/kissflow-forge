@@ -899,6 +899,151 @@ def set_required(draft: Draft, required: set[str]) -> Draft:
     return new
 
 
+def _is_field_match(name: str, fid: str, node: dict[str, Any]) -> bool:
+    return node.get("Name") == name or fid == name
+
+
+def _field_hits(draft: Draft, name: str) -> list[str]:
+    hits = [k for k, v in _kind(draft, "Field").items() if _is_field_match(name, k, v)]
+    if not hits:
+        raise ValueError(f"no field named {name!r}")
+    return hits
+
+
+def _field_delete_closure(draft: Draft, fields: tuple[str, ...]) -> set[str]:
+    doomed: set[str] = set()
+    for name in fields:
+        for fid in _field_hits(draft, name):
+            doomed.add(fid)
+            col = draft[fid].get("Column")
+            if isinstance(col, str):
+                doomed.add(col)
+    return doomed
+
+
+def _table_model_closure(draft: Draft, tid: str) -> set[str]:
+    out = {tid}
+    table = draft.get(tid, {})
+    out.update(table.get("Model::Row", []))
+    for cfid in table.get("Model::Field", []):
+        out.add(cfid)
+        col = draft.get(cfid, {}).get("Column")
+        if isinstance(col, str):
+            out.add(col)
+    return out
+
+
+def _table_cluster(draft: Draft, host: str) -> set[str]:
+    doomed = {host}
+    row = draft[host].get("Row")
+    if isinstance(row, str):
+        doomed.add(row)
+    for tid in draft[host].get("Column::Model", []):
+        doomed |= _table_model_closure(draft, tid)
+    return doomed
+
+
+def _table_host_map(draft: Draft) -> dict[str, str]:
+    return {
+        v["Name"]: k
+        for k, v in _kind(draft, "Column").items()
+        if v.get("Type") == "Model" and v.get("Name")
+    }
+
+
+def _table_delete_closure(draft: Draft, tables: tuple[str, ...]) -> set[str]:
+    if not tables:
+        return set()
+    host_by_name = _table_host_map(draft)
+    doomed: set[str] = set()
+    for name in tables:
+        host = host_by_name.get(name)
+        if host is None:
+            raise ValueError(f"no table named {name!r}")
+        doomed |= _table_cluster(draft, host)
+    return doomed
+
+
+def _nodes_matching_key(draft: Draft, kind: str, key: str, doomed: set[str]) -> set[str]:
+    return {k for k, v in _kind(draft, kind).items() if v.get(key) in doomed}
+
+
+def _doomed_listeners(draft: Draft, doomed: set[str]) -> set[str]:
+    return _nodes_matching_key(draft, "Permission", "Column", doomed) | _nodes_matching_key(
+        draft, "Event", "Field", doomed
+    )
+
+
+def _str_roots(roots: list[Any]) -> list[str]:
+    return [r for r in roots if isinstance(r, str)]
+
+
+def _node_tree(draft: Draft, roots: list[Any]) -> set[str]:
+    """One Expression's whole AST, following `Node::Node` down from each root."""
+    out: set[str] = set()
+    stack = _str_roots(roots)
+    while stack:
+        nid = stack.pop()
+        if nid in out or nid not in draft:
+            continue
+        out.add(nid)
+        stack.extend(draft[nid].get("Node::Node", []))
+    return out
+
+
+def _query_def_doomed(draft: Draft, nid: str, node: dict[str, Any], doomed: set[str]) -> set[str]:
+    return {nid} if node.get("Field") in doomed else set()
+
+
+def _expr_doomed(draft: Draft, nid: str, node: dict[str, Any], doomed: set[str]) -> set[str]:
+    if node.get("Field") in doomed:
+        return {nid} | _node_tree(draft, node.get("Expression::Node", []))
+    return set()
+
+
+def _property_cluster(draft: Draft, node: dict[str, Any]) -> set[str]:
+    out: set[str] = set()
+    for eid in node.get("Property::Expression", []):
+        out.add(eid)
+        expr = draft.get(eid, {})
+        out |= _node_tree(draft, expr.get("Expression::Node", []))
+    return out
+
+
+def _prop_doomed(draft: Draft, nid: str, node: dict[str, Any], doomed: set[str]) -> set[str]:
+    if node.get("Field") in doomed:
+        return {nid} | _property_cluster(draft, node)
+    return set()
+
+
+def _criteria_is_doomed(node: dict[str, Any], doomed: set[str]) -> bool:
+    return node.get("FieldValidation") in doomed or node.get("ColumnVisibility") in doomed
+
+
+def _criteria_doomed(draft: Draft, nid: str, node: dict[str, Any], doomed: set[str]) -> set[str]:
+    if not _criteria_is_doomed(node, doomed):
+        return set()
+    return {nid} | {c for c in node.get("Criteria::Condition", []) if isinstance(c, str)}
+
+
+_CONFIG_CLUSTER_HANDLERS = {
+    "QueryDefinition": _query_def_doomed,
+    "Expression": _expr_doomed,
+    "Property": _prop_doomed,
+    "Criteria": _criteria_doomed,
+}
+
+
+def _config_cluster_closure(draft: Draft, doomed: set[str]) -> set[str]:
+    out: set[str] = set()
+    for nid, node in draft.items():
+        if isinstance(node, dict):
+            handler = _CONFIG_CLUSTER_HANDLERS.get(node.get("Kind"))
+            if handler is not None:
+                out |= handler(draft, nid, node, doomed)
+    return out
+
+
 def delete_closure(draft: Draft, fields: tuple[str, ...] = (), tables: tuple[str, ...] = ()) -> set[str]:
     """Every node id `delete_nodes` will remove for this request. Pure, READ-ONLY on `draft`.
 
@@ -925,76 +1070,9 @@ def delete_closure(draft: Draft, fields: tuple[str, ...] = (), tables: tuple[str
 
     Unknown names raise rather than silently doing nothing — a typo must not read as success.
     """
-    doomed: set[str] = set()
-
-    # NAMES ARE NOT UNIQUE — a form and its child tables all had a field called "Untitled field",
-    # and a name->id dict silently kept only the last, so a delete quietly hit the wrong one.
-    # Match every field with the name, and accept a raw node id to disambiguate.
-    for name in fields:
-        hits = [k for k, v in _kind(draft, "Field").items()
-                if v.get("Name") == name or k == name]
-        if not hits:
-            raise ValueError(f"no field named {name!r}")
-        for fid in hits:
-            doomed.add(fid)
-            col = draft[fid].get("Column")
-            if isinstance(col, str):
-                doomed.add(col)
-
-    host_by_name = {v["Name"]: k for k, v in _kind(draft, "Column").items()
-                    if v.get("Type") == "Model" and v.get("Name")}
-    for name in tables:
-        host = host_by_name.get(name)
-        if host is None:
-            raise ValueError(f"no table named {name!r}")
-        doomed.add(host)
-        if isinstance(row := draft[host].get("Row"), str):
-            doomed.add(row)
-        for tid in draft[host].get("Column::Model") or []:
-            doomed.add(tid)
-            table = draft.get(tid) or {}
-            doomed.update(table.get("Model::Row") or [])
-            for cfid in table.get("Model::Field") or []:
-                doomed.add(cfid)
-                if isinstance(c := (draft.get(cfid) or {}).get("Column"), str):
-                    doomed.add(c)
-
-    # every Permission aimed at a doomed Column goes with it
-    doomed |= {k for k, v in _kind(draft, "Permission").items() if v.get("Column") in doomed}
-    # ...and every Event on a doomed Field
-    doomed |= {k for k, v in _kind(draft, "Event").items() if v.get("Field") in doomed}
-
-    def _node_tree(roots: list[Any]) -> set[str]:
-        """One Expression's whole AST, following `Node::Node` down from each root."""
-        out: set[str] = set()
-        stack = [r for r in roots if isinstance(r, str)]
-        while stack:
-            nid = stack.pop()
-            if nid in out or nid not in draft:
-                continue
-            out.add(nid)
-            stack.extend(draft[nid].get("Node::Node") or [])
-        return out
-
-    # layer 2: the doomed node's OWN configuration cluster (see the docstring).
-    for nid, node in draft.items():
-        if not isinstance(node, dict):
-            continue
-        kind = node.get("Kind")
-        if kind == "QueryDefinition" and node.get("Field") in doomed:
-            doomed.add(nid)
-        elif kind == "Expression" and node.get("Field") in doomed:
-            doomed.add(nid)
-            doomed |= _node_tree(node.get("Expression::Node") or [])
-        elif kind == "Property" and node.get("Field") in doomed:
-            doomed.add(nid)
-            for eid in node.get("Property::Expression") or []:
-                doomed.add(eid)
-                doomed |= _node_tree((draft.get(eid) or {}).get("Expression::Node") or [])
-        elif kind == "Criteria" and (node.get("FieldValidation") in doomed
-                                     or node.get("ColumnVisibility") in doomed):
-            doomed.add(nid)
-            doomed |= {c for c in (node.get("Criteria::Condition") or []) if isinstance(c, str)}
+    doomed = _field_delete_closure(draft, fields) | _table_delete_closure(draft, tables)
+    doomed |= _doomed_listeners(draft, doomed)
+    doomed |= _config_cluster_closure(draft, doomed)
     return doomed
 
 

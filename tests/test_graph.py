@@ -2029,6 +2029,131 @@ def test_field_delete_blockers_names_a_surviving_event_script_that_uses_the_id()
     assert field_delete_blockers(draft, ("Source",)) == (), "the event's OWN field deletes clean"
 
 
+def test_delete_closure_sweeps_table_and_its_cluster() -> None:
+    from kfforge.graph import add_table, delete_closure, delete_nodes
+
+    draft = _form_with(FieldSpec(name="Notes", type=FieldType.TEXT))
+    draft = add_table(draft, "Items", [("Qty", FieldType.NUMBER), ("Desc", FieldType.TEXT)])
+
+    host_col = next(k for k, v in draft.items()
+                    if isinstance(v, dict) and v.get("Kind") == "Column"
+                    and v.get("Type") == "Model" and v.get("Name") == "Items")
+    nested_model = draft[host_col]["Column::Model"][0]
+
+    doomed = delete_closure(draft, tables=("Items",))
+    assert host_col in doomed
+    assert nested_model in doomed
+    assert draft[host_col].get("Row") in doomed
+    for r in draft[nested_model].get("Model::Row", []):
+        assert r in doomed
+    for f in draft[nested_model].get("Model::Field", []):
+        assert f in doomed
+        assert draft[f]["Column"] in doomed
+
+    got = delete_nodes(draft, tables=("Items",))
+    assert host_col not in got
+    assert nested_model not in got
+    assert "Notes" in {v.get("Name") for v in got.values() if isinstance(v, dict) and v.get("Kind") == "Field"}
+    assert _scalar_dangling_refs(got) == []
+
+
+def test_delete_closure_unknown_table_raises() -> None:
+    from kfforge.graph import delete_closure
+
+    draft = _form_with(FieldSpec(name="Notes", type=FieldType.TEXT))
+    with pytest.raises(ValueError, match="no table named 'Missing'"):
+        delete_closure(draft, tables=("Missing",))
+
+
+def test_delete_closure_sweeps_sequence_number_property_chain() -> None:
+    from kfforge.graph import (
+        add_sequence_number,
+        apply_changes,
+        build_workflow,
+        delete_closure,
+        delete_nodes,
+        regroup_into_sections,
+    )
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Process"}}
+    d = apply_changes(bare, [FieldSpec(name="a", type=FieldType.TEXT)])
+    d = regroup_into_sections(d, [("S", ["a"])])
+    d = build_workflow(d, [("Log it", None)])
+    draft = add_sequence_number(d, "running number", "S", "PRE-", "0001", "Start", 0, 2)
+
+    prop_ids = [k for k, v in draft.items() if isinstance(v, dict) and v.get("Kind") == "Property"]
+    assert len(prop_ids) == 3, "SequenceNumber creates 3 Property nodes"
+
+    doomed = delete_closure(draft, fields=("running number",))
+    for pid in prop_ids:
+        assert pid in doomed
+
+    got = delete_nodes(draft, fields=("running number",))
+    assert not any(isinstance(v, dict) and v.get("Kind") == "Property" for v in got.values())
+    assert _scalar_dangling_refs(got) == []
+
+
+def test_delete_closure_resolves_field_by_raw_node_id_and_handles_missing_column() -> None:
+    from kfforge.graph import delete_closure
+
+    draft = _form_with(FieldSpec(name="A", type=FieldType.TEXT))
+    fid = next(k for k, v in draft.items() if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "A")
+
+    # Resolve by raw id
+    assert fid in delete_closure(draft, fields=(fid,))
+
+    # Field without a Column
+    draft["Field_no_col"] = {"Id": "Field_no_col", "Kind": "Field", "Name": "NoCol", "Column": None}
+    assert "Field_no_col" in delete_closure(draft, fields=("NoCol",))
+
+
+def test_delete_closure_sweeps_events_and_criteria_with_column_visibility() -> None:
+    from kfforge.graph import delete_closure
+
+    draft = _form_with(FieldSpec(name="Flag", type=FieldType.BOOLEAN))
+    fid = next(k for k, v in draft.items() if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Flag")
+    col = draft[fid]["Column"]
+
+    draft["Event_1"] = {"Id": "Event_1", "Kind": "Event", "Field": fid, "Type": "onChange"}
+    draft["Criteria_1"] = {"Id": "Criteria_1", "Kind": "Criteria", "ColumnVisibility": col, "Criteria::Condition": ["Condition_1"]}
+    draft["Condition_1"] = {"Id": "Condition_1", "Kind": "Condition", "Criteria": "Criteria_1"}
+
+    # Surviving criteria and property
+    draft["Field_surv"] = {"Id": "Field_surv", "Kind": "Field", "Name": "Surv", "Column": "Col_surv"}
+    draft["Property_surv"] = {"Id": "Property_surv", "Kind": "Property", "Field": "Field_surv"}
+    draft["Criteria_surv"] = {"Id": "Criteria_surv", "Kind": "Criteria", "FieldValidation": "Field_surv"}
+
+    doomed = delete_closure(draft, fields=("Flag",))
+    assert "Event_1" in doomed
+    assert "Criteria_1" in doomed
+    assert "Condition_1" in doomed
+    assert "Property_surv" not in doomed
+    assert "Criteria_surv" not in doomed
+
+
+def test_delete_closure_table_and_node_tree_edge_cases() -> None:
+    from kfforge.graph import _node_tree, delete_closure
+
+    # Test _node_tree with duplicates, missing nodes, and non-string roots
+    draft = {
+        "N1": {"Id": "N1", "Node::Node": ["N2", "N_missing", "N1"]},
+        "N2": {"Id": "N2", "Node::Node": []},
+    }
+    tree = _node_tree(draft, ["N1", None, 123])
+    assert tree == {"N1", "N2"}
+
+    # Test table with non-string row and child field with no column
+    table_draft = {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "FlowType": "Form"},
+        "Col_tbl": {"Id": "Col_tbl", "Kind": "Column", "Type": "Model", "Name": "Tbl", "Row": None, "Column::Model": ["Model_tbl"]},
+        "Model_tbl": {"Id": "Model_tbl", "Kind": "Model", "Model::Field": ["Field_child"]},
+        "Field_child": {"Id": "Field_child", "Kind": "Field", "Column": None},
+    }
+    doomed = delete_closure(table_draft, tables=("Tbl",))
+    assert doomed == {"Col_tbl", "Model_tbl", "Field_child"}
+
+
 # ---- apply_changes: a Select must name the list its options live in --------------------------
 
 def test_apply_changes_refuses_a_select_with_no_referred_list() -> None:
