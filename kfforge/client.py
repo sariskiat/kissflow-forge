@@ -3839,6 +3839,418 @@ class RoleUsersReport:
         return out
 
 
+@dataclass(frozen=True)
+class _PreparedRoleUpdate:
+    detail: dict[str, Any]
+    existing_members: list[dict[str, Any]]
+    existing_groups: list[dict[str, Any]]
+    new_ones: list[dict[str, Any]]
+    new_groups: list[dict[str, Any]]
+    already: tuple[str, ...]
+    groups_already: tuple[str, ...]
+    groups_refused: tuple[str, ...]
+    not_found: tuple[str, ...]
+    blocked_note: str | None
+
+
+def _validate_role_user_args(
+    user_query: str | None,
+    user_ids: list[dict[str, Any]] | None,
+    groups: list[dict[str, Any]] | None,
+) -> Err | None:
+    if not any((user_query is not None, bool(user_ids), bool(groups))):
+        return Err("verify", "apply_add_role_users: give user_query, user_ids or groups")
+    return None
+
+
+def _group_display_name(g: Any) -> str:
+    if isinstance(g, dict):
+        return str(g.get("Name") or g.get("_id") or "")
+    return ""
+
+
+def _format_group_names(groups: list[dict[str, Any]]) -> str:
+    names = [name for g in groups if (name := _group_display_name(g))]
+    return ", ".join(names) or "<unnamed>"
+
+
+def _validate_role_group_notification(
+    groups: list[dict[str, Any]] | None,
+    confirm: bool,
+) -> Err | None:
+    if not groups or confirm:
+        return None
+    named = _format_group_names(groups)
+    return Err(
+        "verify",
+        f"refusing to grant group(s) [{named}] without confirm_group_notification=True — "
+        f"Kissflow FANS OUT A NOTIFICATION TO EVERY MEMBER the moment the grant lands, and on "
+        f"a whole-tenant group that is every person in the account (CLAUDE.md Members first: "
+        f"this happened, 2026-08-20). AND IT CANNOT BE UNDONE: membership writes are ADD-ONLY "
+        f"— nine removal shapes were probed live and none of them remove a group, so the only "
+        f"recovery is to build a REPLACEMENT role, re-point the workflow assignees at it, "
+        f"rebuild the visibility matrix that re-point wipes, and delete the polluted role. "
+        f"To TEST this tool, grant ONE named developer instead: user_query='<your name>'. "
+        f"Pass confirm_group_notification=True only after a human has confirmed the actual "
+        f"recipient list, the same as sending mail.",
+    )
+
+
+def _is_valid_group_dict(g: Any) -> bool:
+    return isinstance(g, dict) and bool(g.get("_id"))
+
+
+def _validate_role_groups_shape(groups: list[dict[str, Any]] | None) -> Err | None:
+    for g in groups or ():
+        if not _is_valid_group_dict(g):
+            return Err(
+                "verify",
+                f"apply_add_role_users: each group must be an assignee-shaped dict with an "
+                f"_id, e.g. {{'_id': 'everyone', 'Kind': 'Group', 'Name': 'Everyone'}} — got "
+                f"{g!r}",
+            )
+    return None
+
+
+def _validate_role_update_inputs(
+    user_query: str | None,
+    user_ids: list[dict[str, Any]] | None,
+    groups: list[dict[str, Any]] | None,
+    confirm_group_notification: bool,
+) -> Err | None:
+    return (
+        _validate_role_user_args(user_query, user_ids, groups)
+        or _validate_role_group_notification(groups, confirm_group_notification)
+        or _validate_role_groups_shape(groups)
+    )
+
+
+def _match_assignee_nodes(found: list[Any]) -> list[dict[str, Any]]:
+    return [c for c in found if isinstance(c, dict) and c.get("_id")]
+
+
+def _resolve_role_user_query(
+    client: KfClient,
+    user_query: str | None,
+) -> tuple[list[dict[str, Any]], tuple[str, ...]] | Err:
+    if user_query is None:
+        return [], ()
+    found = client.get_assignee(user_query)
+    if isinstance(found, Err):
+        return found
+    matched = _match_assignee_nodes(found)
+    if matched:
+        return matched, ()
+    return [], (user_query,)
+
+
+def _member_ids(members: Iterable[Any]) -> set[str]:
+    return {str(m.get("_id")) for m in members if isinstance(m, dict)}
+
+
+def _partition_user_candidates(
+    candidates: list[dict[str, Any]],
+    existing_members: list[dict[str, Any]],
+) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
+    existing_ids = _member_ids(existing_members)
+    already: list[str] = []
+    new_ones: list[dict[str, Any]] = []
+    for c in candidates:
+        cid = str(c.get("_id"))
+        if cid in existing_ids:
+            already.append(cid)
+        else:
+            new_ones.append(c)
+    return tuple(already), new_ones
+
+
+def _partition_candidate_groups(
+    groups: list[dict[str, Any]] | None,
+    existing_groups: list[dict[str, Any]],
+) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
+    existing_ids = _member_ids(existing_groups)
+    already: list[str] = []
+    new_groups: list[dict[str, Any]] = []
+    for g in groups or ():
+        gid = str(g.get("_id"))
+        if gid in existing_ids:
+            already.append(gid)
+        else:
+            new_groups.append(g)
+    return tuple(already), new_groups
+
+
+def _is_group_regrant_blocked(detail: dict[str, Any], force: bool) -> bool:
+    if force:
+        return False
+    gc = detail.get("GroupCount")
+    return isinstance(gc, int) and gc > 0
+
+
+def _gate_group_regrant(
+    new_groups: list[dict[str, Any]],
+    detail: dict[str, Any],
+    force: bool,
+) -> tuple[list[dict[str, Any]], tuple[str, ...], str | None]:
+    if not new_groups or not _is_group_regrant_blocked(detail, force):
+        return new_groups, (), None
+    refused = tuple(str(g["_id"]) for g in new_groups)
+    note = (
+        f"refused to re-issue the Groups write for {', '.join(refused)}: GroupCount is "
+        f"already {detail['GroupCount']} on this role and no group LIST exists to prove these "
+        f"are different groups, so a repeat grant is assumed to be a duplicate and skipped to "
+        f"avoid re-broadcasting the notification — pass force_regrant_groups=True to override"
+    )
+    return [], refused, note
+
+
+def _has_no_new_members(new_ones: list[Any], new_groups: list[Any]) -> bool:
+    return not new_ones and not new_groups
+
+
+def _fetch_and_resolve_role(
+    client: KfClient,
+    role_id: str,
+    user_query: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], tuple[str, ...]] | Err:
+    detail = client.get_app_role(role_id)
+    if isinstance(detail, Err):
+        return detail
+    query_res = _resolve_role_user_query(client, user_query)
+    if isinstance(query_res, Err):
+        return query_res
+    query_candidates, not_found = query_res
+    return detail, query_candidates, not_found
+
+
+def _partition_role_members(
+    detail: dict[str, Any],
+    user_ids: list[dict[str, Any]] | None,
+    query_candidates: list[dict[str, Any]],
+    groups: list[dict[str, Any]] | None,
+    force_regrant_groups: bool,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    str | None,
+]:
+    existing_members = list(detail.get("Members") or ())
+    candidates = list(user_ids or ()) + query_candidates
+    already, new_ones = _partition_user_candidates(candidates, existing_members)
+
+    existing_groups = _existing_group_list(detail)
+    groups_already, candidate_groups = _partition_candidate_groups(groups, existing_groups)
+    new_groups, groups_refused, blocked_note = _gate_group_regrant(
+        candidate_groups, detail, force_regrant_groups
+    )
+    return (
+        existing_members, existing_groups, new_ones, new_groups,
+        already, groups_already, groups_refused, blocked_note,
+    )
+
+
+def _prepare_role_update(
+    client: KfClient,
+    role_id: str,
+    user_query: str | None,
+    user_ids: list[dict[str, Any]] | None,
+    groups: list[dict[str, Any]] | None,
+    confirm_group_notification: bool,
+    force_regrant_groups: bool,
+) -> _PreparedRoleUpdate | RoleUsersReport | Err:
+    val_err = _validate_role_update_inputs(user_query, user_ids, groups, confirm_group_notification)
+    if val_err is not None:
+        return val_err
+
+    fetched = _fetch_and_resolve_role(client, role_id, user_query)
+    if isinstance(fetched, Err):
+        return fetched
+    detail, query_candidates, not_found = fetched
+
+    (
+        existing_members, existing_groups, new_ones, new_groups,
+        already, groups_already, groups_refused, blocked_note,
+    ) = _partition_role_members(detail, user_ids, query_candidates, groups, force_regrant_groups)
+
+    if _has_no_new_members(new_ones, new_groups):
+        return RoleUsersReport(
+            role_id=role_id, added=(), already_present=already,
+            not_found=not_found, user_count=detail.get("UserCount"),
+            groups_already_present=groups_already, groups_refused=groups_refused,
+            group_count=detail.get("GroupCount"), groups_note=blocked_note,
+        )
+
+    return _PreparedRoleUpdate(
+        detail=detail,
+        existing_members=existing_members,
+        existing_groups=existing_groups,
+        new_ones=new_ones,
+        new_groups=new_groups,
+        already=already,
+        groups_already=groups_already,
+        groups_refused=groups_refused,
+        not_found=not_found,
+        blocked_note=blocked_note,
+    )
+
+
+def _build_role_write_body(
+    detail: dict[str, Any],
+    existing_members: list[dict[str, Any]],
+    new_ones: list[dict[str, Any]],
+    existing_groups: list[dict[str, Any]],
+    new_groups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    body = _role_write_body(detail)
+    body["Users"] = existing_members + new_ones
+    if new_groups or existing_groups:
+        body["Groups"] = existing_groups + new_groups
+    return body
+
+
+def _verify_users_readback(
+    new_ones: list[dict[str, Any]],
+    read_back: dict[str, Any],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    live_ids = _member_ids(read_back.get("Members") or ())
+    added: list[str] = []
+    unverified: list[str] = []
+    for c in new_ones:
+        cid = str(c.get("_id"))
+        if cid in live_ids:
+            added.append(cid)
+        else:
+            unverified.append(cid)
+    return tuple(added), tuple(unverified)
+
+
+def _verify_groups_by_list(
+    new_groups: list[dict[str, Any]],
+    live_groups: set[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    added: list[str] = []
+    unver: list[str] = []
+    for g in new_groups:
+        gid = str(g.get("_id"))
+        if gid in live_groups:
+            added.append(gid)
+        else:
+            unver.append(gid)
+    return tuple(added), tuple(unver)
+
+
+def _is_group_count_increased(count_before: Any, count_after: Any) -> bool:
+    return isinstance(count_before, int) and isinstance(count_after, int) and count_after > count_before
+
+
+def _group_ids(groups: Iterable[dict[str, Any]]) -> tuple[str, ...]:
+    return tuple(str(g["_id"]) for g in groups)
+
+
+def _eval_groups_by_count(
+    new_groups: list[dict[str, Any]],
+    count_before: Any,
+    count_after: Any,
+) -> tuple[tuple[str, ...], tuple[str, ...], str | None]:
+    if not new_groups:
+        return (), (), None
+    gids = _group_ids(new_groups)
+    if _is_group_count_increased(count_before, count_after):
+        return gids, (), (
+            f"verified by GroupCount {count_before} -> {count_after} only — this tenant exposes "
+            f"no group LIST on the role detail, so membership is proven by count movement, not by "
+            f"naming the group back"
+        )
+    return (), gids, (
+        f"WRITTEN BUT UNPROVEN: no group list on the role detail and GroupCount did not move "
+        f"({count_before!r} -> {count_after!r}). Confirm in the builder UI before relying on "
+        f"it — a 200 from the write proves nothing (THE RULE)"
+    )
+
+
+def _eval_groups_readback_note(
+    new_groups: list[dict[str, Any]],
+    count_before: Any,
+    count_after: Any,
+    live_groups: set[str],
+) -> tuple[tuple[str, ...], tuple[str, ...], str | None]:
+    if live_groups:
+        return *_verify_groups_by_list(new_groups, live_groups), None
+    return _eval_groups_by_count(new_groups, count_before, count_after)
+
+
+def _should_note_unenumerated_groups(
+    new_groups: list[Any],
+    existing_groups: list[Any],
+    note: str | None,
+) -> bool:
+    return bool(new_groups) and not existing_groups and note is None
+
+
+def _verify_groups_readback(
+    new_groups: list[dict[str, Any]],
+    existing_groups: list[dict[str, Any]],
+    count_before: Any,
+    read_back: dict[str, Any],
+    blocked_note: str | None,
+) -> tuple[tuple[str, ...], tuple[str, ...], str | None]:
+    live_groups = _member_ids(_existing_group_list(read_back))
+    count_after = read_back.get("GroupCount")
+    g_added, g_unver, note = _eval_groups_readback_note(
+        new_groups, count_before, count_after, live_groups
+    )
+    if _should_note_unenumerated_groups(new_groups, existing_groups, note):
+        note = (
+            "existing groups could not be enumerated (no group list on the role detail), so this "
+            "write cannot promise it preserved any that were already there"
+        )
+    return g_added, g_unver, note or blocked_note
+
+
+def _execute_and_verify_role_update(
+    client: KfClient,
+    role_id: str,
+    prep: _PreparedRoleUpdate,
+    app_id: str | None,
+) -> RoleUsersReport | Err:
+    count_before = prep.detail.get("GroupCount")
+    body = _build_role_write_body(
+        prep.detail, prep.existing_members, prep.new_ones,
+        prep.existing_groups, prep.new_groups,
+    )
+    written = client.put_app_role(role_id, body, app_id)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_app_role(role_id)
+    if isinstance(read_back, Err):
+        return read_back
+
+    added, unverified = _verify_users_readback(prep.new_ones, read_back)
+    g_added, g_unver, groups_note = _verify_groups_readback(
+        prep.new_groups, prep.existing_groups, count_before, read_back, prep.blocked_note,
+    )
+
+    return RoleUsersReport(
+        role_id=role_id,
+        added=added,
+        already_present=prep.already,
+        not_found=prep.not_found + unverified,
+        user_count=read_back.get("UserCount"),
+        groups_added=g_added,
+        groups_already_present=prep.groups_already,
+        groups_unverified=g_unver,
+        groups_refused=prep.groups_refused,
+        group_count=read_back.get("GroupCount"),
+        groups_note=groups_note,
+    )
+
+
 def apply_add_role_users(
     client: KfClient,
     role_id: str,
@@ -3878,159 +4290,14 @@ def apply_add_role_users(
     is not a tool error on its own — it lands in `not_found`, the same "state it, never silently
     drop it" discipline as every other audit in this pack.
     """
-    if user_query is None and not user_ids and not groups:
-        return Err("verify", "apply_add_role_users: give user_query, user_ids or groups")
-
-    # A GROUP GRANT NOTIFIES EVERY MEMBER OF THAT GROUP BY EMAIL, and an email cannot be recalled.
-    # On a whole-tenant group ("everyone") that is every person in the account. This is the one
-    # effect on this surface that reaches PEOPLE rather than the graph, so it fails CLOSED: the
-    # caller must say, in the call itself, that they mean it. Granting a single USER
-    # (`user_query`/`user_ids`) is unaffected — that is the safe way to test this tool, and the
-    # refusal below says so, because a refusal a caller cannot act on is just a dead end.
-    if groups and not confirm_group_notification:
-        named = ", ".join(str(g.get("Name") or g.get("_id")) for g in groups
-                          if isinstance(g, dict)) or "<unnamed>"
-        return Err(
-            "verify",
-            f"refusing to grant group(s) [{named}] without confirm_group_notification=True — "
-            f"Kissflow FANS OUT A NOTIFICATION TO EVERY MEMBER the moment the grant lands, and on "
-            f"a whole-tenant group that is every person in the account (CLAUDE.md Members first: "
-            f"this happened, 2026-08-20). AND IT CANNOT BE UNDONE: membership writes are ADD-ONLY "
-            f"— nine removal shapes were probed live and none of them remove a group, so the only "
-            f"recovery is to build a REPLACEMENT role, re-point the workflow assignees at it, "
-            f"rebuild the visibility matrix that re-point wipes, and delete the polluted role. "
-            f"To TEST this tool, grant ONE named developer instead: user_query='<your name>'. "
-            f"Pass confirm_group_notification=True only after a human has confirmed the actual "
-            f"recipient list, the same as sending mail.",
-        )
-
-    for g in groups or []:
-        if not isinstance(g, dict) or not g.get("_id"):
-            return Err("verify",
-                       f"apply_add_role_users: each group must be an assignee-shaped dict with an "
-                       f"_id, e.g. {{'_id': 'everyone', 'Kind': 'Group', 'Name': 'Everyone'}} — got "
-                       f"{g!r}")
-
-    detail = client.get_app_role(role_id)
-    if isinstance(detail, Err):
-        return detail
-
-    candidates: list[dict[str, Any]] = list(user_ids or [])
-    not_found: list[str] = []
-    if user_query is not None:
-        found = client.get_assignee(user_query)
-        if isinstance(found, Err):
-            return found
-        matched = [c for c in found if isinstance(c, dict) and c.get("_id")]
-        if matched:
-            candidates.extend(matched)
-        else:
-            not_found.append(user_query)
-
-    existing_members = list(detail.get("Members") or [])
-    existing_ids = {str(m.get("_id")) for m in existing_members if isinstance(m, dict)}
-    already = tuple(str(c["_id"]) for c in candidates if str(c.get("_id")) in existing_ids)
-    new_ones = [c for c in candidates if str(c.get("_id")) not in existing_ids]
-
-    # GROUPS ride the SAME PUT under their own write key. Reported live by an operator and
-    # reproduced: a group object placed in `Users` is refused with UserDoesNotExistError — the
-    # endpoint validates that array as users only. The body must carry BOTH keys:
-    #   {"Users": [...], "Groups": [{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}]}
-    # `Groups` is a second asymmetric write key alongside `Users` (which reads back as `Members`).
-    # ⚠️ The READ key for groups is UNCAPTURED on this tenant: the detail route carries a
-    # `GroupCount` (nullable) but no group LIST that we have ever seen. So existing groups cannot
-    # be enumerated, and this write therefore CANNOT promise to preserve them the way the `Users`
-    # merge preserves members. That is stated in `groups_note` rather than assumed away, and the
-    # read-back verifies by `GroupCount` movement, never by claiming the group is present.
-    existing_groups = _existing_group_list(detail)
-    group_ids = [str(g["_id"]) for g in (groups or [])]
-    groups_already = tuple(gid for gid in group_ids
-                           if gid in {str(g.get("_id")) for g in existing_groups})
-    new_groups = [g for g in (groups or []) if str(g["_id"]) not in
-                  {str(e.get("_id")) for e in existing_groups}]
-
-    # `_existing_group_list` is always `[]` on this tenant (see its own docstring), so the merge
-    # above never actually drops a group that's already there — `new_groups` still equals `groups`
-    # on every repeat call. `GroupCount` is the one signal this tenant's detail DOES carry, so gate
-    # the repeat write on IT: a role that already reports `GroupCount > 0` has some group on it
-    # already, and this SAME `groups` argument is treated as a duplicate rather than resent, unless
-    # the caller passes `force_regrant_groups=True` in the same call — the identical
-    # "state your intent" discipline `confirm_group_notification` already uses above.
-    blocked_note: str | None = None
-    groups_refused: tuple[str, ...] = ()
-    if new_groups and force_regrant_groups is False \
-            and isinstance(detail.get("GroupCount"), int) and detail["GroupCount"] > 0:
-        # GroupCount is a COUNT, not a membership check — a role with any group reads > 0, so this
-        # cannot prove the requested group is the same one already present. The refused group lands
-        # in its OWN `groups_refused` bucket, never `groups_already_present`: reporting a group as
-        # "present" that was never proven present is exactly the invariant this pack forbids.
-        groups_refused = tuple(str(g["_id"]) for g in new_groups)
-        new_groups = []
-        blocked_note = (
-            f"refused to re-issue the Groups write for {', '.join(groups_refused)}: GroupCount is "
-            f"already {detail['GroupCount']} on this role and no group LIST exists to prove these "
-            f"are different groups, so a repeat grant is assumed to be a duplicate and skipped to "
-            f"avoid re-broadcasting the notification — pass force_regrant_groups=True to override"
-        )
-
-    if not new_ones and not new_groups:
-        return RoleUsersReport(role_id=role_id, added=(), already_present=already,
-                               not_found=tuple(not_found), user_count=detail.get("UserCount"),
-                               groups_already_present=groups_already, groups_refused=groups_refused,
-                               group_count=detail.get("GroupCount"), groups_note=blocked_note)
-
-    count_before = detail.get("GroupCount")
-    body = _role_write_body(detail)
-    body["Users"] = existing_members + new_ones
-    if new_groups or existing_groups:
-        body["Groups"] = existing_groups + new_groups
-
-    written = client.put_app_role(role_id, body, app_id)
-    if isinstance(written, Err):
-        return written
-
-    read_back = client.get_app_role(role_id)
-    if isinstance(read_back, Err):
-        return read_back
-    live_ids = {str(m.get("_id")) for m in (read_back.get("Members") or []) if isinstance(m, dict)}
-    added = tuple(str(c["_id"]) for c in new_ones if str(c["_id"]) in live_ids)
-    unverified = tuple(str(c["_id"]) for c in new_ones if str(c["_id"]) not in live_ids)
-
-    # Group read-back: verify by the only signal this tenant exposes. A group list, if the detail
-    # ever grows one, wins; otherwise GroupCount MOVING is the evidence. When neither is available
-    # the group lands in `groups_unverified` — written, not proven — because a write we cannot read
-    # back is exactly what THE RULE says never to report as success.
-    live_groups = {str(g.get("_id")) for g in _existing_group_list(read_back)}
-    count_after = read_back.get("GroupCount")
-    groups_note = None
-    if live_groups:
-        g_added = tuple(str(g["_id"]) for g in new_groups if str(g["_id"]) in live_groups)
-        g_unver = tuple(str(g["_id"]) for g in new_groups if str(g["_id"]) not in live_groups)
-    elif new_groups and isinstance(count_after, int) and isinstance(count_before, int) \
-            and count_after > count_before:
-        g_added, g_unver = tuple(str(g["_id"]) for g in new_groups), ()
-        groups_note = (f"verified by GroupCount {count_before} -> {count_after} only — this tenant "
-                       f"exposes no group LIST on the role detail, so membership is proven by count "
-                       f"movement, not by naming the group back")
-    elif new_groups:
-        g_added, g_unver = (), tuple(str(g["_id"]) for g in new_groups)
-        groups_note = (f"WRITTEN BUT UNPROVEN: no group list on the role detail and GroupCount did "
-                       f"not move ({count_before!r} -> {count_after!r}). Confirm in the builder UI "
-                       f"before relying on it — a 200 from the write proves nothing (THE RULE)")
-    else:
-        g_added, g_unver = (), ()
-    if new_groups and not existing_groups and groups_note is None:
-        groups_note = ("existing groups could not be enumerated (no group list on the role detail), "
-                       "so this write cannot promise it preserved any that were already there")
-    groups_note = groups_note or blocked_note
-
-    return RoleUsersReport(
-        role_id=role_id, added=added, already_present=already,
-        not_found=tuple(not_found) + unverified, user_count=read_back.get("UserCount"),
-        groups_added=g_added, groups_already_present=groups_already,
-        groups_unverified=g_unver, groups_refused=groups_refused,
-        group_count=count_after, groups_note=groups_note,
+    prep = _prepare_role_update(
+        client, role_id, user_query, user_ids, groups,
+        confirm_group_notification, force_regrant_groups,
     )
+    if isinstance(prep, (Err, RoleUsersReport)):
+        return prep
+
+    return _execute_and_verify_role_update(client, role_id, prep, app_id)
 
 
 def _existing_group_list(detail: dict[str, Any]) -> list[dict[str, Any]]:
