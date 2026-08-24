@@ -20,6 +20,7 @@ from kfforge.client import (
     RequiredReport,
     RoleUsersReport,
     SequenceNumberReport,
+    StepPermissionReport,
     StyleReport,
     TableReport,
     ValidationReport,
@@ -2939,6 +2940,126 @@ def test_a_section_covered_only_by_field_level_overrides_is_not_uncovered() -> N
     rep = apply_step_permissions(c, "F1", progressive_matrix(d, owners),
                                  field_matrix=field_override_matrix(d, field_owners))
     assert rep.as_tool_result()["uncovered_sections"] == []
+
+
+def test_apply_step_permissions_initial_get_draft_error() -> None:
+    class FailingGet(FakeClient):
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "flow not found")
+
+    c = FailingGet(_bare_process_draft())
+    got = apply_step_permissions(c, "F1", {})
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_step_permissions_offline_validation_error() -> None:
+    c = FakeClient(_bare_process_draft())
+    invalid_matrix = {"NonexistentSection": {"Start": "Editable"}}
+    got = apply_step_permissions(c, "F1", invalid_matrix)
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "offline apply rejected the matrix" in got.message
+
+
+def test_apply_step_permissions_put_draft_error() -> None:
+    from kfforge.graph import progressive_matrix
+
+    class FailingPut(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            return Err("conflict", "version mismatch")
+
+    d = _wide_matrix_draft()
+    c = FailingPut(d)
+    got = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS))
+    assert isinstance(got, Err) and got.kind == "conflict"
+
+
+def test_apply_step_permissions_read_back_error() -> None:
+    from kfforge.graph import progressive_matrix
+
+    class FailingReadBack(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._reads = 0
+
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            self._reads += 1
+            if self._reads > 1:
+                return Err("http", "read-back failed")
+            return self.draft
+
+    d = _wide_matrix_draft()
+    c = FailingReadBack(d)
+    got = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS))
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_step_permissions_publish_success() -> None:
+    from kfforge.graph import progressive_matrix
+
+    d = _wide_matrix_draft()
+    c = FakeClient(d)
+    rep = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS), publish=True)
+    assert isinstance(rep, StepPermissionReport)
+    assert rep.published is True
+    assert c.published is True
+
+
+def test_apply_step_permissions_publish_error() -> None:
+    from kfforge.graph import progressive_matrix
+
+    class FailingPublish(FakeClient):
+        def publish(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "publish 500")
+
+    d = _wide_matrix_draft()
+    c = FailingPublish(d)
+    got = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS), publish=True)
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_step_permissions_publish_skipped_on_missing_pairs() -> None:
+    from kfforge.graph import progressive_matrix
+
+    class DroppingPublish(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self.published = False
+
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            got = super().put_draft(kind, flow_id, new, expect_version)
+            acts = [k for k, v in self.draft.items()
+                    if isinstance(v, dict) and v.get("Kind") == "Activity"
+                    and v.get("Name") == "Assess unit"]
+            for pid in [k for k, v in list(self.draft.items())
+                        if isinstance(v, dict) and v.get("Kind") == "Permission"
+                        and v.get("Activity") == acts[0]]:
+                del self.draft[pid]
+            return got
+
+        def publish(self, kind, flow_id):  # type: ignore[override]
+            self.published = True
+
+    d = _wide_matrix_draft()
+    c = DroppingPublish(d)
+    rep = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS), publish=True)
+    assert isinstance(rep, StepPermissionReport)
+    assert rep.published is False
+    assert c.published is False
+    assert rep.missing != ()
+
+
+def test_apply_step_permissions_include_pairs_payload() -> None:
+    from kfforge.graph import progressive_matrix
+
+    d = _wide_matrix_draft()
+    c = FakeClient(d)
+    rep = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS), include_pairs=True)
+    assert isinstance(rep, StepPermissionReport)
+    assert rep.include_pairs is True
+    res = rep.as_tool_result()
+    assert "pairs" in res
+    assert "added" in res["pairs"]
+    assert "verified" in res["pairs"]
 
 
 # ---- S4(a): forge_create_process must state what the template brought in -----------------------
