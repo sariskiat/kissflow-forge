@@ -19,10 +19,14 @@ from kfforge.client import (
     RenameFieldsReport,
     RequiredReport,
     RoleUsersReport,
+    SequenceNumberReport,
     StyleReport,
     TableReport,
     ValidationReport,
     WorkflowReport,
+    _is_sequence_field,
+    _publish_sequence_flow,
+    _verify_sequence_number,
     apply_add_role_users,
     apply_branch_conditions,
     apply_dataset_records,
@@ -38,6 +42,7 @@ from kfforge.client import (
     apply_report_members,
     apply_required,
     apply_section_style,
+    apply_sequence_number,
     apply_step_permissions,
     apply_table,
     apply_workflow,
@@ -3345,3 +3350,174 @@ def test_group_regrant_proceeds_with_explicit_override() -> None:
 
     assert isinstance(rep, RoleUsersReport)
     assert c.body is not None and c.body.get("Groups"), "override must still issue the write"
+
+
+# ---- apply_sequence_number tests ------------------------------------------
+
+def test_apply_sequence_number_success() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    c = FakeClient(draft)
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step)
+    assert isinstance(rep, SequenceNumberReport)
+    assert rep.flow_id == "F1"
+    assert rep.field_name == "Case ID"
+    assert rep.section == section
+    assert rep.verified is True
+    assert rep.missing is False
+    assert rep.published is False
+    assert rep.meta_version == "v2"
+    res = rep.as_tool_result()
+    assert res["isError"] is False
+    assert res["verified"] is True
+    assert res["missing"] is False
+    assert res["published"] is False
+    assert res["field_name"] == "Case ID"
+    assert res["section"] == section
+
+
+def test_apply_sequence_number_with_publish() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    c = FakeClient(draft)
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step, publish=True)
+    assert isinstance(rep, SequenceNumberReport)
+    assert rep.verified is True
+    assert rep.published is True
+    assert c.published is True
+
+
+def test_apply_sequence_number_initial_get_draft_err() -> None:
+    c = FakeClient(_bare_process_draft())
+    c.get_draft = lambda kind, flow_id: Err("network", "initial get failed")  # type: ignore[assignment]
+    rep = apply_sequence_number(c, "F1", "Case ID", "Section", "CS-", "0001", "Step")
+    assert isinstance(rep, Err)
+    assert rep.message == "initial get failed"
+
+
+def test_apply_sequence_number_offline_validation_err() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    c = FakeClient(draft)
+    rep = apply_sequence_number(c, "F1", "Case ID", "NonExistentSection", "CS-", "0001", "Start")
+    assert isinstance(rep, Err)
+    assert rep.kind == "verify"
+    assert "offline add_sequence_number rejected the spec" in rep.message
+
+
+def test_apply_sequence_number_put_draft_err() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    c = FakeClient(draft)
+    c.put_draft = lambda kind, flow_id, new, expect_version: Err("network", "put failed")  # type: ignore[assignment]
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step)
+    assert isinstance(rep, Err)
+    assert rep.message == "put failed"
+
+
+def test_apply_sequence_number_read_back_err() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    c = FakeClient(draft)
+    get_count = 0
+
+    def fail_second_get(kind: str, flow_id: str) -> dict | Err:
+        nonlocal get_count
+        get_count += 1
+        if get_count > 1:
+            return Err("network", "read back failed")
+        return c.draft
+
+    c.get_draft = fail_second_get  # type: ignore[assignment]
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step)
+    assert isinstance(rep, Err)
+    assert rep.message == "read back failed"
+
+
+def test_apply_sequence_number_publish_err() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    c = FakeClient(draft)
+    c.publish = lambda kind, flow_id: Err("network", "publish failed")  # type: ignore[assignment]
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step, publish=True)
+    assert isinstance(rep, Err)
+    assert rep.message == "publish failed"
+
+
+def test_apply_sequence_number_verification_branches() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+
+    class BrokenPropsClient(FakeClient):
+        def get_draft(self, kind: str, flow_id: str) -> dict | Err:
+            d = super().get_draft(kind, flow_id)
+            if isinstance(d, dict) and self.puts > 0:
+                for v in d.values():
+                    if isinstance(v, dict) and v.get("Type") == "SequenceNumber":
+                        v["Field::Property"] = ["only_one_prop"]
+            return d
+
+    c = BrokenPropsClient(draft)
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step, publish=True)
+    assert isinstance(rep, SequenceNumberReport)
+    assert rep.verified is False
+    assert rep.missing is True
+    assert rep.published is False
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_is_sequence_field_and_verify_helpers() -> None:
+    assert _is_sequence_field("not_a_dict", "ID") is False
+    assert _is_sequence_field({"Kind": "Model"}, "ID") is False
+    assert _is_sequence_field({"Kind": "Field", "Type": "Text", "Name": "ID"}, "ID") is False
+    assert _is_sequence_field({"Kind": "Field", "Type": "SequenceNumber", "Name": "Other"}, "ID") is False
+    assert _is_sequence_field({"Kind": "Field", "Type": "SequenceNumber", "Name": "ID"}, "ID") is True
+
+    assert _verify_sequence_number({}, "ID") is False
+    assert _verify_sequence_number({
+        "F1": {"Kind": "Field", "Type": "SequenceNumber", "Name": "ID", "Field::Property": ["p1", "p2"]}
+    }, "ID") is False
+    assert _verify_sequence_number({
+        "F1": {"Kind": "Field", "Type": "SequenceNumber", "Name": "ID", "Field::Property": ["p1", "p2", "p3"]}
+    }, "ID") is True
+
+    c = FakeClient(_bare_process_draft())
+    assert _publish_sequence_flow(c, "process", "F1", publish=False, verified=True) is False
+    assert _publish_sequence_flow(c, "process", "F1", publish=True, verified=False) is False
+    assert _publish_sequence_flow(c, "process", "F1", publish=True, verified=True) is True
