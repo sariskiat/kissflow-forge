@@ -125,6 +125,605 @@ def _owning_table_name(nodes: dict[str, Any], field: dict[str, Any]) -> str | No
     return name if isinstance(name, str) and name else None
 
 
+def _validate_root(draft: Draft) -> str:
+    root = draft.get("Root")
+    if not isinstance(root, str) or root not in draft:
+        raise ValueError("draft has no Root key — not a flow draft?")
+    return root
+
+
+def _check_role_scoped_visibility_claims(
+    claims: tuple[str, ...] | list[str],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    checked["role_scoped_visibility_claims"] = len(claims)
+    for claim in claims:
+        problems.append(
+            f"{claim}: role-scoped visibility is API-impossible; restructure to step-scoped "
+            f"(coverage row role-scoped-visibility, #6)"
+        )
+
+
+def _check_single_event(
+    event: dict[str, Any],
+    draft: Draft,
+    nodes: dict[str, Any],
+    problems: list[str],
+) -> bool:
+    owner = nodes.get(event.get("Field"), {}).get("Name", event.get("Field"))
+    script = event.get("Script") or ""
+    for ref in set(_PLATFORM_REF_RE.findall(script)):
+        if ref not in draft:
+            problems.append(f"event on {owner!r} writes to missing field {ref}")
+    if event.get("Field") not in draft:
+        problems.append(f"event {event['Id']} is attached to a missing field")
+    return bool(script)
+
+
+def _check_event_scripts(
+    draft: Draft,
+    nodes: dict[str, Any],
+    problems: list[str],
+    checked: dict[str, int],
+) -> int:
+    events = [v for v in nodes.values() if v.get("Kind") == "Event"]
+    checked["events"] = len(events)
+    unvalidatable = 0
+    for e in events:
+        if _check_single_event(e, draft, nodes, problems):
+            unvalidatable += 1
+    return unvalidatable
+
+
+def _lookup_field_options(
+    field_sibling: dict[str, Any] | None,
+    nodes: dict[str, Any],
+    list_options: dict[str, list[str]],
+) -> list[str] | None:
+    if field_sibling is None:
+        return None
+    fnode = nodes.get(field_sibling.get("Field")) or {}
+    if fnode.get("Type") == "Select":
+        return list_options.get(fnode.get("ReferredList"))
+    return None
+
+
+def _check_branch_static_literal(
+    branch: str | None,
+    n: dict[str, Any],
+    field_sibling: dict[str, Any] | None,
+    nodes: dict[str, Any],
+    list_options: dict[str, list[str]],
+    problems: list[str],
+    unvalidated: list[str],
+) -> None:
+    value = n.get("Value")
+    options = _lookup_field_options(field_sibling, nodes, list_options)
+    if options is None:
+        unvalidated.append(
+            f"branch {branch!r} literal {value!r} not validated "
+            f"(no list options given for its field)"
+        )
+    elif value not in options:
+        problems.append(f"branch {branch!r} tests {value!r}, not in {options}")
+
+
+def _check_branch_children(
+    branch: str | None,
+    children: list[tuple[str, dict[str, Any]]],
+    draft: Draft,
+    nodes: dict[str, Any],
+    list_options: dict[str, list[str]],
+    problems: list[str],
+    unvalidated: list[str],
+) -> int:
+    field_sibling = next((n for _, n in children if n.get("Type") == "Field"), None)
+    literals = 0
+    for _cid, n in children:
+        if n.get("Type") == "Field" and n.get("Field") not in draft:
+            problems.append(f"branch {branch!r} references missing field {n.get('Field')}")
+            continue
+        if n.get("Type") == "Static":
+            literals += 1
+            _check_branch_static_literal(
+                branch, n, field_sibling, nodes, list_options, problems, unvalidated
+            )
+    return literals
+
+
+def _check_branch_expression(
+    expr_node: dict[str, Any],
+    draft: Draft,
+    nodes: dict[str, Any],
+    list_options: dict[str, list[str]],
+    problems: list[str],
+    unvalidated: list[str],
+) -> int:
+    branch = nodes.get(expr_node.get("ProcessDef"), {}).get("Name")
+    literals = 0
+    for root_id in expr_node.get("Expression::Node") or []:
+        children = [
+            (cid, nodes.get(cid) or {})
+            for cid in (nodes.get(root_id) or {}).get("Node::Node") or []
+        ]
+        literals += _check_branch_children(
+            branch, children, draft, nodes, list_options, problems, unvalidated
+        )
+    return literals
+
+
+def _check_branch_conditions(
+    draft: Draft,
+    nodes: dict[str, Any],
+    list_options: dict[str, list[str]],
+    problems: list[str],
+    unvalidated: list[str],
+    checked: dict[str, int],
+) -> None:
+    branch_exprs = [v for v in nodes.values() if v.get("Kind") == "Expression" and v.get("ProcessDef")]
+    literals_checked = sum(
+        _check_branch_expression(x, draft, nodes, list_options, problems, unvalidated)
+        for x in branch_exprs
+    )
+    checked["branch_literals"] = literals_checked
+
+
+def _check_goto_target(
+    g: dict[str, Any],
+    nodes: dict[str, Any],
+    problems: list[str],
+) -> None:
+    name = g.get("Name")
+    target = nodes.get(g.get("Goto"))
+    if not target:
+        problems.append(f"goto {name!r} jumps to missing activity {g.get('Goto')}")
+    elif target.get("ProcessDef") != g.get("ProcessDef"):
+        problems.append(f"goto {name!r} jumps out of its own branch, to {target.get('Name')!r}")
+    elif g["Id"] not in (target.get("Goto::Activity") or []):
+        problems.append(f"goto {name!r} missing the Goto::Activity back-ref on its target")
+
+
+def _check_goto_gate_field(
+    name: str | None,
+    n: dict[str, Any],
+    draft: Draft,
+    nodes: dict[str, Any],
+    problems: list[str],
+) -> None:
+    if n.get("Type") != "Field":
+        return
+    if n["Field"] not in draft:
+        problems.append(f"goto {name!r} tests missing field {n['Field']}")
+        return
+    gate = nodes[n["Field"]]
+    if gate.get("Type") == "Select" and not gate.get("Required"):
+        problems.append(
+            f"goto {name!r} tests optional Select {gate.get('Name')!r} — blank "
+            f"never equals the literal, so the loop is skipped, not entered"
+        )
+
+
+def _check_goto_expressions(
+    g: dict[str, Any],
+    draft: Draft,
+    nodes: dict[str, Any],
+    problems: list[str],
+) -> None:
+    name = g.get("Name")
+    exprs = g.get("Activity::Expression") or []
+    if not exprs:
+        problems.append(f"goto {name!r} has NO condition — it loops forever")
+        return
+    for xid in exprs:
+        for root_id in (nodes.get(xid) or {}).get("Expression::Node") or []:
+            for cid in (nodes.get(root_id) or {}).get("Node::Node") or []:
+                _check_goto_gate_field(name, nodes.get(cid) or {}, draft, nodes, problems)
+
+
+def _check_gotos(
+    draft: Draft,
+    nodes: dict[str, Any],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    gotos = [v for v in nodes.values() if v.get("NodeType") == "GotoTask"]
+    checked["gotos"] = len(gotos)
+    for g in gotos:
+        _check_goto_target(g, nodes, problems)
+        _check_goto_expressions(g, draft, nodes, problems)
+
+
+def _check_node_dangling_list_refs(
+    nid: str,
+    node: dict[str, Any],
+    draft: Draft,
+    problems: list[str],
+) -> int:
+    checked_count = 0
+    for key, val in node.items():
+        if isinstance(val, list) and "::" in key:
+            for ref in val:
+                if isinstance(ref, str):
+                    checked_count += 1
+                    if ref not in draft:
+                        problems.append(f"{nid}.{key} -> missing {ref}")
+    return checked_count
+
+
+def _check_dangling_list_refs(
+    draft: Draft,
+    nodes: dict[str, Any],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    dangling_checked = sum(
+        _check_node_dangling_list_refs(nid, node, draft, problems)
+        for nid, node in nodes.items()
+    )
+    checked["dangling_refs"] = dangling_checked
+
+
+def _check_step_stamps(
+    draft: Draft,
+    nodes: dict[str, Any],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    step_stamps = 0
+    for nid, node in nodes.items():
+        if node.get("Kind") == "Property" and node.get("Name") == "Step":
+            step_stamps += 1
+            tgt = node.get("Value")
+            if isinstance(tgt, str) and (draft.get(tgt) or {}).get("Kind") != "Activity":
+                problems.append(
+                    f"sequence Step stamp {nid} -> missing activity {tgt} (publish will 500 "
+                    f"MetadataError — repoint it or rebuild via build_workflow, which now "
+                    f"repoints by name)"
+                )
+    checked["step_stamps"] = step_stamps
+
+
+def _check_single_scalar_ref(
+    nid: str,
+    key: str,
+    ref: Any,
+    draft: Draft,
+    problems: list[str],
+) -> tuple[int, int]:
+    if not isinstance(ref, str) or not ref:
+        return 0, 0
+    if ref.startswith("_"):
+        return 0, 1
+    if ref not in draft:
+        problems.append(
+            f"{nid}.{key} -> missing {ref} (scalar reference — the list-only sweep never "
+            f"visits it; PUT 200s, publish dies 500 MetadataError with zero diagnostics)"
+        )
+    return 1, 0
+
+
+def _check_scalar_refs(
+    draft: Draft,
+    nodes: dict[str, Any],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    scalar_refs = 0
+    system_scalar_refs = 0
+    for nid, node in nodes.items():
+        for key in _SCALAR_REF_KEYS.get(node.get("Kind"), ()):
+            s, sys = _check_single_scalar_ref(nid, key, node.get(key), draft, problems)
+            scalar_refs += s
+            system_scalar_refs += sys
+    checked["scalar_refs"] = scalar_refs
+    checked["system_scalar_refs"] = system_scalar_refs
+
+
+def _process_permission_node(
+    pm: dict[str, Any],
+    nodes: dict[str, Any],
+    layout: Any,
+    suspended_steps: set[str | None],
+    editable: dict[str, set[str]],
+    malformed: list[str],
+) -> None:
+    if pm.get("Kind") != "Permission" or pm.get("Permission") != "Editable":
+        return
+    step = nodes.get(pm.get("Activity"), {}).get("Name")
+    if step in suspended_steps:
+        return
+    col_id = pm.get("Column")
+    if not isinstance(col_id, str) or not isinstance(pm.get("Activity"), str):
+        malformed.append(pm.get("Id", "<no Id>"))
+        return
+    col = nodes.get(col_id, {})
+    keys = {layout.owner_section(col_id) or col.get("Name", "?")}
+    if col.get("Type") == "Model" and col.get("Name"):
+        keys.add(col["Name"])
+    for key in keys:
+        editable.setdefault(key, set()).add(step)
+
+
+def _collect_editable_and_malformed_permissions(
+    nodes: dict[str, Any],
+    layout: Any,
+) -> tuple[dict[str, set[str]], list[str]]:
+    malformed: list[str] = []
+    susp = {v.get("Name") for v in nodes.values() if v.get("Kind") == "Activity" and v.get("IsSuspended")}
+    editable: dict[str, set[str]] = {}
+    for pm in nodes.values():
+        _process_permission_node(pm, nodes, layout, susp, editable, malformed)
+    return editable, malformed
+
+
+def _check_editable_sections(
+    nodes: dict[str, Any],
+    editable: dict[str, set[str]],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    sections_checked = 0
+    for sv in nodes.values():
+        if sv.get("Type") in ("Section", "Model") and sv.get("Name"):
+            sections_checked += 1
+            if sv.get("Type") == "Section" and not sv.get("Column::Row"):
+                continue
+            if not editable.get(sv["Name"]):
+                problems.append(f"section {sv['Name']!r} is never editable at any live step")
+    checked["sections"] = sections_checked
+
+
+def _check_required_fields(
+    root: str,
+    nodes: dict[str, Any],
+    layout: Any,
+    editable: dict[str, set[str]],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    required_fields = [
+        v for v in nodes.values()
+        if v.get("Kind") == "Field" and v.get("Model") == root and v.get("Required")
+    ]
+    checked["required_fields"] = len(required_fields)
+    for f in required_fields:
+        if not editable.get(layout.owner_section(f.get("Column")) or "?"):
+            problems.append(
+                f"field {f['Name']!r} is Required but never editable — that step cannot be submitted"
+            )
+
+
+def _format_malformed_permissions(malformed_permissions: list[str]) -> str:
+    sample = ", ".join(sorted(malformed_permissions)[:5])
+    suffix = " ..." if len(malformed_permissions) > 5 else ""
+    return (
+        f"{len(malformed_permissions)} Permission node(s) missing a Column/Activity "
+        f"reference: {sample}{suffix} — the builder writes both on every Permission; "
+        f"a node without them gates nothing"
+    )
+
+
+def _check_permission_matrix(
+    nodes: dict[str, Any],
+    layout: Any,
+    malformed_permissions: list[str],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    units = (
+        {k for k, v in nodes.items() if v.get("Kind") == "Column" and v.get("Type") == "Field"}
+        - layout.table_child_columns
+        - layout.no_permission_columns
+    )
+    acts = [
+        k for k, v in nodes.items()
+        if v.get("Kind") == "Activity" and v.get("NodeType") not in ROUTING_NODE_TYPES
+    ]
+    have = {
+        (c, a) for p in nodes.values()
+        if p.get("Kind") == "Permission"
+        and isinstance(c := p.get("Column"), str)
+        and isinstance(a := p.get("Activity"), str)
+    }
+    checked["permission_pairs"] = len(units) * len(acts)
+    checked["malformed_permissions"] = len(malformed_permissions)
+    if malformed_permissions:
+        problems.append(_format_malformed_permissions(malformed_permissions))
+    gaps = len({(u, a) for u in units for a in acts} - have)
+    if gaps:
+        problems.append(f"permission matrix is sparse: {gaps} (unit, step) pairs unset")
+
+
+def _has_app_role_assignee(res_ids: list[str], nodes: dict[str, Any]) -> bool:
+    for r in res_ids:
+        res = nodes.get(r) or {}
+        if res.get("Value") and res.get("ValueType") == "AppRole":
+            return True
+    return False
+
+
+def _check_step_assignees(
+    nodes: dict[str, Any],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    real_steps = [
+        (k, v) for k, v in nodes.items()
+        if v.get("Kind") == "Activity" and v.get("NodeType") == "UserTask" and not v.get("IsSuspended")
+    ]
+    checked["step_assignees"] = len(real_steps)
+    for _aid, v in real_steps:
+        res_ids = v.get("Activity::Resource") or []
+        if not _has_app_role_assignee(res_ids, nodes):
+            problems.append(
+                f"step {v.get('Name')!r} has no AppRole assignee — submit will 500 (CLAUDE.md "
+                f"Members first: wire a Resource with ValueType 'AppRole' on every step)"
+            )
+
+
+def _check_user_fields(
+    nodes: dict[str, Any],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    user_fields = [v for v in nodes.values() if v.get("Kind") == "Field" and v.get("Type") == "User"]
+    checked["user_fields"] = len(user_fields)
+    for f in user_fields:
+        qids = f.get("Field::QueryDefinition") or []
+        has_query_def = any((nodes.get(q) or {}).get("Kind") == "QueryDefinition" for q in qids)
+        if not has_query_def:
+            problems.append(
+                f"User field {f.get('Name')!r} has no QueryDefinition sibling — publish will fail "
+                f"(KISSFLOW_ERROR_04211, CLAUDE.md #59)"
+            )
+
+
+def _format_list_backed_field_problem(
+    f: dict[str, Any],
+    table: str | None,
+) -> str:
+    name = f.get("Name")
+    head = (f"{f.get('Type')} field {name!r} has no ReferredList — a dropdown bound "
+            f"to no list; PUT 200s and publish dies 500 MetadataError with zero "
+            f"diagnostics (CLAUDE.md ReferredList wiring #13 — ")
+    if table is None:
+        return head + "mint the list with forge_create_list, then re-apply the field with referred_list=<list id>)"
+    return (
+        head + f"mint the list with forge_create_list, then REBUILD table {table!r}: "
+               f"forge_delete_fields(tables=[{table!r}]) followed by forge_add_table "
+               f"with the column stated as [{name!r}, {f.get('Type')!r}, "
+               f'{{"ReferredList": "<list id>"}}]. A table CHILD has no in-place '
+               f"edit: forge_apply_fields only creates ROOT fields, so re-applying "
+               f"this name would leave the table untouched and add a second, "
+               f"root-level field of the same name)"
+    )
+
+
+def _check_list_backed_fields(
+    nodes: dict[str, Any],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    list_backed = [
+        v for v in nodes.values()
+        if v.get("Kind") == "Field" and v.get("Type") in LIST_BACKED_FIELD_TYPES
+    ]
+    checked["list_backed_fields"] = len(list_backed)
+    for f in list_backed:
+        ref = f.get("ReferredList")
+        if not isinstance(ref, str) or not ref:
+            table = _owning_table_name(nodes, f)
+            problems.append(_format_list_backed_field_problem(f, table))
+
+
+def _check_placeholder_names(
+    nodes: dict[str, Any],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    todo_names = [v for v in nodes.values() if v.get("Kind") == "Field"]
+    checked["placeholder_names"] = len(todo_names)
+    for f in todo_names:
+        name = f.get("Name")
+        if isinstance(name, str) and _TODO_MARKER in name:
+            problems.append(
+                f"field name {name!r} carries a shipped TODO placeholder — a developer note is "
+                f"being published as a user-facing label "
+                f"(shapes/process_template_identity_shell.json; move the note out of Name)"
+            )
+
+
+def _check_column_span_validity(
+    label: str,
+    start: Any,
+    end: Any,
+    problems: list[str],
+) -> bool:
+    if not isinstance(start, int) or not isinstance(end, int):
+        problems.append(
+            f"column {label!r} has no numeric grid span (Start={start!r}, End={end!r}) — the "
+            f"builder cannot place it on the {ROW_UNITS}-unit row grid"
+        )
+        return False
+    if not (0 <= start < end <= ROW_UNITS):
+        problems.append(
+            f"column {label!r} sits at (Start={start}, End={end}), off the {ROW_UNITS}-unit "
+            f"row grid (0 <= Start < End <= {ROW_UNITS}) — the builder fails to render the "
+            f"whole flow"
+        )
+        return False
+    return True
+
+
+def _check_row_overlaps(
+    by_row: dict[str, list[tuple[int, int, str]]],
+    problems: list[str],
+) -> None:
+    for rid, spans in by_row.items():
+        spans.sort()
+        for i, (s1, e1, n1) in enumerate(spans):
+            for s2, e2, n2 in spans[i + 1:]:
+                if s2 >= e1:
+                    break
+                problems.append(
+                    f"columns {n1!r} ({s1}, {e1}) and {n2!r} ({s2}, {e2}) overlap in row {rid} — "
+                    f"two columns cannot share a unit of the {ROW_UNITS}-unit row grid"
+                )
+
+
+def _check_column_geometry(
+    nodes: dict[str, Any],
+    layout: Any,
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    name_of_col = {
+        c: v.get("Name", "?") for v in nodes.values()
+        if v.get("Kind") == "Field" and isinstance(c := v.get("Column"), str)
+    }
+    geometry_checked = 0
+    by_row: dict[str, list[tuple[int, int, str]]] = {}
+    for cid, col in nodes.items():
+        if col.get("Kind") != "Column" or col.get("Type") != "Field":
+            continue
+        if cid in layout.table_child_columns:
+            continue
+        geometry_checked += 1
+        label = name_of_col.get(cid, cid)
+        start, end = col.get("Start"), col.get("End")
+        if not _check_column_span_validity(label, start, end, problems):
+            continue
+        if isinstance(rid := col.get("Row"), str):
+            by_row.setdefault(rid, []).append((start, end, label))
+    _check_row_overlaps(by_row, problems)
+    checked["column_geometry"] = geometry_checked
+
+
+def _check_row_column_claims(
+    nodes: dict[str, Any],
+    problems: list[str],
+    checked: dict[str, int],
+) -> None:
+    row_claims = 0
+    for rid, row in nodes.items():
+        if row.get("Kind") != "Row":
+            continue
+        for cid in row.get("Row::Column") or []:
+            col = nodes.get(cid)
+            if not isinstance(col, dict):
+                continue
+            row_claims += 1
+            own = col.get("Row")
+            if isinstance(own, str) and own != rid:
+                problems.append(
+                    f"column {cid} is listed in row {rid} but its own Row back-ref names {own} — "
+                    f"two rows claim the same column, so one row renders it and the other renders "
+                    f"a hole"
+                )
+    checked["row_column_claims"] = row_claims
+
+
 def doctor(
     draft: Draft,
     *,
@@ -145,424 +744,33 @@ def doctor(
     refuse, never best-effort). Compile threads these from `VisibilityEntry.role` into the plan's
     doctor op; a caller with no spec in hand just leaves it empty.
     """
-    root = draft.get("Root")
-    if not isinstance(root, str) or root not in draft:
-        raise ValueError("draft has no Root key — not a flow draft?")
-
-    N = _nodes(draft)
-    list_options = list_options or {}
+    root = _validate_root(draft)
+    nodes = _nodes(draft)
+    resolved_options = list_options if list_options is not None else {}
     problems: list[str] = []
     unvalidated: list[str] = []
     checked: dict[str, int] = {}
-    unvalidatable_scripts = 0
-    layout = section_layout(draft)   # the shared fact base rules 4/5 read (membership + exclusions)
+    layout = section_layout(draft)
 
-    # 0. role-scoped visibility claims  <- API-impossible, refused here, never built best-effort
-    checked["role_scoped_visibility_claims"] = len(visibility_role_claims)
-    for claim in visibility_role_claims:
-        problems.append(
-            f"{claim}: role-scoped visibility is API-impossible; restructure to step-scoped "
-            f"(coverage row role-scoped-visibility, #6)"
-        )
+    _check_role_scoped_visibility_claims(visibility_role_claims, problems, checked)
+    unvalidatable_scripts = _check_event_scripts(draft, nodes, problems, checked)
+    _check_branch_conditions(draft, nodes, resolved_options, problems, unvalidated, checked)
+    _check_gotos(draft, nodes, problems, checked)
+    _check_dangling_list_refs(draft, nodes, problems, checked)
+    _check_step_stamps(draft, nodes, problems, checked)
+    _check_scalar_refs(draft, nodes, problems, checked)
 
-    # 1. event scripts pointing at a node that no longer exists  <- breaks the form at load
-    events = [v for v in N.values() if v.get("Kind") == "Event"]
-    checked["events"] = len(events)
-    for e in events:
-        owner = N.get(e.get("Field"), {}).get("Name", e.get("Field"))
-        script = e.get("Script") or ""
-        if script:
-            # A reference by custom-slug id (no platform prefix) reads exactly like prose, so no
-            # regex can prove this script's references are ALL accounted for — only that the
-            # platform-prefixed ones it contains are valid. Count the residual uncertainty.
-            unvalidatable_scripts += 1
-        for ref in set(_PLATFORM_REF_RE.findall(script)):
-            if ref not in draft:
-                problems.append(f"event on {owner!r} writes to missing field {ref}")
-        if e.get("Field") not in draft:
-            problems.append(f"event {e['Id']} is attached to a missing field")
+    editable, malformed_permissions = _collect_editable_and_malformed_permissions(nodes, layout)
+    _check_editable_sections(nodes, editable, problems, checked)
+    _check_required_fields(root, nodes, layout, editable, problems, checked)
+    _check_permission_matrix(nodes, layout, malformed_permissions, problems, checked)
 
-    # 2. branch conditions whose literal matches no real list option  <- branch never fires
-    #    An Expression may instead hang off a Property (used for a computed value elsewhere on
-    #    the form) rather than a ProcessDef. Only the ones bound to a ProcessDef are branch
-    #    conditions — filter on that before treating an Expression as routing.
-    branch_exprs = [v for v in N.values() if v.get("Kind") == "Expression" and v.get("ProcessDef")]
-    literals_checked = 0
-    for x in branch_exprs:
-        branch = N.get(x.get("ProcessDef"), {}).get("Name")
-        for root_id in x.get("Expression::Node") or []:
-            children = [(cid, N.get(cid) or {})
-                        for cid in (N.get(root_id) or {}).get("Node::Node") or []]
-            # the sibling this literal is compared against — its Select list is what makes the
-            # literal provable at all
-            field_sibling = next((n for _, n in children if n.get("Type") == "Field"), None)
-            for _cid, n in children:
-                if n.get("Type") == "Field" and n.get("Field") not in draft:
-                    problems.append(f"branch {branch!r} references missing field {n.get('Field')}")
-                    continue
-                if n.get("Type") != "Static":
-                    continue
-                literals_checked += 1
-                value = n.get("Value")
-                options: list[str] | None = None
-                if field_sibling is not None:
-                    fnode = N.get(field_sibling.get("Field")) or {}
-                    if fnode.get("Type") == "Select":
-                        options = list_options.get(fnode.get("ReferredList"))
-                if options is None:
-                    unvalidated.append(
-                        f"branch {branch!r} literal {value!r} not validated "
-                        f"(no list options given for its field)")
-                elif value not in options:
-                    problems.append(f"branch {branch!r} tests {value!r}, not in {options}")
-    checked["branch_literals"] = literals_checked
-
-    # 2b. GotoTask loops  <- a Goto with no condition is an unconditional backward jump
-    gotos = [v for v in N.values() if v.get("NodeType") == "GotoTask"]
-    checked["gotos"] = len(gotos)
-    for g in gotos:
-        name = g.get("Name")
-        target = N.get(g.get("Goto"))
-        if not target:
-            problems.append(f"goto {name!r} jumps to missing activity {g.get('Goto')}")
-        elif target.get("ProcessDef") != g.get("ProcessDef"):
-            problems.append(f"goto {name!r} jumps out of its own branch, to {target.get('Name')!r}")
-        elif g["Id"] not in (target.get("Goto::Activity") or []):
-            problems.append(f"goto {name!r} missing the Goto::Activity back-ref on its target")
-        exprs = g.get("Activity::Expression") or []
-        if not exprs:
-            problems.append(f"goto {name!r} has NO condition — it loops forever")
-        for xid in exprs:
-            for root_id in (N.get(xid) or {}).get("Expression::Node") or []:
-                for cid in (N.get(root_id) or {}).get("Node::Node") or []:
-                    n = N.get(cid) or {}
-                    if n.get("Type") != "Field":
-                        continue
-                    if n["Field"] not in draft:
-                        problems.append(f"goto {name!r} tests missing field {n['Field']}")
-                        continue
-                    # a gate the item can leave BLANK is a gate that silently decides the loop
-                    gate = N[n["Field"]]
-                    if gate.get("Type") == "Select" and not gate.get("Required"):
-                        problems.append(
-                            f"goto {name!r} tests optional Select {gate.get('Name')!r} — blank "
-                            f"never equals the literal, so the loop is skipped, not entered")
-
-    # 3. dangling list references anywhere  <- PUTs fine, fails PUBLISH
-    dangling_checked = 0
-    for nid, node in N.items():
-        for key, val in node.items():
-            if not (isinstance(val, list) and "::" in key):
-                continue
-            for ref in val:
-                if not isinstance(ref, str):
-                    continue
-                dangling_checked += 1
-                if ref not in draft:
-                    problems.append(f"{nid}.{key} -> missing {ref}")
-    checked["dangling_refs"] = dangling_checked
-
-    # 3b. a Step-stamp Property pointing at a deleted Activity — a SCALAR reference the list
-    # sweep above never visits. THE publish-500 condition (#18, isolated live 2026-08-12 by
-    # subsystem bisect on a flow that was doctor-clean while 500ing deterministically): PUTs
-    # fine, publish dies MetadataError with zero diagnostic content.
-    step_stamps = 0
-    for nid, node in N.items():
-        if node.get("Kind") == "Property" and node.get("Name") == "Step":
-            step_stamps += 1
-            tgt = node.get("Value")
-            if isinstance(tgt, str) and (draft.get(tgt) or {}).get("Kind") != "Activity":
-                problems.append(
-                    f"sequence Step stamp {nid} -> missing activity {tgt} (publish will 500 "
-                    f"MetadataError — repoint it or rebuild via build_workflow, which now "
-                    f"repoints by name)")
-    checked["step_stamps"] = step_stamps
-
-    # 3c. EVERY other dangling SCALAR reference — the whole class rule 3b guards one instance of.
-    # Rule 3 sweeps `::` LIST refs only (`isinstance(val, list) and "::" in key`), so an owner
-    # back-ref written as a bare string was never visited by anything: PUTs 200, publish dies 500
-    # MetadataError with zero diagnostic content, exactly like #18.
-    #
-    # REPORT-ONLY, deliberately, and NOT mirrored into `graph._sweep_dangling`: that sweep DELETES,
-    # and deleting a dangling `Field.Column` or `Permission.Activity` would strand the node rather
-    # than repair it. The list sweep stays list-only; the scalar surface is named here instead.
-    # A "_"-prefixed value is the platform's SYSTEM-FIELD reference namespace, not a node id:
-    # `Node.Field = "_Field_x"` while the node is keyed "Field_x", and `"_created_by"` names a
-    # system field with no node at all (both real shapes in shapes/process_template_full.json).
-    # Skipped from the missing-check, counted in their own bucket — resolving `ref[1:]` would
-    # still fabricate a problem for every node-less system field on a cleanly published flow.
-    scalar_refs = 0
-    system_scalar_refs = 0
-    for nid, node in N.items():
-        for key in _SCALAR_REF_KEYS.get(node.get("Kind"), ()):
-            ref = node.get(key)
-            if not isinstance(ref, str) or not ref:
-                continue
-            if ref.startswith("_"):
-                system_scalar_refs += 1
-                continue
-            scalar_refs += 1
-            if ref not in draft:
-                problems.append(
-                    f"{nid}.{key} -> missing {ref} (scalar reference — the list-only sweep never "
-                    f"visits it; PUT 200s, publish dies 500 MetadataError with zero diagnostics)")
-    checked["scalar_refs"] = scalar_refs
-    checked["system_scalar_refs"] = system_scalar_refs
-
-    # 4. a section nobody can ever edit, and Required fields nobody can ever fill
-    malformed_permissions: list[str] = []
-    susp = {v.get("Name") for v in N.values() if v.get("Kind") == "Activity" and v.get("IsSuspended")}
-    editable: dict[str, set[str]] = {}
-    for pm in N.values():
-        if pm.get("Kind") != "Permission" or pm.get("Permission") != "Editable":
-            continue
-        step = N.get(pm.get("Activity"), {}).get("Name")
-        if step in susp:                       # a suspended step never runs
-            continue
-        # A Permission missing `Column`/`Activity` is malformed, not absent — report it and skip,
-        # never subscript it. doctor runs on flows this engine did NOT build (SKILL.md: run it
-        # after every edit), so a UI- or copilot-built node with a key we assume is present used
-        # to escape `forge_doctor` as a bare KeyError, across the tool boundary, as an EXCEPTION
-        # rather than as data. Doctrine 7: this function reports, it never raises.
-        col_id = pm.get("Column")
-        if not isinstance(col_id, str) or not isinstance(pm.get("Activity"), str):
-            malformed_permissions.append(pm.get("Id", "<no Id>"))
-            continue
-        col = N.get(col_id, {})
-        # the column's owning Section (layout.owner_section), else its own name — the same
-        # attribution the old per-column walk computed, sourced from the shared fact base now
-        keys = {layout.owner_section(col_id) or col.get("Name", "?")}
-        # A table host (Type:"Model") NESTED inside a section is reachable under two different
-        # names: the enclosing section's (via owner_section) and its own. A table sitting at the
-        # top level has no enclosing section, so the two names coincide there and the gap stays
-        # invisible until a table is built INSIDE a section. Credit the host's own name too, or a
-        # section-nested table false-flags as "never editable".
-        if col.get("Type") == "Model" and col.get("Name"):
-            keys.add(col["Name"])
-        for key in keys:
-            editable.setdefault(key, set()).add(step)
-
-    sections_checked = 0
-    for sv in N.values():
-        if sv.get("Type") not in ("Section", "Model") or not sv.get("Name"):
-            continue
-        sections_checked += 1
-        # a Section with no member columns is a pure text banner (a heading with nothing under
-        # it): nothing in it can be edited, so "never editable" is its correct, healthy state
-        if sv.get("Type") == "Section" and not sv.get("Column::Row"):
-            continue
-        if not editable.get(sv["Name"]):
-            problems.append(f"section {sv['Name']!r} is never editable at any live step")
-    checked["sections"] = sections_checked
-
-    required_checked = 0
-    for f in [v for v in N.values() if v.get("Kind") == "Field"
-              and v.get("Model") == root and v.get("Required")]:
-        required_checked += 1
-        if not editable.get(layout.owner_section(f.get("Column")) or "?"):
-            problems.append(
-                f"field {f['Name']!r} is Required but never editable — that step cannot be submitted")
-    checked["required_fields"] = required_checked
-
-    # 5. sparse permission matrix  <- fields silently keep a default visibility
-    # A hidden or SequenceNumber column has no per-step visibility to set — the builder writes
-    # zero Permissions for a system-filled column, which is never shown on a form (#9). A table
-    # HOST column (Type:"Model") likewise takes NO Permission — Kissflow shows/hides the whole
-    # table, not its host cell (CLAUDE.md > Tables, Visibility). `set_step_permissions` skips hosts
-    # by design, so counting them here made a table-bearing flow's matrix read "sparse" by exactly
-    # one host-column x every step, even when every real field was covered — must exclude them too.
-    units = ({k for k, v in N.items() if v.get("Kind") == "Column" and v.get("Type") == "Field"}
-             - layout.table_child_columns - layout.no_permission_columns)
-    acts = [k for k, v in N.items() if v.get("Kind") == "Activity"
-            and v.get("NodeType") not in ROUTING_NODE_TYPES]
-    have = {(c, a) for p in N.values() if p.get("Kind") == "Permission"
-            and isinstance(c := p.get("Column"), str) and isinstance(a := p.get("Activity"), str)}
-    checked["permission_pairs"] = len(units) * len(acts)
-    checked["malformed_permissions"] = len(malformed_permissions)
-    if malformed_permissions:
-        problems.append(
-            f"{len(malformed_permissions)} Permission node(s) missing a Column/Activity "
-            f"reference: {', '.join(sorted(malformed_permissions)[:5])}"
-            + (" ..." if len(malformed_permissions) > 5 else "")
-            + " — the builder writes both on every Permission; a node without them gates nothing")
-    gaps = len({(u, a) for u in units for a in acts} - have)
-    if gaps:
-        problems.append(f"permission matrix is sparse: {gaps} (unit, step) pairs unset")
-
-    # 6. a UserTask with no assignee  <- submit 500s with a generic, non-diagnostic processError
-    # (CLAUDE.md Members first: "membership alone is not enough — the step also needs a real
-    # ASSIGNEE"). Only UserTask takes an assignee — a StartEvent is gated by InitiateItems
-    # membership, an EndEvent is terminal, neither carries a Resource. A suspended step is walked
-    # past at runtime, so its missing assignee never bites; skip it. The assignee is a Resource with
-    # a real Value on the step's Activity::Resource.
-    real_steps = [(k, v) for k, v in N.items() if v.get("Kind") == "Activity"
-                  and v.get("NodeType") == "UserTask" and not v.get("IsSuspended")]
-    checked["step_assignees"] = len(real_steps)
-    for _aid, v in real_steps:
-        res_ids = v.get("Activity::Resource") or []
-        # Must be an AppRole assignee with a real Value. A ValueType:"User" Resource publishes but
-        # is SILENTLY IGNORED at runtime (CLAUDE.md Members first: "use AppRole for assignees, not
-        # User") — it reads as assigned but still 500s on submit, the exact class this rule catches.
-        if not any((N.get(r) or {}).get("Value")
-                   and (N.get(r) or {}).get("ValueType") == "AppRole" for r in res_ids):
-            problems.append(
-                f"step {v.get('Name')!r} has no AppRole assignee — submit will 500 (CLAUDE.md "
-                f"Members first: wire a Resource with ValueType 'AppRole' on every step)")
-
-    # 7. a bare User field with no sibling QueryDefinition  <- blocks PUBLISH outright
-    # (KISSFLOW_ERROR_04211, CLAUDE.md #59 / shapes/field_user_reference.json). apply_changes mints
-    # the sibling for engine-built User fields, but a template-cloned or hand-built one may lack it.
-    user_fields = [v for v in N.values() if v.get("Kind") == "Field" and v.get("Type") == "User"]
-    checked["user_fields"] = len(user_fields)
-    for f in user_fields:
-        qids = f.get("Field::QueryDefinition") or []
-        if not any((N.get(q) or {}).get("Kind") == "QueryDefinition" for q in qids):
-            problems.append(
-                f"User field {f.get('Name')!r} has no QueryDefinition sibling — publish will fail "
-                f"(KISSFLOW_ERROR_04211, CLAUDE.md #59)")
-
-    # 7b. a list-backed field bound to NO list  <- the SAME defect class as rule 7, one field type
-    # over. A Select/Multiselect/Checkbox/Checklist takes its options from a separate LIST FLOW via
-    # `ReferredList`, and publish has to materialise that option source; with the key absent there
-    # is nothing to resolve and publish dies MetadataError with zero diagnostic content, while
-    # every other rule reads the flow as healthy (isolated 2026-08-19 as the sole structural
-    # deviation in a doctor-clean draft that 500'd deterministically). `apply_changes` used to mint
-    # exactly this — auto-repairing the bare User field of rule 7 while writing a bare Select
-    # silently twenty lines apart; it now refuses at compile, and this is the safety net for the
-    # drafts THIS ENGINE DID NOT BUILD (template-cloned, copilot-built, hand-built).
-    #
-    # The `ReferredList` TARGET is deliberately never resolved: a list is a separate flow, never a
-    # node in this graph, so `ReferredList not in draft` would false-flag every correctly wired
-    # Select in existence. A table-child Select is NOT excluded — it needs its list just the same.
-    #
-    # ...but it takes a DIFFERENT remedy, and stating the root-field one for it was a dead end
-    # (2026-08-19). `forge_apply_fields` only CREATES: on a name that already exists it returns
-    # isError with `changed_ignored` ("apply_changes only creates"), and its own fallback
-    # (forge_delete_fields + forge_apply_fields) would delete the table COLUMN and re-add the name
-    # as a ROOT form field — a different form, from following the advice verbatim. There is no
-    # in-place edit of a table child anywhere on the tool surface (`add_table` is idempotent: it
-    # no-ops on a table that already exists), so the honest path is to rebuild the table itself.
-    # "A refusal a caller cannot act on is just a dead end" (CLAUDE.md > Members first) applies to
-    # a remedy exactly as it does to a refusal.
-    list_backed = [v for v in N.values() if v.get("Kind") == "Field"
-                   and v.get("Type") in LIST_BACKED_FIELD_TYPES]
-    checked["list_backed_fields"] = len(list_backed)
-    for f in list_backed:
-        ref = f.get("ReferredList")
-        if not isinstance(ref, str) or not ref:
-            name = f.get("Name")
-            head = (f"{f.get('Type')} field {name!r} has no ReferredList — a dropdown bound "
-                    f"to no list; PUT 200s and publish dies 500 MetadataError with zero "
-                    f"diagnostics (CLAUDE.md ReferredList wiring #13 — ")
-            table = _owning_table_name(N, f)
-            if table is None:
-                problems.append(head + "mint the list with forge_create_list, then re-apply "
-                                       "the field with referred_list=<list id>)")
-            else:
-                problems.append(
-                    head + f"mint the list with forge_create_list, then REBUILD table {table!r}: "
-                           f"forge_delete_fields(tables=[{table!r}]) followed by forge_add_table "
-                           f"with the column stated as [{name!r}, {f.get('Type')!r}, "
-                           f'{{"ReferredList": "<list id>"}}]. A table CHILD has no in-place '
-                           f"edit: forge_apply_fields only creates ROOT fields, so re-applying "
-                           f"this name would leave the table untouched and add a second, "
-                           f"root-level field of the same name)")
-
-    # 7c. a developer TODO note shipped as a user-facing field LABEL. Not a publish blocker — a
-    # certain repo defect regardless: a de-identified template shape carried its own reconnect
-    # notes inside `Field.Name`, so they reached the form of every process built with
-    # `from_template=True` (the default). Deliberately NOT a name-LENGTH rule: no maximum name
-    # length is captured anywhere in shapes/ or docs/capabilities/, and inventing a bound would be
-    # a guess (#10). The literal marker is unambiguous and repo-caused.
-    todo_names = [v for v in N.values() if v.get("Kind") == "Field"]
-    checked["placeholder_names"] = len(todo_names)
-    for f in todo_names:
-        name = f.get("Name")
-        if isinstance(name, str) and _TODO_MARKER in name:
-            problems.append(
-                f"field name {name!r} carries a shipped TODO placeholder — a developer note is "
-                f"being published as a user-facing label "
-                f"(shapes/process_template_identity_shell.json; move the note out of Name)")
-
-    # 8. a field column sitting off the 6-unit row grid  <- breaks rendering for the WHOLE flow
-    # (CLAUDE.md > Node-graph invariants; observed live as "There was an error / Reload" on every
-    # step of a flow whose columns overflowed one row). The engine's own layout paths tile the
-    # grid correctly, so this is the safety net for drafts THIS ENGINE DID NOT BUILD — a
-    # human-built or copilot-built form, or one an older engine mis-packed and left behind.
-    # A table's CHILD columns carry Start=0/End=0 by design (CLAUDE.md > Tables: "the 6-unit row
-    # grid does not apply inside a table"), so they come out of the fact base rather than
-    # false-flagging every table-bearing flow. A table HOST is Type:"Model", never counted here.
-    name_of_col = {c: v.get("Name", "?") for v in N.values()
-                   if v.get("Kind") == "Field" and isinstance(c := v.get("Column"), str)}
-    geometry_checked = 0
-    by_row: dict[str, list[tuple[int, int, str]]] = {}
-    for cid, col in N.items():
-        if col.get("Kind") != "Column" or col.get("Type") != "Field":
-            continue
-        if cid in layout.table_child_columns:
-            continue
-        geometry_checked += 1
-        label = name_of_col.get(cid, cid)
-        start, end = col.get("Start"), col.get("End")
-        if not isinstance(start, int) or not isinstance(end, int):
-            problems.append(
-                f"column {label!r} has no numeric grid span (Start={start!r}, End={end!r}) — the "
-                f"builder cannot place it on the {ROW_UNITS}-unit row grid")
-            continue
-        if not (0 <= start < end <= ROW_UNITS):
-            problems.append(
-                f"column {label!r} sits at (Start={start}, End={end}), off the {ROW_UNITS}-unit "
-                f"row grid (0 <= Start < End <= {ROW_UNITS}) — the builder fails to render the "
-                f"whole flow")
-            continue
-        if isinstance(rid := col.get("Row"), str):
-            by_row.setdefault(rid, []).append((start, end, label))
-    for rid, spans in by_row.items():
-        # every PAIR, not just adjacent ones: a wide column can swallow two narrow ones that do
-        # not touch each other, and a row that only reports its first collision reads as
-        # one-column-off when it is actually three
-        spans.sort()
-        for i, (s1, e1, n1) in enumerate(spans):
-            for s2, e2, n2 in spans[i + 1:]:
-                if s2 >= e1:
-                    break                        # sorted by Start: nothing further can overlap
-                problems.append(
-                    f"columns {n1!r} ({s1}, {e1}) and {n2!r} ({s2}, {e2}) overlap in row {rid} — "
-                    f"two columns cannot share a unit of the {ROW_UNITS}-unit row grid")
-    checked["column_geometry"] = geometry_checked
-
-    # 8b. ONE column claimed by TWO rows (D8a). The geometry walk above groups by the column's own
-    # `Row` back-ref, so a column sitting in two Rows' `Row::Column` shows up once per group and
-    # every span reads clean — the corruption is only visible from the ROW side, comparing each
-    # membership entry against the column's own single-valued back-ref. `apply_exact_layout` used
-    # to write exactly this when the same field was named twice in one layout spec (refused there
-    # now); a hand-edited or copilot-built draft can still arrive with it.
-    #
-    # A COUNT rule ("at most 3 columns per row") deliberately does NOT live here: the shipped
-    # shapes/process_template_identity_shell.json — a de-identified capture of a REAL published
-    # production template — carries a Row with FOUR field columns at (0,2) (2,4) (4,5) (5,6), so a
-    # >3 rule would fire on every from_template=True flow. "Three" is the consequence of
-    # FIELD_SPAN=2 — the auto-tiler's default packing, never a platform limit — so NOTHING asserts
-    # it: the write guard (`graph.validate_layout_spans`) briefly did and dropped it on the same
-    # capture (2026-08-19), because refusing a geometry the platform demonstrably renders is
-    # inventing a bound with no capture behind it (#10). Both sides enforce the same
-    # capture-backed set instead: in-grid, disjoint within a row, one column to one Row.
-    row_claims = 0
-    for rid, row in N.items():
-        if row.get("Kind") != "Row":
-            continue
-        for cid in row.get("Row::Column") or []:
-            col = N.get(cid)
-            if not isinstance(col, dict):
-                continue          # a dangling membership is rule 3's finding, not this one
-            row_claims += 1
-            own = col.get("Row")
-            if isinstance(own, str) and own != rid:
-                problems.append(
-                    f"column {cid} is listed in row {rid} but its own Row back-ref names {own} — "
-                    f"two rows claim the same column, so one row renders it and the other renders "
-                    f"a hole")
-    checked["row_column_claims"] = row_claims
+    _check_step_assignees(nodes, problems, checked)
+    _check_user_fields(nodes, problems, checked)
+    _check_list_backed_fields(nodes, problems, checked)
+    _check_placeholder_names(nodes, problems, checked)
+    _check_column_geometry(nodes, layout, problems, checked)
+    _check_row_column_claims(nodes, problems, checked)
 
     return DoctorReport(
         problems=tuple(problems),

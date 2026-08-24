@@ -680,3 +680,235 @@ def test_a_clean_draft_reports_no_malformed_permissions() -> None:
     report = doctor(synthetic_process_draft())
     assert report.checked["malformed_permissions"] == 0
     assert not [p for p in report.problems if "malformed" in p or "missing a Column" in p]
+
+
+def test_doctor_reports_many_malformed_permissions_with_ellipsis(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    for i in range(8):
+        d[f"Permission_bad_{i}"] = {
+            "Id": f"Permission_bad_{i}",
+            "Kind": "Permission",
+            "Permission": "Editable",
+        }
+    rep = doctor(d)
+    assert rep.checked["malformed_permissions"] == 8
+    assert any("..." in p and "Permission node(s) missing" in p for p in rep.problems)
+
+
+# ---- additional branch coverage tests ----------------------------------------
+
+def test_goto_jumping_to_missing_activity_flagged(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    (goto,) = _nodes_of(d, NodeType="GotoTask")
+    goto["Goto"] = "Activity_DoesNotExist99"
+    rep = doctor(d)
+    assert any("jumps to missing activity" in p for p in rep.problems)
+
+
+def test_goto_jumping_out_of_own_branch_flagged(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    (goto,) = _nodes_of(d, NodeType="GotoTask")
+    target = d[goto["Goto"]]
+    target["ProcessDef"] = "ProcessDef_OtherBranch99"
+    rep = doctor(d)
+    assert any("jumps out of its own branch" in p for p in rep.problems)
+
+
+def test_goto_missing_back_ref_on_target_flagged(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    (goto,) = _nodes_of(d, NodeType="GotoTask")
+    target = d[goto["Goto"]]
+    target["Goto::Activity"] = []
+    rep = doctor(d)
+    assert any("missing the Goto::Activity back-ref" in p for p in rep.problems)
+
+
+def test_goto_gate_field_missing_from_draft_flagged(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    (goto,) = _nodes_of(d, NodeType="GotoTask")
+    (xid,) = goto["Activity::Expression"]
+    (root_nid,) = d[xid]["Expression::Node"]
+    for child_nid in d[root_nid]["Node::Node"]:
+        if d[child_nid].get("Type") == "Field":
+            d[child_nid]["Field"] = "Field_DoesNotExist99"
+    rep = doctor(d)
+    assert any("tests missing field" in p and "Field_DoesNotExist99" in p for p in rep.problems)
+
+
+def test_branch_literal_matching_valid_option_passes(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    root = d["Root"]
+    (branch_pd,) = _nodes_of(d, Kind="ProcessDef", Name="Path A")
+    branch_pd_id = branch_pd["Id"]
+
+    d["Field_SvcSample01"] = {
+        "Id": "Field_SvcSample01", "Kind": "Field", "Model": root,
+        "Type": "Select", "ReferredList": "List_Sample01", "Name": "Service",
+    }
+    d["Node_Root01"] = {"Id": "Node_Root01", "Kind": "Node", "Type": "Operator",
+                        "Node::Node": ["Node_Field01", "Node_Static01"]}
+    d["Node_Field01"] = {"Id": "Node_Field01", "Kind": "Node", "Type": "Field",
+                         "Field": "Field_SvcSample01"}
+    d["Node_Static01"] = {"Id": "Node_Static01", "Kind": "Node", "Type": "Static",
+                          "Value": "Option A"}
+    d["Expression_Branch01"] = {
+        "Id": "Expression_Branch01", "Kind": "Expression", "ProcessDef": branch_pd_id,
+        "Expression::Node": ["Node_Root01"],
+    }
+    rep = doctor(d, list_options={"List_Sample01": ["Option A", "Option B"]})
+    assert not any("Path A" in p for p in rep.problems)
+    assert rep.checked["branch_literals"] == 1
+
+
+def test_branch_referencing_missing_field_flagged(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    (branch_pd,) = _nodes_of(d, Kind="ProcessDef", Name="Path A")
+    branch_pd_id = branch_pd["Id"]
+
+    d["Node_Root01"] = {"Id": "Node_Root01", "Kind": "Node", "Type": "Operator",
+                        "Node::Node": ["Node_Field01"]}
+    d["Node_Field01"] = {"Id": "Node_Field01", "Kind": "Node", "Type": "Field",
+                         "Field": "Field_Missing99"}
+    d["Expression_Branch01"] = {
+        "Id": "Expression_Branch01", "Kind": "Expression", "ProcessDef": branch_pd_id,
+        "Expression::Node": ["Node_Root01"],
+    }
+    rep = doctor(d)
+    assert any("branch 'Path A' references missing field Field_Missing99" in p for p in rep.problems)
+
+
+def test_branch_comparing_against_non_select_field_is_unvalidated(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    root = d["Root"]
+    (branch_pd,) = _nodes_of(d, Kind="ProcessDef", Name="Path A")
+    branch_pd_id = branch_pd["Id"]
+
+    d["Field_Text01"] = {
+        "Id": "Field_Text01", "Kind": "Field", "Model": root,
+        "Type": "Text", "Name": "Notes",
+    }
+    d["Node_Root01"] = {"Id": "Node_Root01", "Kind": "Node", "Type": "Operator",
+                        "Node::Node": ["Node_Field01", "Node_Static01"]}
+    d["Node_Field01"] = {"Id": "Node_Field01", "Kind": "Node", "Type": "Field",
+                         "Field": "Field_Text01"}
+    d["Node_Static01"] = {"Id": "Node_Static01", "Kind": "Node", "Type": "Static",
+                          "Value": "SomeValue"}
+    d["Expression_Branch01"] = {
+        "Id": "Expression_Branch01", "Kind": "Expression", "ProcessDef": branch_pd_id,
+        "Expression::Node": ["Node_Root01"],
+    }
+    rep = doctor(d, list_options={"List_Sample01": ["Option A"]})
+    assert any("not validated (no list options given for its field)" in u for u in rep.unvalidated)
+
+
+def test_event_attached_to_missing_field_flagged(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    (event,) = _nodes_of(d, Kind="Event")
+    event["Field"] = "Field_DoesNotExist99"
+    rep = doctor(d)
+    assert any("is attached to a missing field" in p for p in rep.problems)
+
+
+def test_section_without_columns_is_not_flagged_as_never_editable(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    d["Section_Banner"] = {
+        "Id": "Section_Banner",
+        "Kind": "Column",
+        "Type": "Section",
+        "Name": "Info Banner",
+        "Column::Row": [],
+    }
+    rep = doctor(d)
+    assert not any("Info Banner" in p for p in rep.problems)
+
+
+def test_owning_table_name_resolution_and_fallbacks() -> None:
+    from kfforge.verify import _owning_table_name
+
+    # 1. Normal table with name on Model
+    nodes1 = {
+        "Model_T": {"Id": "Model_T", "Kind": "Model", "Name": "LineItems", "Column": "Col_T"},
+        "Col_T": {"Id": "Col_T", "Kind": "Column", "Type": "Model", "Name": "LineItems"},
+    }
+    assert _owning_table_name(nodes1, {"Model": "Model_T"}) == "LineItems"
+
+    # 2. Table with empty Name on Model, falling back to host Column Name
+    nodes2 = {
+        "Model_T": {"Id": "Model_T", "Kind": "Model", "Name": "", "Column": "Col_T"},
+        "Col_T": {"Id": "Col_T", "Kind": "Column", "Type": "Model", "Name": "FallbackHostName"},
+    }
+    assert _owning_table_name(nodes2, {"Model": "Model_T"}) == "FallbackHostName"
+
+    # 3. Model not found or not a Model
+    assert _owning_table_name({}, {"Model": "Model_Missing"}) is None
+    assert _owning_table_name({"M": {"Kind": "Field"}}, {"Model": "M"}) is None
+
+    # 4. Root model with no host Column
+    nodes4 = {"Model_Root": {"Id": "Model_Root", "Kind": "Model", "Name": "RootModel"}}
+    assert _owning_table_name(nodes4, {"Model": "Model_Root"}) is None
+
+    # 5. Model with no name on either Model or Column
+    nodes5 = {
+        "Model_T": {"Id": "Model_T", "Kind": "Model", "Name": "", "Column": "Col_T"},
+        "Col_T": {"Id": "Col_T", "Kind": "Column", "Type": "Model", "Name": ""},
+    }
+    assert _owning_table_name(nodes5, {"Model": "Model_T"}) is None
+
+
+def test_dangling_list_refs_with_non_string_elements(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    d["Row_Test"] = {
+        "Id": "Row_Test",
+        "Kind": "Row",
+        "Row::Column": [123, None, "Column_DoesNotExist99"],
+    }
+    rep = doctor(d)
+    assert any("Row_Test.Row::Column -> missing Column_DoesNotExist99" in p for p in rep.problems)
+
+
+def test_branch_condition_with_no_field_sibling_is_unvalidated(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    (branch_pd,) = _nodes_of(d, Kind="ProcessDef", Name="Path A")
+    branch_pd_id = branch_pd["Id"]
+
+    d["Node_Root01"] = {"Id": "Node_Root01", "Kind": "Node", "Type": "Operator",
+                        "Node::Node": ["Node_Static01"]}
+    d["Node_Static01"] = {"Id": "Node_Static01", "Kind": "Node", "Type": "Static",
+                          "Value": "StandaloneStatic"}
+    d["Expression_Branch01"] = {
+        "Id": "Expression_Branch01", "Kind": "Expression", "ProcessDef": branch_pd_id,
+        "Expression::Node": ["Node_Root01"],
+    }
+    rep = doctor(d)
+    assert any("literal 'StandaloneStatic' not validated" in u for u in rep.unvalidated)
+
+
+def test_permission_for_model_column_credits_model_name(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    d["Col_Model_Test"] = {
+        "Id": "Col_Model_Test",
+        "Kind": "Column",
+        "Type": "Model",
+        "Name": "TableSection",
+    }
+    act = _nodes_of(d, Kind="Activity", NodeType="UserTask")[0]
+    d["Permission_Model_Test"] = {
+        "Id": "Permission_Model_Test",
+        "Kind": "Permission",
+        "Permission": "Editable",
+        "Activity": act["Id"],
+        "Column": "Col_Model_Test",
+    }
+    rep = doctor(d)
+    assert isinstance(rep, DoctorReport)
+
+
+def test_permission_for_suspended_activity_is_ignored_for_editability(clean_draft: Draft) -> None:
+    d = copy.deepcopy(clean_draft)
+    acts = _nodes_of(d, Kind="Activity", NodeType="UserTask")
+    acts[0]["IsSuspended"] = True
+    rep = doctor(d)
+    assert isinstance(rep, DoctorReport)
+
+
+
