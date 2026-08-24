@@ -1456,6 +1456,146 @@ def apply_fields(
 # =====================================================================================
 
 
+def _transform_fields_and_layout(
+    draft: Draft,
+    specs: list[FieldSpec],
+    groups: list[tuple[str, list[str]]] | None,
+) -> Draft | Err:
+    try:
+        new = apply_changes(draft, specs)
+        if groups:
+            return regroup_into_sections(new, merge_groups(new, groups))
+        return new
+    except (ValueError, NotImplementedError) as e:
+        return Err("verify", f"offline apply rejected the change set: {e}")
+
+
+def _write_fields_and_layout_draft(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    draft: Draft,
+    new: Draft,
+    added: tuple[str, ...],
+    groups: list[tuple[str, list[str]]] | None,
+) -> Draft | None | Err:
+    if not (added or groups):
+        return None
+    return client.put_draft(kind, flow_id, new, expect_version=draft.get(_META_VERSION))
+
+
+def _partition_names(
+    names: list[str],
+    present: set[str],
+    excluded: set[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    in_bucket: list[str] = []
+    out_bucket: list[str] = []
+    for n in names:
+        if n not in present:
+            out_bucket.append(n)
+        elif n not in excluded:
+            in_bucket.append(n)
+    return tuple(in_bucket), tuple(out_bucket)
+
+
+def _publish_fields_and_layout(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    publish: bool,
+    can_publish: bool,
+) -> bool | Err:
+    if not (publish and can_publish):
+        return False
+    pub = client.publish(kind, flow_id)
+    return pub if isinstance(pub, Err) else True
+
+
+def _build_apply_fields_report(
+    flow_id: str,
+    draft: Draft,
+    read_back: Draft,
+    ignored: _IgnoredChanges,
+    added: tuple[str, ...],
+    skipped: tuple[str, ...],
+    verified: tuple[str, ...],
+    missing: tuple[str, ...],
+    published: bool,
+) -> ApplyReport:
+    collateral = _layout_collateral(draft, read_back, exclude=added)
+    remediation = ignored.remediation + (("forge_apply_layout",) if collateral else ())
+    return ApplyReport(
+        flow_id=flow_id,
+        added=added,
+        skipped=skipped,
+        verified=verified,
+        missing=missing,
+        changed_ignored=ignored.entries,
+        collateral=collateral,
+        remediation=remediation,
+        meta_version=read_back.get(_META_VERSION),
+        published=published,
+    )
+
+
+def _prepare_fields_and_layout(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    specs: list[FieldSpec],
+    groups: list[tuple[str, list[str]]] | None,
+) -> tuple[Draft, Draft] | Err:
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    new = _transform_fields_and_layout(draft, specs, groups)
+    if isinstance(new, Err):
+        return new
+    return draft, new
+
+
+def _sync_fields_and_layout(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    draft: Draft,
+    new: Draft,
+    added: tuple[str, ...],
+    groups: list[tuple[str, list[str]]] | None,
+) -> Draft | Err:
+    written = _write_fields_and_layout_draft(
+        client, kind, flow_id, draft, new, added, groups
+    )
+    if isinstance(written, Err):
+        return written
+    return client.get_draft(kind, flow_id)
+
+
+def _finalize_fields_and_layout(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    draft: Draft,
+    read_back: Draft,
+    specs: list[FieldSpec],
+    ignored: _IgnoredChanges,
+    added: tuple[str, ...],
+    skipped: tuple[str, ...],
+    publish: bool,
+) -> ApplyReport | Err:
+    live_names = field_names(read_back)
+    req_names = [s.name for s in specs]
+    verified, missing = _partition_names(req_names, live_names, ignored.names)
+    can_pub = not (missing or ignored.entries)
+    published = _publish_fields_and_layout(client, kind, flow_id, publish, can_pub)
+    if isinstance(published, Err):
+        return published
+    return _build_apply_fields_report(
+        flow_id, draft, read_back, ignored, added, skipped, verified, missing, published
+    )
+
+
 def apply_fields_and_layout(
     client: KfClient,
     kind: FlowKind,
@@ -1484,49 +1624,20 @@ def apply_fields_and_layout(
     measured on the read-back against the pre-write draft (`_layout_collateral`), with
     `forge_apply_layout` in `remediation`.
     """
-    draft = client.get_draft(kind, flow_id)
-    if isinstance(draft, Err):
-        return draft
-
-    before = field_names(draft)
-    version = draft.get(_META_VERSION)
-    requested = [s.name for s in specs]
+    prep = _prepare_fields_and_layout(client, kind, flow_id, specs, groups)
+    if isinstance(prep, Err):
+        return prep
+    draft, new = prep
     ignored = _changed_ignored(draft, specs)
-    skipped = tuple(n for n in requested if n in before and n not in ignored.names)
-
-    try:
-        new = apply_changes(draft, specs)
-        if groups:
-            new = regroup_into_sections(new, merge_groups(new, groups))
-    except (ValueError, NotImplementedError) as e:
-        return Err("verify", f"offline apply rejected the change set: {e}")
-
-    added = tuple(n for n in requested if n not in before)
-    if added or groups:
-        written = client.put_draft(kind, flow_id, new, expect_version=version)
-        if isinstance(written, Err):
-            return written
-
-    read_back = client.get_draft(kind, flow_id)
+    req_names = [s.name for s in specs]
+    skipped, added = _partition_names(req_names, field_names(draft), ignored.names)
+    read_back = _sync_fields_and_layout(
+        client, kind, flow_id, draft, new, added, groups
+    )
     if isinstance(read_back, Err):
         return read_back
-    live_names = field_names(read_back)
-    verified = tuple(n for n in requested if n in live_names and n not in ignored.names)
-    missing = tuple(n for n in requested if n not in live_names)
-    collateral = _layout_collateral(draft, read_back, exclude=added)
-
-    published = False
-    if publish and not (missing or ignored.entries):
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
-
-    return ApplyReport(
-        flow_id=flow_id, added=added, skipped=skipped, verified=verified, missing=missing,
-        changed_ignored=ignored.entries, collateral=collateral,
-        remediation=ignored.remediation + (("forge_apply_layout",) if collateral else ()),
-        meta_version=read_back.get(_META_VERSION), published=published,
+    return _finalize_fields_and_layout(
+        client, kind, flow_id, draft, read_back, specs, ignored, added, skipped, publish
     )
 
 
