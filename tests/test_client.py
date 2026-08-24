@@ -2105,6 +2105,60 @@ def test_apply_required_missing_is_a_loud_failure_on_read_back() -> None:
     assert rep.as_tool_result()["isError"] is True and c.published is False
 
 
+def test_apply_required_get_draft_error_returns_err() -> None:
+    class FailingGet(FakeClient):
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "500 Internal Server Error")
+
+    c = FailingGet(_bare_form_draft())
+    got = apply_required(c, "F1", ("a",))
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_required_put_draft_error_returns_err() -> None:
+    class FailingPut(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            return Err("conflict", "version conflict")
+
+    c = FailingPut(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    got = apply_required(c, "F1", ("a",))
+    assert isinstance(got, Err) and got.kind == "conflict"
+
+
+def test_apply_required_read_back_error_returns_err() -> None:
+    class FailingReadBack(FakeClient):
+        def __init__(self, draft: dict):
+            super().__init__(draft)
+            self._reads = 0
+
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            self._reads += 1
+            if self._reads > 1:
+                return Err("http", "readback failed")
+            return self.draft
+
+    c = FailingReadBack(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    got = apply_required(c, "F1", ("a",))
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_required_publish_error_returns_err() -> None:
+    class FailingPublish(FakeClient):
+        def publish(self, kind, flow_id):  # type: ignore[override]
+            return Err("publish", "publish rejected")
+
+    c = FailingPublish(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    got = apply_required(c, "F1", ("a",), publish=True)
+    assert isinstance(got, Err) and got.kind == "publish"
+
+
+def test_apply_required_publish_success() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    rep = apply_required(c, "F1", ("a",), publish=True)
+    assert isinstance(rep, RequiredReport)
+    assert rep.published is True and c.published is True
+
+
 def test_apply_field_events_unknown_field_still_gets_set_field_events_own_message() -> None:
     """The derivation must not steal a refusal it states worse: an unknown NAME with a stated
     trigger falls through to `set_field_events`, which names the field precisely."""
