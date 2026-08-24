@@ -8,12 +8,13 @@ from __future__ import annotations
 from typing import Any
 
 from kfforge.client import Err, KfClient, KfConfig
-from kfforge.pages import new_page_graph
+from kfforge.pages import new_page_graph, set_styles
 from kfforge.pages_live import (
     NavigationReport,
     PageBuildReport,
     PageBuildStep,
     PageReport,
+    _style_props_landed,
     apply_build_page_op,
     apply_navigation,
     apply_page_build,
@@ -396,6 +397,61 @@ def test_apply_page_build_detects_a_style_value_that_never_landed() -> None:
     assert rep.verified == ()
     assert len(rep.missing) == 1
     assert rep.as_tool_result()["isError"] is True
+
+
+def test_style_props_landed_resolutions_and_matching() -> None:
+    g = new_page_graph("Page 1")
+    g = set_styles(g, rules={
+        "Body Container": {
+            "Container.Background": "#ffffff",
+            "Container.Color": {"ref": "Color.White"},
+        }
+    })
+
+    assert _style_props_landed(g, "Container001", {
+        "Container.Background": "#ffffff",
+        "Container.Color": {"ref": "Color.White"},
+    }) is True
+    assert _style_props_landed(g, "Body Container", {
+        "Container.Background": "#ffffff",
+        "Container.Color": {"ref": "Color.White"},
+    }) is True
+
+    assert _style_props_landed(g, "Container001", {"Container.Padding": None}) is True
+    assert _style_props_landed(g, "Container001", {"Container.Background": None}) is False
+
+    assert _style_props_landed(g, "Container001", {"Container.Background": "#000000"}) is False
+    assert _style_props_landed(g, "Container001", {"Container.Padding": "10px"}) is False
+
+    assert _style_props_landed(g, "Container001", {"Container.Color": {"ref": "Color.Black"}}) is False
+    assert _style_props_landed(g, "Container001", {"Container.Color": "#ffffff"}) is False
+
+    assert _style_props_landed(g, "NonExistentContainer", {"Container.Background": "#ffffff"}) is False
+
+    ambiguous = dict(g)
+    ambiguous["Container002"] = {
+        "Id": "Container002", "Kind": "Container", "Name": "Body Container",
+        "Container::Style": ["Style001"],
+    }
+    assert _style_props_landed(ambiguous, "Body Container", {"Container.Background": "#ffffff"}) is False
+
+    no_style = dict(g)
+    no_style["Container_NoStyle"] = {
+        "Id": "Container_NoStyle", "Kind": "Container", "Name": "No Style Container",
+    }
+    assert _style_props_landed(no_style, "Container_NoStyle", {"Container.Background": "#ffffff"}) is False
+
+    broken_style = dict(g)
+    broken_style["Container_Broken"] = {
+        "Id": "Container_Broken", "Kind": "Container", "Name": "Broken",
+        "Container::Style": ["Style_Broken"],
+    }
+    assert _style_props_landed(broken_style, "Container_Broken", {"Container.Background": "#ffffff"}) is False
+    broken_style["Style_Broken"] = {"Id": "Style_Broken", "Kind": "Style", "Value": None}
+    assert _style_props_landed(broken_style, "Container_Broken", {"Container.Background": "#ffffff"}) is False
+    assert _style_props_landed(broken_style, "Container_Broken", {"Container.Background": None}) is True
+
+    assert _style_props_landed(g, "Container001", {}) is True
 
 
 def test_apply_page_build_detects_a_bind_value_that_never_landed() -> None:
