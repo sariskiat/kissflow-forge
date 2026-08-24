@@ -3199,3 +3199,143 @@ def test_group_regrant_proceeds_with_explicit_override() -> None:
 
     assert isinstance(rep, RoleUsersReport)
     assert c.body is not None and c.body.get("Groups"), "override must still issue the write"
+
+
+def test_add_role_users_role_get_error() -> None:
+    c = _FakeRoleClient()
+    c.get_app_role = lambda role_id: Err("net", "network error")  # type: ignore[assignment]
+    got = apply_add_role_users(c, "R1", user_query="Somchai")
+    assert isinstance(got, Err) and got.kind == "net"
+
+
+def test_add_role_users_assignee_get_error() -> None:
+    c = _FakeRoleClient()
+    c.get_assignee = lambda q: Err("net", "assignee lookup failed")  # type: ignore[assignment]
+    got = apply_add_role_users(c, "R1", user_query="Somchai")
+    assert isinstance(got, Err) and got.kind == "net"
+
+
+def test_add_role_users_put_error() -> None:
+    c = _FakeRoleClient()
+    c.put_app_role = lambda role_id, body, app_id=None: Err("net", "write failed")  # type: ignore[assignment]
+    got = apply_add_role_users(c, "R1", user_ids=[{"_id": "U1", "Kind": "User", "Name": "Ann"}])
+    assert isinstance(got, Err) and got.kind == "net"
+
+
+def test_add_role_users_readback_error() -> None:
+    c = _FakeRoleClient()
+    calls = 0
+
+    def fake_get_role(role_id):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return Err("net", "readback failed")
+        return {"_id": role_id, "Name": "Role", "Members": [], "UserCount": 0, "GroupCount": 0}
+
+    c.get_app_role = fake_get_role  # type: ignore[assignment]
+    got = apply_add_role_users(c, "R1", user_ids=[{"_id": "U1", "Kind": "User", "Name": "Ann"}])
+    assert isinstance(got, Err) and got.kind == "net"
+
+
+def test_add_role_users_readback_unverified_user() -> None:
+    c = _FakeRoleClient()
+    c.get_app_role = lambda role_id: {"_id": role_id, "Name": "Role", "Members": [], "UserCount": 0, "GroupCount": 0}  # type: ignore[assignment]
+    rep = apply_add_role_users(c, "R1", user_ids=[{"_id": "U1", "Kind": "User", "Name": "Ann"}])
+    assert isinstance(rep, RoleUsersReport)
+    assert rep.added == ()
+    assert rep.not_found == ("U1",)
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_add_role_users_with_existing_and_live_group_list() -> None:
+    c = _FakeRoleClient()
+    c.detail["Groups"] = [{"_id": "g_old", "Kind": "Group", "Name": "Old Group"}]
+    calls = 0
+
+    def fake_get_role(role_id):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return {
+                "_id": role_id, "Name": "Role", "Members": [], "UserCount": 0,
+                "Groups": [{"_id": "g_old", "Kind": "Group"}, {"_id": "g_new", "Kind": "Group"}],
+                "GroupCount": 2,
+            }
+        return dict(c.detail)
+
+    c.get_app_role = fake_get_role  # type: ignore[assignment]
+    rep = apply_add_role_users(
+        c, "R1",
+        groups=[{"_id": "g_old", "Kind": "Group"}, {"_id": "g_new", "Kind": "Group"}, {"_id": "g_missing", "Kind": "Group"}],
+        confirm_group_notification=True,
+    )
+    assert isinstance(rep, RoleUsersReport)
+    assert rep.groups_already_present == ("g_old",)
+    assert rep.groups_added == ("g_new",)
+    assert rep.groups_unverified == ("g_missing",)
+
+
+def test_add_role_users_group_notification_name_formatting() -> None:
+    c = _FakeRoleClient()
+    got = apply_add_role_users(
+        c, "R1",
+        groups=[{"_id": "gid_only"}, "not_a_dict"],  # type: ignore[list-item]
+    )
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "gid_only" in got.message
+
+    got_unnamed = apply_add_role_users(
+        c, "R1",
+        groups=["invalid"],  # type: ignore[list-item]
+    )
+    assert isinstance(got_unnamed, Err) and got_unnamed.kind == "verify"
+    assert "<unnamed>" in got_unnamed.message
+
+
+def test_add_role_users_no_existing_groups_note() -> None:
+    c = _FakeRoleClient(group_count=0)
+    calls = 0
+
+    def fake_get_role(role_id):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return {"_id": role_id, "Name": "Role", "Members": [], "UserCount": 0, "GroupCount": 1}
+        return {"_id": role_id, "Name": "Role", "Members": [], "UserCount": 0, "GroupCount": 0}
+
+    c.get_app_role = fake_get_role  # type: ignore[assignment]
+    rep = apply_add_role_users(
+        c, "R1",
+        groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}],
+        confirm_group_notification=True,
+    )
+    assert isinstance(rep, RoleUsersReport)
+    assert rep.groups_added == ("everyone",)
+    assert "verified by GroupCount 0 -> 1 only" in (rep.groups_note or "")
+
+
+def test_add_role_users_live_groups_with_no_initial_existing_groups_note() -> None:
+    c = _FakeRoleClient(group_count=0)
+    calls = 0
+
+    def fake_get_role(role_id):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return {
+                "_id": role_id, "Name": "Role", "Members": [], "UserCount": 0,
+                "Groups": [{"_id": "g_new", "Kind": "Group"}],
+                "GroupCount": 1,
+            }
+        return {"_id": role_id, "Name": "Role", "Members": [], "UserCount": 0, "GroupCount": 0}
+
+    c.get_app_role = fake_get_role  # type: ignore[assignment]
+    rep = apply_add_role_users(
+        c, "R1",
+        groups=[{"_id": "g_new", "Kind": "Group"}],
+        confirm_group_notification=True,
+    )
+    assert isinstance(rep, RoleUsersReport)
+    assert rep.groups_added == ("g_new",)
+    assert "existing groups could not be enumerated" in (rep.groups_note or "")
