@@ -2478,6 +2478,61 @@ class SequenceNumberReport:
         }
 
 
+def _is_sequence_field(v: Any, name: str) -> bool:
+    return (
+        isinstance(v, dict)
+        and v.get("Kind") == "Field"
+        and v.get("Type") == "SequenceNumber"
+        and v.get("Name") == name
+    )
+
+
+def _verify_sequence_number(draft: Draft, name: str) -> bool:
+    for v in draft.values():
+        if _is_sequence_field(v, name):
+            props = v.get("Field::Property")
+            return isinstance(props, list) and len(props) == 3
+    return False
+
+
+def _publish_sequence_flow(
+    client: KfClient, kind: FlowKind, flow_id: str, publish: bool, verified: bool,
+) -> bool | Err:
+    if not (publish and verified):
+        return False
+    pub = client.publish(kind, flow_id)
+    return pub if isinstance(pub, Err) else True
+
+
+def _save_sequence_draft(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    field_name: str,
+    section_name: str,
+    prefix: str,
+    padding: str,
+    step_activity_name: str,
+    start: int,
+    end: int,
+) -> Draft | Err:
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    version = draft.get(_META_VERSION)
+    try:
+        new = add_sequence_number(
+            draft, field_name, section_name, prefix, padding,
+            step_activity_name, start=start, end=end,
+        )
+    except ValueError as e:
+        return Err("verify", f"offline add_sequence_number rejected the spec: {e}")
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+    return client.get_draft(kind, flow_id)
+
+
 def apply_sequence_number(
     client: KfClient,
     flow_id: str,
@@ -2495,40 +2550,27 @@ def apply_sequence_number(
     guarded PUT -> read-back verify the SequenceNumber Field + its 3 Property nodes landed ->
     optional publish.
     """
-    draft = client.get_draft(kind, flow_id)
-    if isinstance(draft, Err):
-        return draft
-    version = draft.get(_META_VERSION)
-
-    try:
-        new = add_sequence_number(draft, field_name, section_name, prefix, padding,
-                                  step_activity_name, start=start, end=end)
-    except ValueError as e:
-        return Err("verify", f"offline add_sequence_number rejected the spec: {e}")
-
-    written = client.put_draft(kind, flow_id, new, expect_version=version)
-    if isinstance(written, Err):
-        return written
-
-    read_back = client.get_draft(kind, flow_id)
+    read_back = _save_sequence_draft(
+        client, kind, flow_id, field_name, section_name, prefix, padding,
+        step_activity_name, start, end,
+    )
     if isinstance(read_back, Err):
         return read_back
-    fld = next((v for v in read_back.values()
-                if isinstance(v, dict) and v.get("Kind") == "Field"
-                and v.get("Type") == "SequenceNumber" and v.get("Name") == field_name), None)
-    props_ok = bool(fld and len(fld.get("Field::Property") or []) == 3)
-    verified = fld is not None and props_ok
 
-    published = False
-    if publish and verified:
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
+    verified = _verify_sequence_number(read_back, field_name)
+    pub = _publish_sequence_flow(client, kind, flow_id, publish, verified)
+    if isinstance(pub, Err):
+        return pub
 
-    return SequenceNumberReport(flow_id=flow_id, field_name=field_name, section=section_name,
-                                verified=verified, missing=not verified,
-                                meta_version=read_back.get(_META_VERSION), published=published)
+    return SequenceNumberReport(
+        flow_id=flow_id,
+        field_name=field_name,
+        section=section_name,
+        verified=verified,
+        missing=not verified,
+        meta_version=read_back.get(_META_VERSION),
+        published=pub,
+    )
 
 
 @dataclass(frozen=True)
