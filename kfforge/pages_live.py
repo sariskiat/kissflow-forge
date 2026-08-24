@@ -116,6 +116,31 @@ class PageBuildReport:
         }
 
 
+def _prop_matches(value: dict[str, Any], prop: str, expected: Any) -> bool:
+    if expected is None:
+        return prop not in value
+    if isinstance(expected, dict):
+        return value.get(prop) == expected
+    return value.get(prop) == {"value": expected}
+
+
+def _container_style_id(read_back: Draft, key: str) -> str | None:
+    try:
+        cid = resolve_container_id(read_back, key)
+    except ValueError:
+        return None
+    styles = read_back[cid].get("Container::Style")
+    return styles[0] if styles else None
+
+
+def _container_style_value(read_back: Draft, key: str) -> dict[str, Any] | None:
+    sid = _container_style_id(read_back, key)
+    if sid is None:
+        return None
+    val = read_back.get(sid, {}).get("Value")
+    return val if isinstance(val, dict) else {}
+
+
 def _style_props_landed(read_back: Draft, key: str, props: dict[str, Any]) -> bool:
     """Did every prop in `props` (the SAME dict passed to pages.set_styles's `rules[key]`) land
     on the read-back Style node for the Container addressed by `key`? `key` is resolved the SAME way
@@ -126,31 +151,10 @@ def _style_props_landed(read_back: Draft, key: str, props: dict[str, Any]) -> bo
     `None` means the property must be ABSENT — removed back to the theme default), so this checks
     the SAME shape the writer wrote, not a guessed one.
     """
-    node = read_back.get(key)
-    if isinstance(node, dict) and node.get("Kind") == "Container":
-        container: dict[str, Any] | None = node
-    else:
-        matches = [v for v in read_back.values() if isinstance(v, dict)
-                   and v.get("Kind") == "Container" and v.get("Name") == key]
-        container = matches[0] if len(matches) == 1 else None
-    if container is None:
+    value = _container_style_value(read_back, key)
+    if value is None:
         return False
-    style_ids = container.get("Container::Style") or []
-    if not style_ids:
-        return False
-    style = read_back.get(style_ids[0]) or {}
-    value = style.get("Value") or {}
-    for prop, v in props.items():
-        if v is None:
-            if prop in value:
-                return False
-        elif isinstance(v, dict):
-            if value.get(prop) != v:
-                return False
-        else:
-            if value.get(prop) != {"value": v}:
-                return False
-    return True
+    return all(_prop_matches(value, prop, v) for prop, v in props.items())
 
 
 def _bind_config_landed(read_back: Draft, host: str, config: dict[str, Any]) -> bool:
