@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from kfforge.querybank import (
     ANSWER,
     GRAPH_DIFF,
     MODULES,
     SWEEPS,
     build_bank,
+    main,
 )
 
 BANK = build_bank()
@@ -61,3 +66,92 @@ def test_no_tenant_tokens() -> None:
 def test_every_sweep_has_queries() -> None:
     covered = {q.sweep for q in BANK}
     assert covered == set(SWEEPS), set(SWEEPS) - covered
+
+
+def test_main_default(capsys: pytest.CaptureFixture[str]) -> None:
+    ret = main([])
+    assert ret == 0
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.strip().split("\n") if line]
+    assert len(lines) == len(BANK)
+    first = json.loads(lines[0])
+    assert "id" in first
+    assert "prompt" in first
+
+
+def test_main_sweep_filter(capsys: pytest.CaptureFixture[str]) -> None:
+    ret = main(["--sweep", "pages"])
+    assert ret == 0
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.strip().split("\n") if line]
+    expected_count = len([q for q in BANK if q.sweep == "pages"])
+    assert len(lines) == expected_count
+    for line in lines:
+        data = json.loads(line)
+        assert data["sweep"] == "pages"
+
+
+def test_main_observable_filter(capsys: pytest.CaptureFixture[str]) -> None:
+    ret = main(["--observable", ANSWER])
+    assert ret == 0
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.strip().split("\n") if line]
+    expected_count = len([q for q in BANK if q.observable == ANSWER])
+    assert len(lines) == expected_count
+    for line in lines:
+        data = json.loads(line)
+        assert data["observable"] == ANSWER
+
+
+def test_main_combined_filter(capsys: pytest.CaptureFixture[str]) -> None:
+    ret = main(["--sweep", "roles", "--observable", GRAPH_DIFF])
+    assert ret == 0
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.strip().split("\n") if line]
+    expected_count = len(
+        [q for q in BANK if q.sweep == "roles" and q.observable == GRAPH_DIFF]
+    )
+    assert len(lines) == expected_count
+    for line in lines:
+        data = json.loads(line)
+        assert data["sweep"] == "roles"
+        assert data["observable"] == GRAPH_DIFF
+
+
+def test_main_count(capsys: pytest.CaptureFixture[str]) -> None:
+    ret = main(["--count"])
+    assert ret == 0
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.strip().split("\n") if line]
+    assert lines[-1] == f"total\t{len(BANK)}"
+
+    counts: dict[str, int] = {}
+    for line in lines[:-1]:
+        sweep, count_str = line.split("\t")
+        counts[sweep] = int(count_str)
+
+    assert sum(counts.values()) == len(BANK)
+    assert set(counts.keys()) == set(SWEEPS)
+
+
+def test_main_count_with_filter(capsys: pytest.CaptureFixture[str]) -> None:
+    ret = main(["--count", "--sweep", "pages", "--observable", ANSWER])
+    assert ret == 0
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.strip().split("\n") if line]
+    expected_count = len(
+        [q for q in BANK if q.sweep == "pages" and q.observable == ANSWER]
+    )
+    assert lines == [f"pages\t{expected_count}", f"total\t{expected_count}"]
+
+
+def test_main_implicit_argv(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("sys.argv", ["querybank", "--count", "--sweep", "boards"])
+    ret = main()
+    assert ret == 0
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.strip().split("\n") if line]
+    expected_count = len([q for q in BANK if q.sweep == "boards"])
+    assert lines == [f"boards\t{expected_count}", f"total\t{expected_count}"]
