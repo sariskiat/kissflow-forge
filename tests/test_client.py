@@ -358,6 +358,185 @@ def test_apply_table_offline_rejection_never_reaches_put() -> None:
     assert c.puts == 0
 
 
+def test_apply_table_initial_get_draft_error_returns_err() -> None:
+    class ErrGetClient(FakeClient):
+        def get_draft(self, kind, flow_id):
+            return Err("http", "network down")
+
+    c = ErrGetClient(_bare_form_draft())
+    got = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(got, Err) and got.kind == "http"
+    assert c.puts == 0
+
+
+def test_apply_table_put_draft_error_returns_err() -> None:
+    class FailPutClient(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):
+            return Err("conflict", "version conflict")
+
+    c = FailPutClient(_bare_form_draft())
+    got = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(got, Err) and got.kind == "conflict"
+
+
+def test_apply_table_read_back_error_returns_err() -> None:
+    class FailSecondGetClient(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):
+            self._calls += 1
+            if self._calls > 1:
+                return Err("http", "readback failed")
+            return self.draft
+
+    c = FailSecondGetClient(_bare_form_draft())
+    got = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_table_publishes_when_requested_and_verified() -> None:
+    c = FakeClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")], publish=True)
+    assert isinstance(rep, TableReport)
+    assert rep.published is True
+    assert c.published is True
+
+
+def test_apply_table_publish_error_returns_err() -> None:
+    class FailPublishClient(FakeClient):
+        def publish(self, kind, flow_id):
+            return Err("http", "publish 500")
+
+    c = FailPublishClient(_bare_form_draft())
+    got = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")], publish=True)
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_table_missing_columns_audit_and_skips_publish() -> None:
+    class DropOneColumnOnReadBackClient(FakeClient):
+        def get_draft(self, kind, flow_id):
+            draft = copy_draft = dict(self.draft)
+            # if table was written, remove one child field node from the draft dictionary
+            for k, v in list(draft.items()):
+                if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Notes":
+                    copy_draft = dict(draft)
+                    del copy_draft[k]
+            return copy_draft
+
+    c = DropOneColumnOnReadBackClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds",
+                      [("Round", "Number"), ("Notes", "Text")], publish=True)
+    assert isinstance(rep, TableReport)
+    assert rep.verified_columns == ("Round",)
+    assert rep.missing_columns == ("Notes",)
+    assert rep.published is False
+    assert c.published is False
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_apply_table_read_back_missing_or_malformed_host_node() -> None:
+    class StripHostClient(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):
+            self._calls += 1
+            if self._calls > 1:
+                # return draft without host column
+                return {k: v for k, v in self.draft.items()
+                        if not (isinstance(v, dict) and v.get("Type") == "Model")}
+            return self.draft
+
+    c = StripHostClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(rep, TableReport)
+    assert rep.verified_columns == ()
+    assert rep.missing_columns == ("Round",)
+
+
+def test_apply_table_read_back_missing_table_node() -> None:
+    class EmptyHostColumnModelClient(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):
+            self._calls += 1
+            if self._calls > 1:
+                d = dict(self.draft)
+                for k, v in d.items():
+                    if isinstance(v, dict) and v.get("Type") == "Model":
+                        d[k] = dict(v)
+                        d[k]["Column::Model"] = []  # empty table pointer
+                return d
+            return self.draft
+
+    c = EmptyHostColumnModelClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(rep, TableReport)
+    assert rep.verified_columns == ()
+    assert rep.missing_columns == ("Round",)
+
+
+def test_apply_table_read_back_with_corrupted_field_or_model_nodes() -> None:
+    class CorruptedNodesClient(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):
+            self._calls += 1
+            if self._calls > 1:
+                d = dict(self.draft)
+                for k, v in list(d.items()):
+                    if isinstance(v, dict) and v.get("Type") == "Model" and v.get("Name") == "Rounds":
+                        t_id = (v.get("Column::Model") or [""])[0]
+                        if t_id in d:
+                            t_node = dict(d[t_id])
+                            f_ids = t_node.get("Model::Field", [])
+                            if f_ids:
+                                d[f_ids[0]] = "not a dict node"
+                                if len(f_ids) > 1:
+                                    d[f_ids[1]] = {"Id": f_ids[1]}  # missing Name key
+                            d[t_id] = t_node
+                return d
+            return self.draft
+
+    c = CorruptedNodesClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds", [("Round", "Number"), ("Notes", "Text")])
+    assert isinstance(rep, TableReport)
+    assert rep.verified_columns == ()
+    assert rep.missing_columns == ("Round", "Notes")
+
+
+def test_apply_table_read_back_with_non_dict_table_node() -> None:
+    class NonDictTableNodeClient(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):
+            self._calls += 1
+            if self._calls > 1:
+                d = dict(self.draft)
+                for k, v in list(d.items()):
+                    if isinstance(v, dict) and v.get("Type") == "Model" and v.get("Name") == "Rounds":
+                        t_id = (v.get("Column::Model") or [""])[0]
+                        if t_id in d:
+                            d[t_id] = "not a dict table model"
+                return d
+            return self.draft
+
+    c = NonDictTableNodeClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(rep, TableReport)
+    assert rep.verified_columns == ()
+    assert rep.missing_columns == ("Round",)
+
+
 # ---- apply_workflow --------------------------------------------------------------------------
 
 def test_apply_workflow_reports_assigned_vs_unassigned_and_verifies_step_names() -> None:
