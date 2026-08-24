@@ -1278,6 +1278,226 @@ def _permission_rollup(pairs: Iterable[tuple[str, str]], names: _PairNames,
                  for key, (n, ok, bad) in sorted(buckets.items()))
 
 
+@dataclass(frozen=True)
+class _StepPermissionDeltas:
+    added: tuple[str, ...]
+    skipped: tuple[str, ...]
+    added_named: tuple[str, ...]
+    skipped_named: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _StepPermissionAudit:
+    verified_pairs: set[tuple[str, str]]
+    missing_pairs: set[tuple[str, str]]
+    verified: tuple[str, ...]
+    missing: tuple[str, ...]
+    missing_named: tuple[str, ...]
+    verified_named: tuple[str, ...]
+
+
+def _format_pairs(pairs: Iterable[tuple[str, str]]) -> tuple[str, ...]:
+    return tuple(sorted(f"{c}@{a}" for c, a in pairs))
+
+
+def _format_named_pairs(names: _PairNames, pairs: Iterable[tuple[str, str]]) -> tuple[str, ...]:
+    return tuple(sorted(names.pair(c, a) for c, a in pairs))
+
+
+def _prepare_step_permissions(
+    draft: Draft,
+    matrix: Matrix,
+    field_matrix: Matrix | None,
+) -> Draft | Err:
+    try:
+        return set_step_permissions(draft, matrix, field_matrix)
+    except ValueError as e:
+        return Err("verify", f"offline apply rejected the matrix: {e}")
+
+
+def _fetch_and_prepare_step_permissions(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    matrix: Matrix,
+    field_matrix: Matrix | None,
+) -> tuple[Draft, Draft] | Err:
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    new = _prepare_step_permissions(draft, matrix, field_matrix)
+    if isinstance(new, Err):
+        return new
+    return draft, new
+
+
+def _put_and_read_back_draft(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    new: Draft,
+    version: Any,
+) -> Draft | Err:
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+    return client.get_draft(kind, flow_id)
+
+
+def _malformed_permission_collateral(draft: Draft) -> tuple[str, ...]:
+    return tuple(
+        f"deleted malformed Permission {nid} (no readable Column/Activity pair) — it was never "
+        "in the before-matrix and no rebuilt pair replaces it"
+        for nid in _malformed_permissions(draft)
+    )
+
+
+def _step_permission_collateral(
+    draft: Draft,
+    before: dict[tuple[str, str], str],
+    wanted: dict[tuple[str, str], str],
+    names: _PairNames,
+) -> tuple[str, ...]:
+    dropped: list[str] = []
+    for (c, a), v in before.items():
+        if (c, a) not in wanted:
+            dropped.append(
+                f"deleted Permission {c}@{a} ({names.pair(c, a)}) (was {v!r}) — the rebuild covers this "
+                "pair no longer"
+            )
+    return tuple(sorted(dropped)) + _malformed_permission_collateral(draft)
+
+
+def _step_permission_deltas(
+    before: dict[tuple[str, str], str],
+    wanted: dict[tuple[str, str], str],
+    names: _PairNames,
+) -> _StepPermissionDeltas:
+    added_pairs: list[tuple[str, str]] = []
+    skipped_pairs: list[tuple[str, str]] = []
+    for pair, v in wanted.items():
+        if before.get(pair) == v:
+            skipped_pairs.append(pair)
+        else:
+            added_pairs.append(pair)
+    return _StepPermissionDeltas(
+        added=_format_pairs(added_pairs),
+        skipped=_format_pairs(skipped_pairs),
+        added_named=_format_named_pairs(names, added_pairs),
+        skipped_named=_format_named_pairs(names, skipped_pairs),
+    )
+
+
+def _audit_step_permissions(
+    wanted: dict[tuple[str, str], str],
+    live: dict[tuple[str, str], str],
+    names: _PairNames,
+) -> _StepPermissionAudit:
+    verified_pairs: set[tuple[str, str]] = set()
+    missing_pairs: set[tuple[str, str]] = set()
+    for pair, v in wanted.items():
+        if live.get(pair) == v:
+            verified_pairs.add(pair)
+        else:
+            missing_pairs.add(pair)
+    return _StepPermissionAudit(
+        verified_pairs=verified_pairs,
+        missing_pairs=missing_pairs,
+        verified=_format_pairs(verified_pairs),
+        missing=_format_pairs(missing_pairs),
+        missing_named=_format_named_pairs(names, missing_pairs),
+        verified_named=_format_named_pairs(names, verified_pairs),
+    )
+
+
+def _publish_flow(client: KfClient, kind: FlowKind, flow_id: str) -> bool | Err:
+    pub = client.publish(kind, flow_id)
+    if isinstance(pub, Err):
+        return pub
+    return True
+
+
+def _publish_if_clean(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    publish: bool,
+    missing: tuple[str, ...],
+) -> bool | Err:
+    if publish and not missing:
+        return _publish_flow(client, kind, flow_id)
+    return False
+
+
+def _assemble_step_permission_report(
+    flow_id: str,
+    draft: Draft,
+    read_back: Draft,
+    matrix: Matrix,
+    field_matrix: Matrix | None,
+    names: _PairNames,
+    wanted: dict[tuple[str, str], str],
+    audit: _StepPermissionAudit,
+    published: bool,
+    include_pairs: bool,
+) -> StepPermissionReport:
+    before = _permission_pairs(draft)
+    deltas = _step_permission_deltas(before, wanted, names)
+    collateral = _step_permission_collateral(draft, before, wanted, names)
+    remediation = ("forge_set_visibility",) if collateral else ()
+    return StepPermissionReport(
+        flow_id=flow_id,
+        added=deltas.added,
+        skipped=deltas.skipped,
+        verified=audit.verified,
+        missing=audit.missing,
+        changed_ignored=(),
+        collateral=collateral,
+        remediation=remediation,
+        meta_version=read_back.get(_META_VERSION),
+        published=published,
+        by_section=_permission_rollup(wanted, names, audit.verified_pairs, audit.missing_pairs, "section"),
+        by_step=_permission_rollup(wanted, names, audit.verified_pairs, audit.missing_pairs, "step"),
+        uncovered_sections=_uncovered_sections(draft, matrix, field_matrix),
+        missing_named=audit.missing_named,
+        added_named=deltas.added_named,
+        skipped_named=deltas.skipped_named,
+        verified_named=audit.verified_named,
+        include_pairs=include_pairs,
+    )
+
+
+def _publish_and_assemble_step_permissions(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    draft: Draft,
+    read_back: Draft,
+    matrix: Matrix,
+    field_matrix: Matrix | None,
+    names: _PairNames,
+    wanted: dict[tuple[str, str], str],
+    audit: _StepPermissionAudit,
+    publish: bool,
+    include_pairs: bool,
+) -> StepPermissionReport | Err:
+    published = _publish_if_clean(client, kind, flow_id, publish, audit.missing)
+    if isinstance(published, Err):
+        return published
+    return _assemble_step_permission_report(
+        flow_id=flow_id,
+        draft=draft,
+        read_back=read_back,
+        matrix=matrix,
+        field_matrix=field_matrix,
+        names=names,
+        wanted=wanted,
+        audit=audit,
+        published=published,
+        include_pairs=include_pairs,
+    )
+
+
 def apply_step_permissions(
     client: KfClient,
     flow_id: str,
@@ -1305,76 +1525,31 @@ def apply_step_permissions(
     the rollups stand in for. See `StepPermissionReport` for why, and what `include_pairs=True`
     adds back.
     """
-    draft = client.get_draft(kind, flow_id)
-    if isinstance(draft, Err):
-        return draft
-
-    before = _permission_pairs(draft)
-    version = draft.get(_META_VERSION)
-
-    try:
-        new = set_step_permissions(draft, matrix, field_matrix)
-    except ValueError as e:
-        return Err("verify", f"offline apply rejected the matrix: {e}")
-
-    names = _pair_names(draft)
+    prep = _fetch_and_prepare_step_permissions(client, kind, flow_id, matrix, field_matrix)
+    if isinstance(prep, Err):
+        return prep
+    draft, new = prep
     wanted = _permission_pairs(new)
-    skipped = tuple(sorted(f"{c}@{a}" for (c, a), v in wanted.items() if before.get((c, a)) == v))
-    added = tuple(sorted(f"{c}@{a}" for (c, a), v in wanted.items() if before.get((c, a)) != v))
-    collateral = tuple(sorted(
-        f"deleted Permission {c}@{a} ({names.pair(c, a)}) (was {v!r}) — the rebuild covers this "
-        f"pair no longer"
-        for (c, a), v in before.items() if (c, a) not in wanted
-    )) + tuple(
-        f"deleted malformed Permission {nid} (no readable Column/Activity pair) — it was never "
-        "in the before-matrix and no rebuilt pair replaces it"
-        for nid in _malformed_permissions(draft)
-    )
-
-    written = client.put_draft(kind, flow_id, new, expect_version=version)
-    if isinstance(written, Err):
-        return written
-
-    read_back = client.get_draft(kind, flow_id)
+    read_back = _put_and_read_back_draft(client, kind, flow_id, new, draft.get(_META_VERSION))
     if isinstance(read_back, Err):
         return read_back
+
+    names = _pair_names(draft)
     live = _permission_pairs(read_back)
-    verified_pairs = {(c, a) for (c, a), v in wanted.items() if live.get((c, a)) == v}
-    missing_pairs = {(c, a) for (c, a), v in wanted.items() if live.get((c, a)) != v}
-    verified = tuple(sorted(f"{c}@{a}" for c, a in verified_pairs))
-    missing = tuple(sorted(f"{c}@{a}" for c, a in missing_pairs))
+    audit = _audit_step_permissions(wanted, live, names)
 
-    published = False
-    if publish and not missing:
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
-
-    # Names come off the PRE-write draft, which is the graph both `before` and `wanted` were read
-    # from — the read-back can no longer name a column the rebuild dropped, and `collateral` is
-    # exactly the bucket that needs those names.
-    def _named(keys: Iterable[tuple[str, str]]) -> tuple[str, ...]:
-        return tuple(sorted(names.pair(c, a) for c, a in keys))
-
-    return StepPermissionReport(
+    return _publish_and_assemble_step_permissions(
+        client=client,
+        kind=kind,
         flow_id=flow_id,
-        added=added,
-        skipped=skipped,
-        verified=verified,
-        missing=missing,
-        changed_ignored=(),   # a matrix is rebuilt wholesale — nothing to silently ignore
-        collateral=collateral,
-        remediation=("forge_set_visibility",) if collateral else (),
-        meta_version=read_back.get(_META_VERSION),
-        published=published,
-        by_section=_permission_rollup(wanted, names, verified_pairs, missing_pairs, "section"),
-        by_step=_permission_rollup(wanted, names, verified_pairs, missing_pairs, "step"),
-        uncovered_sections=_uncovered_sections(draft, matrix, field_matrix),
-        missing_named=_named(missing_pairs),
-        added_named=_named((c, a) for (c, a), v in wanted.items() if before.get((c, a)) != v),
-        skipped_named=_named((c, a) for (c, a), v in wanted.items() if before.get((c, a)) == v),
-        verified_named=_named(verified_pairs),
+        draft=draft,
+        read_back=read_back,
+        matrix=matrix,
+        field_matrix=field_matrix,
+        names=names,
+        wanted=wanted,
+        audit=audit,
+        publish=publish,
         include_pairs=include_pairs,
     )
 
