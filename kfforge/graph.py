@@ -759,10 +759,10 @@ def _pack_repack_rows(
     width_of: dict[str, int],
 ) -> list[list[tuple[str, int]]]:
     rows: list[list[tuple[str, int]]] = []
-    used = ROW_UNITS
+    used = 0
     for col in ordered:
         w = _column_width(col, field_of_col, width_of)
-        if used + w > ROW_UNITS:
+        if not rows or used + w > ROW_UNITS:
             rows.append([])
             used = 0
         rows[-1].append((col, w))

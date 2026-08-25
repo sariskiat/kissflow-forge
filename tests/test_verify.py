@@ -884,12 +884,31 @@ def test_branch_condition_with_no_field_sibling_is_unvalidated(clean_draft: Draf
 
 
 def test_permission_for_model_column_credits_model_name(clean_draft: Draft) -> None:
+    """A Permission on a Model-type column (a nested table) must credit the model's OWN name as
+    editable, not just the Section that physically contains it — nest it under a differently
+    named Section ("Banner") so `owner_section` alone would credit only "Banner"; without
+    `_process_permission_node`'s Model-name credit, "TableSection" itself would wrongly show up
+    in `doctor`'s per-Model coverage sweep as never editable."""
     d = copy.deepcopy(clean_draft)
+    d["Row_Banner_Test"] = {
+        "Id": "Row_Banner_Test",
+        "Kind": "Row",
+        "Column": "Sec_Banner_Test",
+        "Row::Column": ["Col_Model_Test"],
+    }
+    d["Sec_Banner_Test"] = {
+        "Id": "Sec_Banner_Test",
+        "Kind": "Column",
+        "Type": "Section",
+        "Name": "Banner",
+        "Column::Row": ["Row_Banner_Test"],
+    }
     d["Col_Model_Test"] = {
         "Id": "Col_Model_Test",
         "Kind": "Column",
         "Type": "Model",
         "Name": "TableSection",
+        "Row": "Row_Banner_Test",
     }
     act = _nodes_of(d, Kind="Activity", NodeType="UserTask")[0]
     d["Permission_Model_Test"] = {
@@ -900,15 +919,18 @@ def test_permission_for_model_column_credits_model_name(clean_draft: Draft) -> N
         "Column": "Col_Model_Test",
     }
     rep = doctor(d)
-    assert isinstance(rep, DoctorReport)
+    assert not any("TableSection" in p for p in rep.problems), rep.problems
 
 
 def test_permission_for_suspended_activity_is_ignored_for_editability(clean_draft: Draft) -> None:
+    """A Permission attached to a suspended Activity must not count toward a section's
+    editability. "Assessment" in `clean_draft` is owned only by 'Assess unit' — suspending that
+    step must surface the section as never editable, not silently leave it credited."""
     d = copy.deepcopy(clean_draft)
-    acts = _nodes_of(d, Kind="Activity", NodeType="UserTask")
-    acts[0]["IsSuspended"] = True
+    (assess,) = _nodes_of(d, Kind="Activity", NodeType="UserTask", Name="Assess unit")
+    assess["IsSuspended"] = True
     rep = doctor(d)
-    assert isinstance(rep, DoctorReport)
+    assert any("Assessment" in p and "never editable" in p for p in rep.problems), rep.problems
 
 
 

@@ -5683,7 +5683,7 @@ def _finalize_required_report(
     else:
         published = False
     return RequiredReport(
-        flow_id=flow_id, required=required, verified=verified, missing=missing,
+        flow_id=flow_id, required=tuple(required), verified=verified, missing=missing,
         cleared=cleared, meta_version=read_back.get(_META_VERSION), published=published,
     )
 

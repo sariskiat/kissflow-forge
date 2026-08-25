@@ -2324,6 +2324,34 @@ def test_repack_layout_custom_widths_and_capping() -> None:
     assert len(row_ids) == 3
 
 
+def test_repack_layout_zero_width_column_packs_into_new_row() -> None:
+    """A width override of 0 is legal per `widths: dict[str, int] | None` — the bootstrap must
+    still open a fresh row for the very first column (`not rows or used + w > ROW_UNITS`), never
+    index into an empty `rows` list."""
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+
+    draft = synthetic_process_draft()
+    repacked = repack_layout(draft, widths={"Text": 0})
+
+    # "Intake" has Ticket No (Text->0), Contact Date (Date, 3), Unit Serial (Text->0), Problem (Textarea, 6)
+    # Row 0: Ticket No (0, 0), Contact Date (0, 3), Unit Serial (3, 6) -> stretched
+    # Row 1: Problem (0, 6)
+    intake_sec = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "Intake")
+    row_ids = intake_sec["Column::Row"]
+    assert len(row_ids) == 2
+
+    r0 = repacked[row_ids[0]]
+    assert len(r0["Row::Column"]) == 3
+    c0_0, c0_1, c0_2 = r0["Row::Column"]
+    assert (repacked[c0_0]["Start"], repacked[c0_0]["End"]) == (0, 0)
+    assert (repacked[c0_1]["Start"], repacked[c0_1]["End"]) == (0, 3)
+    assert (repacked[c0_2]["Start"], repacked[c0_2]["End"]) == (3, 6)
+
+    r1 = repacked[row_ids[1]]
+    assert len(r1["Row::Column"]) == 1
+
+
 def test_repack_layout_section_and_step_descriptions() -> None:
     from synthetic import synthetic_process_draft
     from kfforge.graph import repack_layout
