@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 from collections import Counter
 from collections.abc import Iterable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -1661,8 +1662,8 @@ def _write_fields_and_layout_draft(
 
 def _partition_names(
     names: list[str],
-    present: set[str],
-    excluded: set[str],
+    present: AbstractSet[str],
+    excluded: AbstractSet[str],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     in_bucket: list[str] = []
     out_bucket: list[str] = []
@@ -4039,7 +4040,7 @@ def _partition_role_members(
     tuple[str, ...],
     str | None,
 ]:
-    existing_members = list(detail.get("Members") or ())
+    existing_members: list[dict[str, Any]] = list(detail.get("Members") or ())
     candidates = list(user_ids or ()) + query_candidates
     already, new_ones = _partition_user_candidates(candidates, existing_members)
 
