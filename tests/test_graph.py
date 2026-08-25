@@ -2029,6 +2029,131 @@ def test_field_delete_blockers_names_a_surviving_event_script_that_uses_the_id()
     assert field_delete_blockers(draft, ("Source",)) == (), "the event's OWN field deletes clean"
 
 
+def test_delete_closure_sweeps_table_and_its_cluster() -> None:
+    from kfforge.graph import add_table, delete_closure, delete_nodes
+
+    draft = _form_with(FieldSpec(name="Notes", type=FieldType.TEXT))
+    draft = add_table(draft, "Items", [("Qty", FieldType.NUMBER), ("Desc", FieldType.TEXT)])
+
+    host_col = next(k for k, v in draft.items()
+                    if isinstance(v, dict) and v.get("Kind") == "Column"
+                    and v.get("Type") == "Model" and v.get("Name") == "Items")
+    nested_model = draft[host_col]["Column::Model"][0]
+
+    doomed = delete_closure(draft, tables=("Items",))
+    assert host_col in doomed
+    assert nested_model in doomed
+    assert draft[host_col].get("Row") in doomed
+    for r in draft[nested_model].get("Model::Row", []):
+        assert r in doomed
+    for f in draft[nested_model].get("Model::Field", []):
+        assert f in doomed
+        assert draft[f]["Column"] in doomed
+
+    got = delete_nodes(draft, tables=("Items",))
+    assert host_col not in got
+    assert nested_model not in got
+    assert "Notes" in {v.get("Name") for v in got.values() if isinstance(v, dict) and v.get("Kind") == "Field"}
+    assert _scalar_dangling_refs(got) == []
+
+
+def test_delete_closure_unknown_table_raises() -> None:
+    from kfforge.graph import delete_closure
+
+    draft = _form_with(FieldSpec(name="Notes", type=FieldType.TEXT))
+    with pytest.raises(ValueError, match="no table named 'Missing'"):
+        delete_closure(draft, tables=("Missing",))
+
+
+def test_delete_closure_sweeps_sequence_number_property_chain() -> None:
+    from kfforge.graph import (
+        add_sequence_number,
+        apply_changes,
+        build_workflow,
+        delete_closure,
+        delete_nodes,
+        regroup_into_sections,
+    )
+
+    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "F", "FlowType": "Process"}}
+    d = apply_changes(bare, [FieldSpec(name="a", type=FieldType.TEXT)])
+    d = regroup_into_sections(d, [("S", ["a"])])
+    d = build_workflow(d, [("Log it", None)])
+    draft = add_sequence_number(d, "running number", "S", "PRE-", "0001", "Start", 0, 2)
+
+    prop_ids = [k for k, v in draft.items() if isinstance(v, dict) and v.get("Kind") == "Property"]
+    assert len(prop_ids) == 3, "SequenceNumber creates 3 Property nodes"
+
+    doomed = delete_closure(draft, fields=("running number",))
+    for pid in prop_ids:
+        assert pid in doomed
+
+    got = delete_nodes(draft, fields=("running number",))
+    assert not any(isinstance(v, dict) and v.get("Kind") == "Property" for v in got.values())
+    assert _scalar_dangling_refs(got) == []
+
+
+def test_delete_closure_resolves_field_by_raw_node_id_and_handles_missing_column() -> None:
+    from kfforge.graph import delete_closure
+
+    draft = _form_with(FieldSpec(name="A", type=FieldType.TEXT))
+    fid = next(k for k, v in draft.items() if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "A")
+
+    # Resolve by raw id
+    assert fid in delete_closure(draft, fields=(fid,))
+
+    # Field without a Column
+    draft["Field_no_col"] = {"Id": "Field_no_col", "Kind": "Field", "Name": "NoCol", "Column": None}
+    assert "Field_no_col" in delete_closure(draft, fields=("NoCol",))
+
+
+def test_delete_closure_sweeps_events_and_criteria_with_column_visibility() -> None:
+    from kfforge.graph import delete_closure
+
+    draft = _form_with(FieldSpec(name="Flag", type=FieldType.BOOLEAN))
+    fid = next(k for k, v in draft.items() if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Flag")
+    col = draft[fid]["Column"]
+
+    draft["Event_1"] = {"Id": "Event_1", "Kind": "Event", "Field": fid, "Type": "onChange"}
+    draft["Criteria_1"] = {"Id": "Criteria_1", "Kind": "Criteria", "ColumnVisibility": col, "Criteria::Condition": ["Condition_1"]}
+    draft["Condition_1"] = {"Id": "Condition_1", "Kind": "Condition", "Criteria": "Criteria_1"}
+
+    # Surviving criteria and property
+    draft["Field_surv"] = {"Id": "Field_surv", "Kind": "Field", "Name": "Surv", "Column": "Col_surv"}
+    draft["Property_surv"] = {"Id": "Property_surv", "Kind": "Property", "Field": "Field_surv"}
+    draft["Criteria_surv"] = {"Id": "Criteria_surv", "Kind": "Criteria", "FieldValidation": "Field_surv"}
+
+    doomed = delete_closure(draft, fields=("Flag",))
+    assert "Event_1" in doomed
+    assert "Criteria_1" in doomed
+    assert "Condition_1" in doomed
+    assert "Property_surv" not in doomed
+    assert "Criteria_surv" not in doomed
+
+
+def test_delete_closure_table_and_node_tree_edge_cases() -> None:
+    from kfforge.graph import _node_tree, delete_closure
+
+    # Test _node_tree with duplicates, missing nodes, and non-string roots
+    draft = {
+        "N1": {"Id": "N1", "Node::Node": ["N2", "N_missing", "N1"]},
+        "N2": {"Id": "N2", "Node::Node": []},
+    }
+    tree = _node_tree(draft, ["N1", None, 123])
+    assert tree == {"N1", "N2"}
+
+    # Test table with non-string row and child field with no column
+    table_draft = {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "FlowType": "Form"},
+        "Col_tbl": {"Id": "Col_tbl", "Kind": "Column", "Type": "Model", "Name": "Tbl", "Row": None, "Column::Model": ["Model_tbl"]},
+        "Model_tbl": {"Id": "Model_tbl", "Kind": "Model", "Model::Field": ["Field_child"]},
+        "Field_child": {"Id": "Field_child", "Kind": "Field", "Column": None},
+    }
+    doomed = delete_closure(table_draft, tables=("Tbl",))
+    assert doomed == {"Col_tbl", "Model_tbl", "Field_child"}
+
+
 # ---- apply_changes: a Select must name the list its options live in --------------------------
 
 def test_apply_changes_refuses_a_select_with_no_referred_list() -> None:
@@ -2137,3 +2262,173 @@ def test_an_empty_owner_list_is_still_legal() -> None:
 
     matrix = progressive_matrix(_visibility_draft(), {"Other": []})
     assert set(matrix["Other"].values()) == {Visibility.READONLY}
+
+
+def test_repack_layout_pure_does_not_mutate_input() -> None:
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+
+    draft = synthetic_process_draft()
+    before = copy.deepcopy(draft)
+    out = repack_layout(draft)
+    assert draft == before
+    assert out is not draft
+
+
+def test_repack_layout_default_widths_and_column_stretching() -> None:
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+
+    draft = synthetic_process_draft()
+    repacked = repack_layout(draft)
+
+    # In synthetic draft:
+    # "Intake" has Ticket No (Text, 3), Contact Date (Date, 3), Unit Serial (Text, 3), Problem (Textarea, 6)
+    # Row 0: Ticket No (0, 3), Contact Date (3, 6)
+    # Row 1: Unit Serial (0, 6) -> stretched to 6
+    # Row 2: Problem (0, 6)
+    intake_sec = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "Intake")
+    row_ids = intake_sec["Column::Row"]
+    assert len(row_ids) == 3
+
+    r0 = repacked[row_ids[0]]
+    assert len(r0["Row::Column"]) == 2
+    c0_0, c0_1 = r0["Row::Column"]
+    assert (repacked[c0_0]["Start"], repacked[c0_0]["End"]) == (0, 3)
+    assert (repacked[c0_1]["Start"], repacked[c0_1]["End"]) == (3, 6)
+
+    r1 = repacked[row_ids[1]]
+    assert len(r1["Row::Column"]) == 1
+    c1_0 = r1["Row::Column"][0]
+    assert (repacked[c1_0]["Start"], repacked[c1_0]["End"]) == (0, 6)
+
+    r2 = repacked[row_ids[2]]
+    assert len(r2["Row::Column"]) == 1
+    c2_0 = r2["Row::Column"][0]
+    assert (repacked[c2_0]["Start"], repacked[c2_0]["End"]) == (0, 6)
+
+
+def test_repack_layout_custom_widths_and_capping() -> None:
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+
+    draft = synthetic_process_draft()
+    repacked = repack_layout(draft, widths={"Text": 6, "Select": 2, "Uncapped": 10})
+
+    # "Wrap-up" has Wrap Summary (Textarea, 6), Outcome (Select, 2), Handoff Owner (Text, 6)
+    # Row 0: Wrap Summary (0, 6)
+    # Row 1: Outcome (0, 6) -> stretched from 2 to 6
+    # Row 2: Handoff Owner (0, 6)
+    wrap_sec = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "Wrap-up")
+    row_ids = wrap_sec["Column::Row"]
+    assert len(row_ids) == 3
+
+
+def test_repack_layout_zero_width_column_packs_into_new_row() -> None:
+    """A width override of 0 is legal per `widths: dict[str, int] | None` — the bootstrap must
+    still open a fresh row for the very first column (`not rows or used + w > ROW_UNITS`), never
+    index into an empty `rows` list."""
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+
+    draft = synthetic_process_draft()
+    repacked = repack_layout(draft, widths={"Text": 0})
+
+    # "Intake" has Ticket No (Text->0), Contact Date (Date, 3), Unit Serial (Text->0), Problem (Textarea, 6)
+    # Row 0: Ticket No (0, 0), Contact Date (0, 3), Unit Serial (3, 6) -> stretched
+    # Row 1: Problem (0, 6)
+    intake_sec = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "Intake")
+    row_ids = intake_sec["Column::Row"]
+    assert len(row_ids) == 2
+
+    r0 = repacked[row_ids[0]]
+    assert len(r0["Row::Column"]) == 3
+    c0_0, c0_1, c0_2 = r0["Row::Column"]
+    assert (repacked[c0_0]["Start"], repacked[c0_0]["End"]) == (0, 0)
+    assert (repacked[c0_1]["Start"], repacked[c0_1]["End"]) == (0, 3)
+    assert (repacked[c0_2]["Start"], repacked[c0_2]["End"]) == (3, 6)
+
+    r1 = repacked[row_ids[1]]
+    assert len(r1["Row::Column"]) == 1
+
+
+def test_repack_layout_section_and_step_descriptions() -> None:
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+
+    draft = synthetic_process_draft()
+    sec_desc = {"Intake": "Intake Subtitle", "UnmatchedSec": "No-op"}
+    step_desc = {"Ticket arrives": "Step 1 Subtitle", "UnmatchedStep": "No-op"}
+
+    repacked = repack_layout(draft, section_descriptions=sec_desc, step_descriptions=step_desc)
+
+    intake_sec = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "Intake")
+    assert intake_sec.get("Description") == "Intake Subtitle"
+
+    step_node = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Kind") == "Activity" and v.get("Name") == "Ticket arrives")
+    assert step_node.get("Description") == "Step 1 Subtitle"
+
+    other_sec = next(v for v in repacked.values() if isinstance(v, dict) and v.get("Type") == "Section" and v.get("Name") == "Other")
+    assert "Description" not in other_sec
+
+
+def test_repack_layout_edge_cases_and_unknown_types() -> None:
+    from kfforge.graph import repack_layout
+
+    # Edge cases:
+    # 1. Section with empty Column::Row or None Column::Row
+    # 2. Section with Row having empty Row::Column or dangling row id
+    # 3. Field without Column reference
+    # 4. Column of non-Section type (e.g. Model or Field)
+    # 5. Column with unknown field type (falls back to DEFAULT_WIDTH)
+    synthetic_draft = {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "FlowType": "Process"},
+        "Sec_Empty": {"Id": "Sec_Empty", "Kind": "Column", "Type": "Section", "Name": "EmptySec", "Column::Row": []},
+        "Sec_NoneRows": {"Id": "Sec_NoneRows", "Kind": "Column", "Type": "Section", "Name": "NoneRowsSec", "Column::Row": None},
+        "Sec_Dangling": {
+            "Id": "Sec_Dangling",
+            "Kind": "Column",
+            "Type": "Section",
+            "Name": "DanglingSec",
+            "Column::Row": ["Row_Ghost", "Row_With_Unknown", "Row_Ghost2"],
+        },
+        "Row_Ghost2": None,
+        "Row_With_Unknown": {
+            "Id": "Row_With_Unknown",
+            "Kind": "Row",
+            "Column": "Sec_Dangling",
+            "Row::Column": ["Col_Unknown", "Col_NoField"],
+        },
+        "Col_Unknown": {"Id": "Col_Unknown", "Kind": "Column", "Type": "Field"},
+        "Field_Unknown": {"Id": "Field_Unknown", "Kind": "Field", "Type": "CustomUnknownType", "Column": "Col_Unknown"},
+        "Col_NoField": {"Id": "Col_NoField", "Kind": "Column", "Type": "Field"},
+        "Field_NoCol": {"Id": "Field_NoCol", "Kind": "Field", "Type": "Text"},
+        "Col_Model": {"Id": "Col_Model", "Kind": "Column", "Type": "Model"},
+    }
+
+    repacked = repack_layout(synthetic_draft, widths={})
+    assert repacked["Sec_Empty"]["Column::Row"] == []
+    assert repacked["Sec_NoneRows"]["Column::Row"] == []
+
+    dangling_sec = repacked["Sec_Dangling"]
+    assert len(dangling_sec["Column::Row"]) == 1
+    new_rid = dangling_sec["Column::Row"][0]
+    assert repacked[new_rid]["Row::Column"] == ["Col_Unknown", "Col_NoField"]
+    # Unknown field type gets DEFAULT_WIDTH (2), Col_NoField gets DEFAULT_WIDTH (2)
+    # Row packing: 2 + 2 = 4 <= 6 -> placed in same row
+    # Col_Unknown gets (0, 2), Col_NoField stretched from 2 to 6 -> (2, 6)
+    assert (repacked["Col_Unknown"]["Start"], repacked["Col_Unknown"]["End"]) == (0, 2)
+    assert (repacked["Col_NoField"]["Start"], repacked["Col_NoField"]["End"]) == (2, 6)
+
+
+def test_repack_layout_passes_doctor_audit() -> None:
+    from synthetic import synthetic_process_draft
+    from kfforge.graph import repack_layout
+    from kfforge.verify import doctor
+
+    draft = synthetic_process_draft()
+    repacked = repack_layout(draft)
+    report = doctor(repacked)
+    assert report.ok, report.violations
+

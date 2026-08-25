@@ -722,6 +722,114 @@ FIELD_WIDTH: dict[str, int] = {
 DEFAULT_WIDTH = 2
 
 
+def _resolve_widths(widths: dict[str, int] | None) -> dict[str, int]:
+    if not widths:
+        return dict(FIELD_WIDTH)
+    return {**FIELD_WIDTH, **widths}
+
+
+def _field_by_column(draft: Draft) -> dict[str, dict[str, Any]]:
+    return {v["Column"]: v for v in _kind(draft, "Field").values() if v.get("Column")}
+
+
+def _section_columns(draft: Draft) -> dict[str, dict[str, Any]]:
+    return {k: v for k, v in _kind(draft, "Column").items() if v.get("Type") == "Section"}
+
+
+def _ordered_section_columns(draft: Draft, sec: dict[str, Any]) -> list[str]:
+    cols: list[str] = []
+    row_ids = sec.get("Column::Row")
+    if not isinstance(row_ids, list):
+        return cols
+    for rid in row_ids:
+        row_node = draft.get(rid)
+        if isinstance(row_node, dict):
+            cols.extend(row_node.get("Row::Column", []))
+    return cols
+
+
+def _column_width(col: str, field_of_col: dict[str, dict[str, Any]], width_of: dict[str, int]) -> int:
+    ftype = str(field_of_col.get(col, {}).get("Type", ""))
+    return min(width_of.get(ftype, DEFAULT_WIDTH), ROW_UNITS)
+
+
+def _pack_repack_rows(
+    ordered: list[str],
+    field_of_col: dict[str, dict[str, Any]],
+    width_of: dict[str, int],
+) -> list[list[tuple[str, int]]]:
+    rows: list[list[tuple[str, int]]] = []
+    used = 0
+    for col in ordered:
+        w = _column_width(col, field_of_col, width_of)
+        if not rows or used + w > ROW_UNITS:
+            rows.append([])
+            used = 0
+        rows[-1].append((col, w))
+        used += w
+    return rows
+
+
+def _write_repacked_row(
+    draft: Draft,
+    sid: str,
+    sec_name: str,
+    row_index: int,
+    row: list[tuple[str, int]],
+) -> str:
+    rid = _new_id("Row", sid, 4000 + row_index, sec_name)
+    draft[rid] = {"Id": rid, "Kind": "Row", "Column": sid, "Row::Column": [c for c, _ in row]}
+    start = 0
+    last_idx = len(row) - 1
+    for j, (col, w) in enumerate(row):
+        # stretch the last column to the row edge, so a short tail never leaves a ragged
+        # gap (a 2 + 3 row would otherwise end at 5 with one dead unit)
+        end = ROW_UNITS if j == last_idx else start + w
+        draft[col].update({"Row": rid, "Start": start, "End": end})
+        start = end
+    return rid
+
+
+def _apply_section_description(sec: dict[str, Any], descriptions: dict[str, str] | None) -> None:
+    if not descriptions:
+        return
+    name = sec.get("Name")
+    if name in descriptions:
+        sec["Description"] = descriptions[name]
+
+
+def _repack_section(
+    draft: Draft,
+    sid: str,
+    sec: dict[str, Any],
+    field_of_col: dict[str, dict[str, Any]],
+    width_of: dict[str, int],
+    section_descriptions: dict[str, str] | None,
+) -> None:
+    ordered = _ordered_section_columns(draft, sec)
+    row_ids = sec.get("Column::Row")
+    if isinstance(row_ids, list):
+        for rid in row_ids:
+            draft.pop(rid, None)
+
+    rows = _pack_repack_rows(ordered, field_of_col, width_of)
+    sec_name = sec.get("Name", "")
+    sec["Column::Row"] = [
+        _write_repacked_row(draft, sid, sec_name, i, row)
+        for i, row in enumerate(rows)
+    ]
+    _apply_section_description(sec, section_descriptions)
+
+
+def _apply_step_descriptions(draft: Draft, step_descriptions: dict[str, str] | None) -> None:
+    if not step_descriptions:
+        return
+    for act in _kind(draft, "Activity").values():
+        name = act.get("Name")
+        if name in step_descriptions:
+            act["Description"] = step_descriptions[name]
+
+
 def repack_layout(
     draft: Draft,
     widths: dict[str, int] | None = None,
@@ -737,50 +845,13 @@ def repack_layout(
     whole flow (observed live: 17 columns at Start=0 in a single Row).
     """
     new: Draft = copy.deepcopy(draft)
-    width_of = {**FIELD_WIDTH, **(widths or {})}
+    width_of = _resolve_widths(widths)
+    field_of_col = _field_by_column(new)
 
-    field_of_col = {v["Column"]: v for v in new.values()
-                    if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Column")}
-    sections = {k: v for k, v in _kind(new, "Column").items() if v.get("Type") == "Section"}
+    for sid, sec in _section_columns(new).items():
+        _repack_section(new, sid, sec, field_of_col, width_of, section_descriptions)
 
-    for sid, sec in sections.items():
-        ordered = [c for r in sec.get("Column::Row") or []
-                   for c in (new.get(r) or {}).get("Row::Column") or []]
-        for rid in sec.get("Column::Row") or []:     # drop the old rows, keep the columns
-            new.pop(rid, None)
-
-        rows: list[list[tuple[str, int]]] = []
-        used = 0
-        for col in ordered:
-            ftype = str(field_of_col.get(col, {}).get("Type", ""))
-            w = min(width_of.get(ftype, DEFAULT_WIDTH), ROW_UNITS)
-            if not rows or used + w > ROW_UNITS:
-                rows.append([])
-                used = 0
-            rows[-1].append((col, w))
-            used += w
-
-        row_ids: list[str] = []
-        for i, row in enumerate(rows):
-            rid = _new_id("Row", sid, 4000 + i, sec.get("Name", ""))
-            new[rid] = {"Id": rid, "Kind": "Row", "Column": sid, "Row::Column": [c for c, _ in row]}
-            start = 0
-            for j, (col, w) in enumerate(row):
-                # stretch the last column to the row edge, so a short tail never leaves a ragged
-                # gap (a 2 + 3 row would otherwise end at 5 with one dead unit)
-                end = ROW_UNITS if j == len(row) - 1 else start + w
-                new[col].update({"Row": rid, "Start": start, "End": end})
-                start = end
-            row_ids.append(rid)
-        sec["Column::Row"] = row_ids
-
-        if section_descriptions and sec.get("Name") in section_descriptions:
-            sec["Description"] = section_descriptions[sec["Name"]]
-
-    if step_descriptions:
-        for act in _kind(new, "Activity").values():
-            if act.get("Name") in step_descriptions:
-                act["Description"] = step_descriptions[act["Name"]]
+    _apply_step_descriptions(new, step_descriptions)
     return new
 
 
@@ -828,6 +899,151 @@ def set_required(draft: Draft, required: set[str]) -> Draft:
     return new
 
 
+def _is_field_match(name: str, fid: str, node: dict[str, Any]) -> bool:
+    return node.get("Name") == name or fid == name
+
+
+def _field_hits(draft: Draft, name: str) -> list[str]:
+    hits = [k for k, v in _kind(draft, "Field").items() if _is_field_match(name, k, v)]
+    if not hits:
+        raise ValueError(f"no field named {name!r}")
+    return hits
+
+
+def _field_delete_closure(draft: Draft, fields: tuple[str, ...]) -> set[str]:
+    doomed: set[str] = set()
+    for name in fields:
+        for fid in _field_hits(draft, name):
+            doomed.add(fid)
+            col = draft[fid].get("Column")
+            if isinstance(col, str):
+                doomed.add(col)
+    return doomed
+
+
+def _table_model_closure(draft: Draft, tid: str) -> set[str]:
+    out = {tid}
+    table = draft.get(tid, {})
+    out.update(table.get("Model::Row", []))
+    for cfid in table.get("Model::Field", []):
+        out.add(cfid)
+        col = draft.get(cfid, {}).get("Column")
+        if isinstance(col, str):
+            out.add(col)
+    return out
+
+
+def _table_cluster(draft: Draft, host: str) -> set[str]:
+    doomed = {host}
+    row = draft[host].get("Row")
+    if isinstance(row, str):
+        doomed.add(row)
+    for tid in draft[host].get("Column::Model", []):
+        doomed |= _table_model_closure(draft, tid)
+    return doomed
+
+
+def _table_host_map(draft: Draft) -> dict[str, str]:
+    return {
+        v["Name"]: k
+        for k, v in _kind(draft, "Column").items()
+        if v.get("Type") == "Model" and v.get("Name")
+    }
+
+
+def _table_delete_closure(draft: Draft, tables: tuple[str, ...]) -> set[str]:
+    if not tables:
+        return set()
+    host_by_name = _table_host_map(draft)
+    doomed: set[str] = set()
+    for name in tables:
+        host = host_by_name.get(name)
+        if host is None:
+            raise ValueError(f"no table named {name!r}")
+        doomed |= _table_cluster(draft, host)
+    return doomed
+
+
+def _nodes_matching_key(draft: Draft, kind: str, key: str, doomed: set[str]) -> set[str]:
+    return {k for k, v in _kind(draft, kind).items() if v.get(key) in doomed}
+
+
+def _doomed_listeners(draft: Draft, doomed: set[str]) -> set[str]:
+    return _nodes_matching_key(draft, "Permission", "Column", doomed) | _nodes_matching_key(
+        draft, "Event", "Field", doomed
+    )
+
+
+def _str_roots(roots: list[Any]) -> list[str]:
+    return [r for r in roots if isinstance(r, str)]
+
+
+def _node_tree(draft: Draft, roots: list[Any]) -> set[str]:
+    """One Expression's whole AST, following `Node::Node` down from each root."""
+    out: set[str] = set()
+    stack = _str_roots(roots)
+    while stack:
+        nid = stack.pop()
+        if nid in out or nid not in draft:
+            continue
+        out.add(nid)
+        stack.extend(draft[nid].get("Node::Node", []))
+    return out
+
+
+def _query_def_doomed(draft: Draft, nid: str, node: dict[str, Any], doomed: set[str]) -> set[str]:
+    return {nid} if node.get("Field") in doomed else set()
+
+
+def _expr_doomed(draft: Draft, nid: str, node: dict[str, Any], doomed: set[str]) -> set[str]:
+    if node.get("Field") in doomed:
+        return {nid} | _node_tree(draft, node.get("Expression::Node", []))
+    return set()
+
+
+def _property_cluster(draft: Draft, node: dict[str, Any]) -> set[str]:
+    out: set[str] = set()
+    for eid in node.get("Property::Expression", []):
+        out.add(eid)
+        expr = draft.get(eid, {})
+        out |= _node_tree(draft, expr.get("Expression::Node", []))
+    return out
+
+
+def _prop_doomed(draft: Draft, nid: str, node: dict[str, Any], doomed: set[str]) -> set[str]:
+    if node.get("Field") in doomed:
+        return {nid} | _property_cluster(draft, node)
+    return set()
+
+
+def _criteria_is_doomed(node: dict[str, Any], doomed: set[str]) -> bool:
+    return node.get("FieldValidation") in doomed or node.get("ColumnVisibility") in doomed
+
+
+def _criteria_doomed(draft: Draft, nid: str, node: dict[str, Any], doomed: set[str]) -> set[str]:
+    if not _criteria_is_doomed(node, doomed):
+        return set()
+    return {nid} | {c for c in node.get("Criteria::Condition", []) if isinstance(c, str)}
+
+
+_CONFIG_CLUSTER_HANDLERS = {
+    "QueryDefinition": _query_def_doomed,
+    "Expression": _expr_doomed,
+    "Property": _prop_doomed,
+    "Criteria": _criteria_doomed,
+}
+
+
+def _config_cluster_closure(draft: Draft, doomed: set[str]) -> set[str]:
+    out: set[str] = set()
+    for nid, node in draft.items():
+        if isinstance(node, dict):
+            handler = _CONFIG_CLUSTER_HANDLERS.get(node.get("Kind"))
+            if handler is not None:
+                out |= handler(draft, nid, node, doomed)
+    return out
+
+
 def delete_closure(draft: Draft, fields: tuple[str, ...] = (), tables: tuple[str, ...] = ()) -> set[str]:
     """Every node id `delete_nodes` will remove for this request. Pure, READ-ONLY on `draft`.
 
@@ -854,76 +1070,9 @@ def delete_closure(draft: Draft, fields: tuple[str, ...] = (), tables: tuple[str
 
     Unknown names raise rather than silently doing nothing — a typo must not read as success.
     """
-    doomed: set[str] = set()
-
-    # NAMES ARE NOT UNIQUE — a form and its child tables all had a field called "Untitled field",
-    # and a name->id dict silently kept only the last, so a delete quietly hit the wrong one.
-    # Match every field with the name, and accept a raw node id to disambiguate.
-    for name in fields:
-        hits = [k for k, v in _kind(draft, "Field").items()
-                if v.get("Name") == name or k == name]
-        if not hits:
-            raise ValueError(f"no field named {name!r}")
-        for fid in hits:
-            doomed.add(fid)
-            col = draft[fid].get("Column")
-            if isinstance(col, str):
-                doomed.add(col)
-
-    host_by_name = {v["Name"]: k for k, v in _kind(draft, "Column").items()
-                    if v.get("Type") == "Model" and v.get("Name")}
-    for name in tables:
-        host = host_by_name.get(name)
-        if host is None:
-            raise ValueError(f"no table named {name!r}")
-        doomed.add(host)
-        if isinstance(row := draft[host].get("Row"), str):
-            doomed.add(row)
-        for tid in draft[host].get("Column::Model") or []:
-            doomed.add(tid)
-            table = draft.get(tid) or {}
-            doomed.update(table.get("Model::Row") or [])
-            for cfid in table.get("Model::Field") or []:
-                doomed.add(cfid)
-                if isinstance(c := (draft.get(cfid) or {}).get("Column"), str):
-                    doomed.add(c)
-
-    # every Permission aimed at a doomed Column goes with it
-    doomed |= {k for k, v in _kind(draft, "Permission").items() if v.get("Column") in doomed}
-    # ...and every Event on a doomed Field
-    doomed |= {k for k, v in _kind(draft, "Event").items() if v.get("Field") in doomed}
-
-    def _node_tree(roots: list[Any]) -> set[str]:
-        """One Expression's whole AST, following `Node::Node` down from each root."""
-        out: set[str] = set()
-        stack = [r for r in roots if isinstance(r, str)]
-        while stack:
-            nid = stack.pop()
-            if nid in out or nid not in draft:
-                continue
-            out.add(nid)
-            stack.extend(draft[nid].get("Node::Node") or [])
-        return out
-
-    # layer 2: the doomed node's OWN configuration cluster (see the docstring).
-    for nid, node in draft.items():
-        if not isinstance(node, dict):
-            continue
-        kind = node.get("Kind")
-        if kind == "QueryDefinition" and node.get("Field") in doomed:
-            doomed.add(nid)
-        elif kind == "Expression" and node.get("Field") in doomed:
-            doomed.add(nid)
-            doomed |= _node_tree(node.get("Expression::Node") or [])
-        elif kind == "Property" and node.get("Field") in doomed:
-            doomed.add(nid)
-            for eid in node.get("Property::Expression") or []:
-                doomed.add(eid)
-                doomed |= _node_tree((draft.get(eid) or {}).get("Expression::Node") or [])
-        elif kind == "Criteria" and (node.get("FieldValidation") in doomed
-                                     or node.get("ColumnVisibility") in doomed):
-            doomed.add(nid)
-            doomed |= {c for c in (node.get("Criteria::Condition") or []) if isinstance(c, str)}
+    doomed = _field_delete_closure(draft, fields) | _table_delete_closure(draft, tables)
+    doomed |= _doomed_listeners(draft, doomed)
+    doomed |= _config_cluster_closure(draft, doomed)
     return doomed
 
 

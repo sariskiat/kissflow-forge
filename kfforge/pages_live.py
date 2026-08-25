@@ -116,6 +116,31 @@ class PageBuildReport:
         }
 
 
+def _prop_matches(value: dict[str, Any], prop: str, expected: Any) -> bool:
+    if expected is None:
+        return prop not in value
+    if isinstance(expected, dict):
+        return value.get(prop) == expected
+    return value.get(prop) == {"value": expected}
+
+
+def _container_style_id(read_back: Draft, key: str) -> str | None:
+    try:
+        cid = resolve_container_id(read_back, key)
+    except ValueError:
+        return None
+    styles = read_back[cid].get("Container::Style")
+    return styles[0] if styles else None
+
+
+def _container_style_value(read_back: Draft, key: str) -> dict[str, Any] | None:
+    sid = _container_style_id(read_back, key)
+    if sid is None:
+        return None
+    val = read_back.get(sid, {}).get("Value")
+    return val if isinstance(val, dict) else {}
+
+
 def _style_props_landed(read_back: Draft, key: str, props: dict[str, Any]) -> bool:
     """Did every prop in `props` (the SAME dict passed to pages.set_styles's `rules[key]`) land
     on the read-back Style node for the Container addressed by `key`? `key` is resolved the SAME way
@@ -126,31 +151,10 @@ def _style_props_landed(read_back: Draft, key: str, props: dict[str, Any]) -> bo
     `None` means the property must be ABSENT — removed back to the theme default), so this checks
     the SAME shape the writer wrote, not a guessed one.
     """
-    node = read_back.get(key)
-    if isinstance(node, dict) and node.get("Kind") == "Container":
-        container: dict[str, Any] | None = node
-    else:
-        matches = [v for v in read_back.values() if isinstance(v, dict)
-                   and v.get("Kind") == "Container" and v.get("Name") == key]
-        container = matches[0] if len(matches) == 1 else None
-    if container is None:
+    value = _container_style_value(read_back, key)
+    if value is None:
         return False
-    style_ids = container.get("Container::Style") or []
-    if not style_ids:
-        return False
-    style = read_back.get(style_ids[0]) or {}
-    value = style.get("Value") or {}
-    for prop, v in props.items():
-        if v is None:
-            if prop in value:
-                return False
-        elif isinstance(v, dict):
-            if value.get(prop) != v:
-                return False
-        else:
-            if value.get(prop) != {"value": v}:
-                return False
-    return True
+    return all(_prop_matches(value, prop, v) for prop, v in props.items())
 
 
 def _bind_config_landed(read_back: Draft, host: str, config: dict[str, Any]) -> bool:
@@ -425,6 +429,293 @@ class BuildPageOpReport:
         }
 
 
+class _PageOpState:
+    __slots__ = ("body", "built", "checks", "draft", "popup_id_by_name", "refused", "skipped")
+
+    def __init__(self, draft: Draft, body: str) -> None:
+        self.draft: Draft = draft
+        self.body: str = body
+        self.built: list[str] = []
+        self.skipped: list[str] = []
+        self.refused: list[str] = []
+        self.checks: list[tuple[str, Any]] = []
+        self.popup_id_by_name: dict[str, str] = {}
+
+
+def _find_page_id(pages: list[Any], name: str) -> str | None:
+    for p in pages:
+        if isinstance(p, dict) and p.get("Name") == name:
+            return p.get("_id")
+    return None
+
+
+def _resolve_page(client: KfClient, app_id: str, name: str) -> tuple[str, bool] | Err:
+    listed = client.list_pages(app_id)
+    if isinstance(listed, Err):
+        return listed
+    page_id = _find_page_id(listed, name)
+    if page_id is not None:
+        return page_id, False
+    made = client.create_page(app_id, name)
+    if isinstance(made, Err):
+        return made
+    return made, True
+
+
+def _find_body_container(draft: Draft) -> str | None:
+    for k, v in draft.items():
+        if isinstance(v, dict) and v.get("Kind") == "Container" and v.get("Type") == "Body":
+            return k
+    return None
+
+
+def _init_page_target(
+    client: KfClient, app_id: str, op_args: dict[str, Any]
+) -> tuple[str, str, bool, Draft, str] | Err:
+    name = op_args.get("name")
+    if not name:
+        return Err("verify", "build_page op has no 'name'")
+    page_res = _resolve_page(client, app_id, name)
+    if isinstance(page_res, Err):
+        return page_res
+    page_id, page_created = page_res
+
+    draft = client.get_page_draft(app_id, page_id)
+    if isinstance(draft, Err):
+        return draft
+    body = _find_body_container(draft)
+    if body is None:
+        return Err("verify", f"page {page_id} has no Body container — not a page draft?")
+
+    return name, page_id, page_created, draft, body
+
+
+def _widget_config(w: dict[str, Any]) -> dict[str, Any]:
+    cfg = dict(w.get("config") or {})
+    row_fields = w.get("row_fields")
+    if row_fields:
+        cfg["row_fields"] = list(row_fields)
+    return cfg
+
+
+def _find_node_id(draft: Draft, kind: str, parent_key: str, parent_id: str) -> str | None:
+    for k, v in draft.items():
+        if isinstance(v, dict) and v.get("Kind") == kind and v.get(parent_key) == parent_id:
+            return k
+    return None
+
+
+def _add_widget_checked(
+    state: _PageOpState, container_id: str, w: dict[str, Any], label: str
+) -> None:
+    try:
+        state.draft, wid = add_widget(
+            state.draft,
+            container_id=container_id,
+            widget=w.get("slug", ""),
+            config=_widget_config(w),
+        )
+    except ValueError as e:
+        state.refused.append(f"{label}: {e}")
+        return
+    comp_id = _find_node_id(state.draft, "Component", "Container", wid)
+    ids = (wid, comp_id) if comp_id else (wid,)
+    state.built.append(label)
+    state.checks.append((label, lambda rb, i=ids: all(x in rb for x in i)))
+
+
+def _build_design_step(state: _PageOpState, design: Any) -> None:
+    if not design:
+        return
+    try:
+        state.draft, design_ids = build_design(state.draft, parent_id=state.body, design=design)
+    except ValueError as e:
+        state.refused.append(f"design: {e}")
+        return
+    label = f"design:[{len(design_ids)} nodes]"
+    state.built.append(label)
+    state.checks.append((label, lambda rb, ids=tuple(design_ids): all(i in rb for i in ids)))
+
+
+def _build_widgets_step(state: _PageOpState, widgets: Any) -> None:
+    for w in widgets or ():
+        _add_widget_checked(state, state.body, w, f"widget:{w.get('slug')}")
+
+
+def _build_popup_widgets(
+    state: _PageOpState, pname: str, container_id: str, widgets: Any
+) -> None:
+    for w in widgets or ():
+        _add_widget_checked(state, container_id, w, f"popup:{pname}/widget:{w.get('slug')}")
+
+
+def _build_single_popup(state: _PageOpState, p: dict[str, Any]) -> None:
+    pname = p.get("name", "")
+    state.draft, pid = add_popup(state.draft, name=pname)
+    state.popup_id_by_name[pname] = pid
+    label = f"popup:{pname}"
+    state.built.append(label)
+    state.checks.append((label, lambda rb, i=pid: i in rb))
+    popup_containers = state.draft[pid].get("Popup::Container") or [None]
+    _build_popup_widgets(state, pname, popup_containers[0], p.get("widgets"))
+
+
+def _build_popups_step(state: _PageOpState, popups: Any) -> None:
+    for p in popups or ():
+        _build_single_popup(state, p)
+
+
+def _wire_action_event(
+    state: _PageOpState, action: str, host: str, event: dict[str, Any]
+) -> None:
+    kind = event.get("kind")
+    try:
+        if kind == "OpenPopup":
+            target_popup = event["target_popup"]
+            popup_id = state.popup_id_by_name[target_popup]
+            state.draft, eid = add_event_mapping(
+                state.draft, container_id=host, type="OpenPopup", popup_id=popup_id
+            )
+        else:
+            state.draft, eid = add_event_mapping(
+                state.draft, container_id=host, type="JSAction", script=event.get("script")
+            )
+    except ValueError as err:
+        state.refused.append(f"on_click:{action}: {err}")
+        return
+
+    prop_id = _find_node_id(state.draft, "Property", "EventMapping", eid)
+    ids = (eid, prop_id) if prop_id else (eid,)
+    label = f"on_click:{action}"
+    state.built.append(label)
+    state.checks.append((label, lambda rb, i=ids: all(x in rb for x in i)))
+
+
+def _is_unknown_popup_target(
+    event: dict[str, Any] | None, popup_ids: dict[str, str]
+) -> bool:
+    if event and event.get("kind") == "OpenPopup":
+        return event.get("target_popup") not in popup_ids
+    return False
+
+
+def _build_single_action(
+    state: _PageOpState, action: str, event: dict[str, Any] | None
+) -> None:
+    if _is_unknown_popup_target(event, state.popup_id_by_name):
+        target = event.get("target_popup") if event else None
+        state.refused.append(
+            f"action:{action}: OpenPopup targets unknown popup {target!r} (D6: never a dead button)"
+        )
+        return
+
+    try:
+        state.draft, host = add_widget(
+            state.draft,
+            container_id=state.body,
+            widget="general/button",
+            config={"caption": action},
+            name=f"action {action}",
+        )
+    except ValueError as err:
+        state.refused.append(f"action:{action}: {err}")
+        return
+
+    label = f"action:{action}"
+    state.built.append(label)
+    state.checks.append((label, lambda rb, i=host: i in rb))
+
+    if event is not None:
+        _wire_action_event(state, action, host, event)
+
+
+def _action_wiring_map(on_click: Any) -> dict[str, Any]:
+    return {e["action"]: e for e in (on_click or ()) if isinstance(e, dict) and "action" in e}
+
+
+def _merge_action_names(declared: list[str], wiring: dict[str, Any]) -> list[str]:
+    return declared + [a for a in wiring if a not in declared]
+
+
+def _build_actions_step(state: _PageOpState, actions: Any, on_click: Any) -> None:
+    wiring = _action_wiring_map(on_click)
+    for action in _merge_action_names(list(actions or ()), wiring):
+        _build_single_action(state, action, wiring.get(action))
+
+
+def _build_kpis_step(state: _PageOpState, kpis: Any) -> None:
+    for k in kpis or ():
+        state.skipped.append(
+            f"kpi:{k}: live value binding is a Known Exclusion (#23); the op carries "
+            "no flow binding for the metrics substitute — skipped, never faked"
+        )
+
+
+def _populate_page_state(state: _PageOpState, op_args: dict[str, Any]) -> None:
+    _build_design_step(state, op_args.get("design"))
+    _build_widgets_step(state, op_args.get("widgets"))
+    _build_popups_step(state, op_args.get("popups"))
+    _build_actions_step(state, op_args.get("actions"), op_args.get("on_click"))
+    _build_kpis_step(state, op_args.get("kpis"))
+
+
+def _evaluate_read_back_checks(
+    read_back: Draft, checks: list[tuple[str, Any]]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    verified: list[str] = []
+    missing: list[str] = []
+    for label, check in checks:
+        if check(read_back):
+            verified.append(label)
+        else:
+            missing.append(label)
+    return tuple(verified), tuple(missing)
+
+
+def _is_publishable(publish: bool, state: _PageOpState, missing: tuple[str, ...]) -> bool:
+    return bool(publish and state.built and not missing and not state.refused)
+
+
+def _maybe_publish_page(
+    client: KfClient,
+    app_id: str,
+    page_id: str,
+    state: _PageOpState,
+    missing: tuple[str, ...],
+    publish: bool,
+) -> bool | Err:
+    if not _is_publishable(publish, state, missing):
+        return False
+    pub = client.publish_page(app_id, page_id)
+    if isinstance(pub, Err):
+        return pub
+    return True
+
+
+def _commit_and_verify_page(
+    client: KfClient,
+    app_id: str,
+    page_id: str,
+    version: str | None,
+    state: _PageOpState,
+    publish: bool,
+) -> tuple[tuple[str, ...], tuple[str, ...], str | None, bool] | Err:
+    if state.built:
+        written = client.put_page_draft(app_id, page_id, state.draft, expect_version=version)
+        if isinstance(written, Err):
+            return written
+    read_back = client.get_page_draft(app_id, page_id)
+    if isinstance(read_back, Err):
+        return read_back
+
+    verified, missing = _evaluate_read_back_checks(read_back, state.checks)
+    pub_res = _maybe_publish_page(client, app_id, page_id, state, missing, publish)
+    if isinstance(pub_res, Err):
+        return pub_res
+
+    return verified, missing, read_back.get(_META_VERSION), pub_res
+
+
 def apply_build_page_op(
     client: KfClient,
     app_id: str,
@@ -456,145 +747,31 @@ def apply_build_page_op(
     shell-vs-substance discipline as apply_page_build). Publish is skipped unless everything
     built verified AND nothing was refused.
     """
-    name = op_args.get("name")
-    if not name:
-        return Err("verify", "build_page op has no 'name'")
+    target = _init_page_target(client, app_id, op_args)
+    if isinstance(target, Err):
+        return target
+    name, page_id, page_created, draft, body = target
 
-    listed = client.list_pages(app_id)
-    if isinstance(listed, Err):
-        return listed
-    page_id = next((p.get("_id") for p in listed
-                    if isinstance(p, dict) and p.get("Name") == name), None)
-    page_created = page_id is None
-    if page_created:
-        made = client.create_page(app_id, name)
-        if isinstance(made, Err):
-            return made
-        page_id = made
+    state = _PageOpState(draft=draft, body=body)
+    _populate_page_state(state, op_args)
 
-    draft = client.get_page_draft(app_id, page_id)
-    if isinstance(draft, Err):
-        return draft
-    version = draft.get(_META_VERSION)
-    body = next((k for k, v in draft.items() if isinstance(v, dict)
-                 and v.get("Kind") == "Container" and v.get("Type") == "Body"), None)
-    if body is None:
-        return Err("verify", f"page {page_id} has no Body container — not a page draft?")
-
-    built: list[str] = []
-    skipped: list[str] = []
-    refused: list[str] = []
-    checks: list[tuple[str, Any]] = []
-    new: Draft = draft
-
-    def _widget_config(w: dict[str, Any]) -> dict[str, Any]:
-        cfg = dict(w.get("config") or {})
-        if w.get("row_fields"):
-            cfg["row_fields"] = list(w["row_fields"])
-        return cfg
-
-    def _add_widget_checked(container: str, w: dict[str, Any], label: str) -> None:
-        nonlocal new
-        try:
-            new, wid = add_widget(new, container_id=container, widget=w.get("slug", ""),
-                                  config=_widget_config(w))
-        except ValueError as e:
-            refused.append(f"{label}: {e}")
-            return
-        comp_id = next((k for k, v in new.items() if isinstance(v, dict)
-                        and v.get("Kind") == "Component" and v.get("Container") == wid), None)
-        ids = (wid, comp_id) if comp_id else (wid,)
-        built.append(label)
-        checks.append((label, lambda rb, i=ids: all(x in rb for x in i)))
-
-    # The beautiful-page tree (page.design.md), if the plan carried one — a nested styled
-    # Container/Component tree built into the Body, instead of the flat label+form skeleton. Every
-    # node it mints is read-back verified (THE RULE). A malformed design is REFUSED, not downgraded
-    # to the skeleton (D6): a page that silently lost its whole design would look like a success.
-    design = op_args.get("design")
-    if design:
-        try:
-            new, design_ids = build_design(new, parent_id=body, design=design)
-        except ValueError as e:
-            refused.append(f"design: {e}")
-        else:
-            label = f"design:[{len(design_ids)} nodes]"
-            built.append(label)
-            checks.append((label, lambda rb, ids=tuple(design_ids): all(i in rb for i in ids)))
-
-    for w in op_args.get("widgets") or ():
-        _add_widget_checked(body, w, f"widget:{w.get('slug')}")
-
-    popup_id_by_name: dict[str, str] = {}
-    for p in op_args.get("popups") or ():
-        pname = p.get("name", "")
-        new, pid = add_popup(new, name=pname)
-        popup_id_by_name[pname] = pid
-        built.append(f"popup:{pname}")
-        checks.append((f"popup:{pname}", lambda rb, i=pid: i in rb))
-        popup_container = (new[pid].get("Popup::Container") or [None])[0]
-        for w in p.get("widgets") or ():
-            _add_widget_checked(popup_container, w, f"popup:{pname}/widget:{w.get('slug')}")
-
-    wiring = {e.get("action"): e for e in op_args.get("on_click") or ()}
-    # an on_click naming an action outside `actions` still gets its button — compile already
-    # validated action membership; belt-and-braces here so no declared behavior is dropped.
-    for action in list(op_args.get("actions") or ()) + [a for a in wiring
-                                                        if a not in (op_args.get("actions") or ())]:
-        e = wiring.get(action)
-        if e and e.get("kind") == "OpenPopup" and e.get("target_popup") not in popup_id_by_name:
-            refused.append(f"action:{action}: OpenPopup targets unknown popup "
-                           f"{e.get('target_popup')!r} (D6: never a dead button)")
-            continue
-        try:
-            new, host = add_widget(new, container_id=body, widget="general/button",
-                                   config={"caption": action}, name=f"action {action}")
-        except ValueError as err:
-            refused.append(f"action:{action}: {err}")
-            continue
-        built.append(f"action:{action}")
-        checks.append((f"action:{action}", lambda rb, i=host: i in rb))
-        if e:
-            try:
-                if e.get("kind") == "OpenPopup":
-                    new, eid = add_event_mapping(new, container_id=host, type="OpenPopup",
-                                                 popup_id=popup_id_by_name[e["target_popup"]])
-                else:
-                    new, eid = add_event_mapping(new, container_id=host, type="JSAction",
-                                                 script=e.get("script"))
-            except ValueError as err:
-                refused.append(f"on_click:{action}: {err}")
-                continue
-            prop_id = next((k for k, v in new.items() if isinstance(v, dict)
-                            and v.get("Kind") == "Property" and v.get("EventMapping") == eid), None)
-            ids = (eid, prop_id) if prop_id else (eid,)
-            built.append(f"on_click:{action}")
-            checks.append((f"on_click:{action}", lambda rb, i=ids: all(x in rb for x in i)))
-
-    for k in op_args.get("kpis") or ():
-        skipped.append(f"kpi:{k}: live value binding is a Known Exclusion (#23); the op carries "
-                       "no flow binding for the metrics substitute — skipped, never faked")
-
-    if built:
-        written = client.put_page_draft(app_id, page_id, new, expect_version=version)
-        if isinstance(written, Err):
-            return written
-    read_back = client.get_page_draft(app_id, page_id)
-    if isinstance(read_back, Err):
-        return read_back
-    verified = tuple(label for label, check in checks if check(read_back))
-    missing = tuple(label for label, check in checks if not check(read_back))
-
-    published = False
-    if publish and built and not missing and not refused:
-        pub = client.publish_page(app_id, page_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
+    outcome = _commit_and_verify_page(
+        client, app_id, page_id, draft.get(_META_VERSION), state, publish
+    )
+    if isinstance(outcome, Err):
+        return outcome
+    verified, missing, meta_ver, published = outcome
 
     return BuildPageOpReport(
-        app_id=app_id, page_id=page_id, page_name=name, page_created=page_created,
-        built=tuple(built), skipped=tuple(skipped), refused=tuple(refused),
-        verified=verified, missing=missing,
-        meta_version=read_back.get(_META_VERSION), published=published,
+        app_id=app_id,
+        page_id=page_id,
+        page_name=name,
+        page_created=page_created,
+        built=tuple(state.built),
+        skipped=tuple(state.skipped),
+        refused=tuple(state.refused),
+        verified=verified,
+        missing=missing,
+        meta_version=meta_ver,
+        published=published,
     )

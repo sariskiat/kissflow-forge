@@ -8,12 +8,13 @@ from __future__ import annotations
 from typing import Any
 
 from kfforge.client import Err, KfClient, KfConfig
-from kfforge.pages import new_page_graph
+from kfforge.pages import new_page_graph, set_styles
 from kfforge.pages_live import (
     NavigationReport,
     PageBuildReport,
     PageBuildStep,
     PageReport,
+    _style_props_landed,
     apply_build_page_op,
     apply_navigation,
     apply_page_build,
@@ -398,6 +399,61 @@ def test_apply_page_build_detects_a_style_value_that_never_landed() -> None:
     assert rep.as_tool_result()["isError"] is True
 
 
+def test_style_props_landed_resolutions_and_matching() -> None:
+    g = new_page_graph("Page 1")
+    g = set_styles(g, rules={
+        "Body Container": {
+            "Container.Background": "#ffffff",
+            "Container.Color": {"ref": "Color.White"},
+        }
+    })
+
+    assert _style_props_landed(g, "Container001", {
+        "Container.Background": "#ffffff",
+        "Container.Color": {"ref": "Color.White"},
+    }) is True
+    assert _style_props_landed(g, "Body Container", {
+        "Container.Background": "#ffffff",
+        "Container.Color": {"ref": "Color.White"},
+    }) is True
+
+    assert _style_props_landed(g, "Container001", {"Container.Padding": None}) is True
+    assert _style_props_landed(g, "Container001", {"Container.Background": None}) is False
+
+    assert _style_props_landed(g, "Container001", {"Container.Background": "#000000"}) is False
+    assert _style_props_landed(g, "Container001", {"Container.Padding": "10px"}) is False
+
+    assert _style_props_landed(g, "Container001", {"Container.Color": {"ref": "Color.Black"}}) is False
+    assert _style_props_landed(g, "Container001", {"Container.Color": "#ffffff"}) is False
+
+    assert _style_props_landed(g, "NonExistentContainer", {"Container.Background": "#ffffff"}) is False
+
+    ambiguous = dict(g)
+    ambiguous["Container002"] = {
+        "Id": "Container002", "Kind": "Container", "Name": "Body Container",
+        "Container::Style": ["Style001"],
+    }
+    assert _style_props_landed(ambiguous, "Body Container", {"Container.Background": "#ffffff"}) is False
+
+    no_style = dict(g)
+    no_style["Container_NoStyle"] = {
+        "Id": "Container_NoStyle", "Kind": "Container", "Name": "No Style Container",
+    }
+    assert _style_props_landed(no_style, "Container_NoStyle", {"Container.Background": "#ffffff"}) is False
+
+    broken_style = dict(g)
+    broken_style["Container_Broken"] = {
+        "Id": "Container_Broken", "Kind": "Container", "Name": "Broken",
+        "Container::Style": ["Style_Broken"],
+    }
+    assert _style_props_landed(broken_style, "Container_Broken", {"Container.Background": "#ffffff"}) is False
+    broken_style["Style_Broken"] = {"Id": "Style_Broken", "Kind": "Style", "Value": None}
+    assert _style_props_landed(broken_style, "Container_Broken", {"Container.Background": "#ffffff"}) is False
+    assert _style_props_landed(broken_style, "Container_Broken", {"Container.Background": None}) is True
+
+    assert _style_props_landed(g, "Container001", {}) is True
+
+
 def test_apply_page_build_detects_a_bind_value_that_never_landed() -> None:
     """Same silent-discard class, for a bind step: the PUT succeeds but the rebound Property.Value
     never actually reflects the requested config."""
@@ -523,6 +579,7 @@ def test_apply_build_page_op_builds_popup_and_onclick_wiring() -> None:
     assert rep.skipped and "Known Exclusion" in rep.skipped[0]      # the KPI, named, never faked
 
     # read the draft back and prove the OpenPopup Property's Value IS the popup's id
+    assert rep.page_id is not None
     draft = c.page_drafts[rep.page_id]
     popup_id = next(k for k, v in draft.items()
                     if isinstance(v, dict) and v.get("Kind") == "Popup"
@@ -554,3 +611,260 @@ def test_apply_build_page_op_reuses_existing_page_by_name() -> None:
     rep = apply_build_page_op(c, "App1", _op(widgets=(), popups=(), actions=(), on_click=(), kpis=()))
     assert isinstance(rep, BuildPageOpReport)
     assert rep.page_created is False and rep.page_id == first.page_id
+
+
+def test_apply_build_page_op_no_name() -> None:
+    from kfforge.client import Err
+    from kfforge.pages_live import apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(c, "App1", {})
+    assert isinstance(rep, Err)
+    assert rep.kind == "verify"
+    assert "no 'name'" in rep.message
+
+
+def test_apply_build_page_op_list_pages_err() -> None:
+    from kfforge.client import Err
+    from kfforge.pages_live import apply_build_page_op
+
+    c = FakePageClient()
+    c.list_pages = lambda app_id: Err("http", "list failed")  # type: ignore[assignment]
+    rep = apply_build_page_op(c, "App1", _op())
+    assert isinstance(rep, Err)
+    assert rep.kind == "http"
+
+
+def test_apply_build_page_op_create_page_err() -> None:
+    from kfforge.client import Err
+    from kfforge.pages_live import apply_build_page_op
+
+    c = FakePageClient()
+    c.create_page = lambda app_id, name: Err("http", "create failed")  # type: ignore[assignment]
+    rep = apply_build_page_op(c, "App1", _op())
+    assert isinstance(rep, Err)
+    assert rep.kind == "http"
+
+
+def test_apply_build_page_op_get_page_draft_err() -> None:
+    from kfforge.client import Err
+    from kfforge.pages_live import apply_build_page_op
+
+    c = FakePageClient()
+    c.get_page_draft = lambda app_id, page_id: Err("http", "draft get failed")  # type: ignore[assignment]
+    rep = apply_build_page_op(c, "App1", _op())
+    assert isinstance(rep, Err)
+    assert rep.kind == "http"
+
+
+def test_apply_build_page_op_no_body_container() -> None:
+    from kfforge.client import Err
+    from kfforge.pages_live import apply_build_page_op
+
+    c = FakePageClient()
+    pid = c.create_page("App1", "PageNoBody")
+    c.page_drafts[pid] = {"_meta_version": "v1", "Root": "Page1"}
+    rep = apply_build_page_op(c, "App1", _op(name="PageNoBody"))
+    assert isinstance(rep, Err)
+    assert rep.kind == "verify"
+    assert "no Body container" in rep.message
+
+
+def test_apply_build_page_op_malformed_design_refused() -> None:
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(c, "App1", _op(design={"bad": "tree"}))
+    assert isinstance(rep, BuildPageOpReport)
+    assert any(r.startswith("design:") for r in rep.refused)
+
+
+def test_apply_build_page_op_widget_error_refused() -> None:
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(
+        c, "App1", _op(widgets=({"slug": "invalid/widget", "config": {}, "row_fields": ("f1",)},))
+    )
+    assert isinstance(rep, BuildPageOpReport)
+    assert any(r.startswith("widget:") for r in rep.refused)
+
+
+def test_apply_build_page_op_jsaction_and_action_error() -> None:
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(
+        c,
+        "App1",
+        _op(
+            actions=("Run JS",),
+            on_click=({"action": "Run JS", "kind": "JSAction", "script": "console.log('test')"},),
+        ),
+    )
+    assert isinstance(rep, BuildPageOpReport)
+    assert "action:Run JS" in rep.built
+    assert "on_click:Run JS" in rep.built
+    assert "on_click:Run JS" in rep.verified
+
+
+def test_apply_build_page_op_action_event_mapping_fails() -> None:
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(
+        c,
+        "App1",
+        _op(
+            actions=("Bad JS",),
+            on_click=({"action": "Bad JS", "kind": "JSAction", "script": ""},),
+        ),
+    )
+    assert isinstance(rep, BuildPageOpReport)
+    assert any("on_click:Bad JS" in r for r in rep.refused)
+
+
+def test_apply_build_page_op_put_page_draft_err() -> None:
+    from kfforge.client import Err
+    from kfforge.pages_live import apply_build_page_op
+
+    c = FakePageClient()
+
+    def failing_put(app_id: str, page_id: str, draft: Any, expect_version: Any = None) -> Err:
+        return Err("http", "put failed")
+
+    c.put_page_draft = failing_put  # type: ignore[assignment]
+    rep = apply_build_page_op(c, "App1", _op())
+    assert isinstance(rep, Err)
+    assert rep.kind == "http"
+
+
+def test_apply_build_page_op_readback_draft_err() -> None:
+    from kfforge.client import Err
+    from kfforge.pages_live import apply_build_page_op
+
+    c = FakePageClient()
+    orig_get = c.get_page_draft
+    calls = 0
+
+    def failing_get(app_id: str, page_id: str) -> Any:
+        nonlocal calls
+        calls += 1
+        return Err("http", "readback failed") if calls > 1 else orig_get(app_id, page_id)
+
+    c.get_page_draft = failing_get  # type: ignore[assignment]
+    rep = apply_build_page_op(c, "App1", _op())
+    assert isinstance(rep, Err)
+    assert rep.kind == "http"
+
+
+def test_apply_build_page_op_publish_success_and_error() -> None:
+    from kfforge.client import Err
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(c, "App1", _op(), publish=True)
+    assert isinstance(rep, BuildPageOpReport)
+    assert rep.published is True
+    assert len(c.page_publishes) == 1
+
+    c_fail = FakePageClient()
+    c_fail.publish_page = lambda app_id, page_id: Err("http", "publish failed")  # type: ignore[assignment]
+    rep_fail = apply_build_page_op(c_fail, "App1", _op(), publish=True)
+    assert isinstance(rep_fail, Err)
+    assert rep_fail.kind == "http"
+
+
+def test_apply_build_page_op_publish_skipped_when_refused() -> None:
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(c, "App1", _op(popups=()), publish=True)
+    assert isinstance(rep, BuildPageOpReport)
+    assert rep.published is False
+    assert len(c.page_publishes) == 0
+
+
+def test_apply_build_page_op_missing_readback_items() -> None:
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    orig_get = c.get_page_draft
+    calls = 0
+
+    def stripped_get(app_id: str, page_id: str) -> Any:
+        nonlocal calls
+        calls += 1
+        draft = orig_get(app_id, page_id)
+        if calls > 1:
+            return {
+                k: v
+                for k, v in draft.items()
+                if not (isinstance(v, dict) and v.get("Kind") == "Component")
+            }
+        return draft
+
+    c.get_page_draft = stripped_get  # type: ignore[assignment]
+    rep = apply_build_page_op(c, "App1", _op())
+    assert isinstance(rep, BuildPageOpReport)
+    assert "widget:general/label" in rep.missing
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_apply_build_page_op_undeclared_action_in_wiring() -> None:
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(
+        c,
+        "App1",
+        _op(
+            actions=(),
+            on_click=(
+                {
+                    "action": "OnlyInWiring",
+                    "kind": "OpenPopup",
+                    "target_popup": "New Case Form",
+                },
+            ),
+        ),
+    )
+    assert isinstance(rep, BuildPageOpReport)
+    assert "action:OnlyInWiring" in rep.built
+    assert "on_click:OnlyInWiring" in rep.built
+
+
+def test_apply_build_page_op_plain_action_without_onclick() -> None:
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    rep = apply_build_page_op(c, "App1", _op(actions=("PlainButton",), on_click=()))
+    assert isinstance(rep, BuildPageOpReport)
+    assert "action:PlainButton" in rep.built
+    assert "on_click:PlainButton" not in rep.built
+
+
+def test_apply_build_page_op_action_widget_error_refused() -> None:
+    from kfforge.pages_live import _build_single_action, _find_node_id, _PageOpState
+
+    assert _find_node_id({}, "Component", "Container", "unknown") is None
+
+    state = _PageOpState(draft={"Root": "Page1"}, body="MissingBody")
+    _build_single_action(state, "MyAction", None)
+    assert any("action:MyAction" in r for r in state.refused)
+
+
+def test_apply_build_page_op_list_pages_non_dict_and_nomatch() -> None:
+    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+
+    c = FakePageClient()
+    # list_pages returns list with non-dict elements and non-matching names
+    c.list_pages = lambda app_id: [None, "invalid", {"Name": "Other"}, {"_id": "p1", "Name": "Existing"}]  # type: ignore[assignment]
+    c.page_drafts["p1"] = new_page_graph("Existing")
+    c.page_drafts["p1"]["_meta_version"] = "v1"
+    rep = apply_build_page_op(c, "App1", _op(name="Existing"))
+    assert isinstance(rep, BuildPageOpReport)
+    assert rep.page_id == "p1"
+    assert rep.page_created is False
+
+

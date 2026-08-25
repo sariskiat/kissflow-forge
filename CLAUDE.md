@@ -53,7 +53,7 @@ No `.venv` here. Deps arrive per-run via `uv --with` (`requirements.txt` =
 `fastmcp>=3`, `pytest>=8`).
 
 ```bash
-# unit + integration — 2125 passed, 31 skipped (verified 2026-08-21). The 31
+# unit + integration — 2251 passed, 31 skipped (verified 2026-08-25). The 31
 # skips are the live suites — excluded by default, see conftest.py: 25 in the two
 # below, 5 in tests/test_live_template_app.py, plus tests/test_live_page_plan.py.
 uv run --with pytest --with 'fastmcp>=3' --no-project pytest -q
@@ -62,7 +62,7 @@ uv run --with pytest --with 'fastmcp>=3' --no-project pytest -q
 uv run --with pytest --with 'fastmcp>=3' --no-project pytest -q tests/test_pages.py
 uv run --with pytest --with 'fastmcp>=3' --no-project pytest -q -k step_permissions
 
-# live acceptance — 30 tests collected (verified 2026-08-21), 25 passed when last
+# live acceptance — 30 tests collected (verified 2026-08-25), 25 passed when last
 # run live (2026-08-10). Hits the REAL
 # Kissflow dev tenant (KF_APP) via direct in-process calls to kfforge.server's own
 # tool functions — no subprocess, no Robot Framework. Opt in with --run-live, or

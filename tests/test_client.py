@@ -7,8 +7,6 @@ import pytest
 
 from kfforge.client import (
     ApplyReport,
-    RoleUsersReport,
-    apply_add_role_users,
     BranchConditionReport,
     DeleteFieldsReport,
     Err,
@@ -20,12 +18,21 @@ from kfforge.client import (
     MemberReport,
     RenameFieldsReport,
     RequiredReport,
+    RoleUsersReport,
+    SequenceNumberReport,
+    StepPermissionReport,
     StyleReport,
     TableReport,
+    ValidationReport,
     WorkflowReport,
+    _is_sequence_field,
+    _publish_sequence_flow,
+    _verify_sequence_number,
+    apply_add_role_users,
     apply_branch_conditions,
     apply_dataset_records,
     apply_field_events,
+    apply_field_validation,
     apply_fields,
     apply_fields_and_layout,
     apply_fields_full,
@@ -36,6 +43,7 @@ from kfforge.client import (
     apply_report_members,
     apply_required,
     apply_section_style,
+    apply_sequence_number,
     apply_step_permissions,
     apply_table,
     apply_workflow,
@@ -303,6 +311,116 @@ def test_apply_fields_and_layout_adds_fields_and_lands_the_named_section() -> No
     assert section["Name"] == "Group A"
 
 
+def test_apply_fields_and_layout_no_groups_adds_fields_without_regrouping() -> None:
+    c = FakeClient(_bare_form_draft())
+    rep = apply_fields_and_layout(
+        c, "form", "F1",
+        [FieldSpec(name="alpha", type=FieldType.TEXT)],
+        groups=None,
+    )
+    assert isinstance(rep, ApplyReport)
+    assert rep.verified == ("alpha",) and rep.missing == ()
+    assert c.puts == 1
+
+
+def test_apply_fields_and_layout_no_op_does_not_put_when_no_added_and_no_groups() -> None:
+    c = FakeClient(_bare_form_draft())
+    spec = [FieldSpec(name="alpha", type=FieldType.TEXT)]
+    apply_fields_and_layout(c, "form", "F1", spec, groups=None)
+    assert c.puts == 1
+
+    rep = apply_fields_and_layout(c, "form", "F1", spec, groups=None)
+    assert isinstance(rep, ApplyReport)
+    assert rep.added == () and rep.skipped == ("alpha",)
+    assert c.puts == 1
+
+
+def test_apply_fields_and_layout_publishes_when_requested_and_clean() -> None:
+    c = FakeClient(_bare_form_draft())
+    rep = apply_fields_and_layout(
+        c, "form", "F1",
+        [FieldSpec(name="alpha", type=FieldType.TEXT)],
+        publish=True,
+    )
+    assert isinstance(rep, ApplyReport)
+    assert rep.published is True
+    assert c.published is True
+
+
+def test_apply_fields_and_layout_publish_failure_returns_err() -> None:
+    class FailPublish(FakeClient):
+        def publish(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "publish rejected")
+
+    c = FailPublish(_bare_form_draft())
+    got = apply_fields_and_layout(
+        c, "form", "F1",
+        [FieldSpec(name="alpha", type=FieldType.TEXT)],
+        publish=True,
+    )
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_fields_and_layout_initial_get_draft_error_returns_err() -> None:
+    class FailGet(FakeClient):
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "draft fetch failed")
+
+    c = FailGet(_bare_form_draft())
+    got = apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)]
+    )
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_fields_and_layout_put_draft_error_returns_err() -> None:
+    class FailPut(FakeClient):
+        def put_draft(
+            self, kind, flow_id, new, expect_version
+        ):  # type: ignore[override]
+            return Err("conflict", "draft changed under us")
+
+    c = FailPut(_bare_form_draft())
+    got = apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)]
+    )
+    assert isinstance(got, Err) and got.kind == "conflict"
+
+
+def test_apply_fields_and_layout_read_back_error_returns_err() -> None:
+    class FailReadBack(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            self._calls += 1
+            if self._calls > 1:
+                return Err("http", "read-back failed")
+            return self.draft
+
+    c = FailReadBack(_bare_form_draft())
+    got = apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)]
+    )
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_fields_and_layout_not_implemented_error_caught_as_verify_err(
+    monkeypatch,
+) -> None:
+    def fake_apply_changes(draft, specs):
+        raise NotImplementedError("unsupported field type")
+
+    monkeypatch.setattr("kfforge.client.apply_changes", fake_apply_changes)
+    c = FakeClient(_bare_form_draft())
+    got = apply_fields_and_layout(
+        c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXT)]
+    )
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "offline apply rejected" in got.message
+
+
 def test_apply_fields_and_layout_always_writes_when_groups_given_even_with_zero_new_fields() -> None:
     """Unlike plain apply_fields, a re-layout with no new fields must still PUT — a section move
     is a real change even when every field already existed."""
@@ -356,6 +474,185 @@ def test_apply_table_offline_rejection_never_reaches_put() -> None:
     got = apply_table(c, "form", "F1", "Rounds", [("Bad Col", "NotAType")])
     assert isinstance(got, Err) and got.kind == "verify"
     assert c.puts == 0
+
+
+def test_apply_table_initial_get_draft_error_returns_err() -> None:
+    class ErrGetClient(FakeClient):
+        def get_draft(self, kind, flow_id):
+            return Err("http", "network down")
+
+    c = ErrGetClient(_bare_form_draft())
+    got = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(got, Err) and got.kind == "http"
+    assert c.puts == 0
+
+
+def test_apply_table_put_draft_error_returns_err() -> None:
+    class FailPutClient(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):
+            return Err("conflict", "version conflict")
+
+    c = FailPutClient(_bare_form_draft())
+    got = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(got, Err) and got.kind == "conflict"
+
+
+def test_apply_table_read_back_error_returns_err() -> None:
+    class FailSecondGetClient(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):
+            self._calls += 1
+            if self._calls > 1:
+                return Err("http", "readback failed")
+            return self.draft
+
+    c = FailSecondGetClient(_bare_form_draft())
+    got = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_table_publishes_when_requested_and_verified() -> None:
+    c = FakeClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")], publish=True)
+    assert isinstance(rep, TableReport)
+    assert rep.published is True
+    assert c.published is True
+
+
+def test_apply_table_publish_error_returns_err() -> None:
+    class FailPublishClient(FakeClient):
+        def publish(self, kind, flow_id):
+            return Err("http", "publish 500")
+
+    c = FailPublishClient(_bare_form_draft())
+    got = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")], publish=True)
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_table_missing_columns_audit_and_skips_publish() -> None:
+    class DropOneColumnOnReadBackClient(FakeClient):
+        def get_draft(self, kind, flow_id):
+            draft = copy_draft = dict(self.draft)
+            # if table was written, remove one child field node from the draft dictionary
+            for k, v in list(draft.items()):
+                if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Notes":
+                    copy_draft = dict(draft)
+                    del copy_draft[k]
+            return copy_draft
+
+    c = DropOneColumnOnReadBackClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds",
+                      [("Round", "Number"), ("Notes", "Text")], publish=True)
+    assert isinstance(rep, TableReport)
+    assert rep.verified_columns == ("Round",)
+    assert rep.missing_columns == ("Notes",)
+    assert rep.published is False
+    assert c.published is False
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_apply_table_read_back_missing_or_malformed_host_node() -> None:
+    class StripHostClient(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):
+            self._calls += 1
+            if self._calls > 1:
+                # return draft without host column
+                return {k: v for k, v in self.draft.items()
+                        if not (isinstance(v, dict) and v.get("Type") == "Model")}
+            return self.draft
+
+    c = StripHostClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(rep, TableReport)
+    assert rep.verified_columns == ()
+    assert rep.missing_columns == ("Round",)
+
+
+def test_apply_table_read_back_missing_table_node() -> None:
+    class EmptyHostColumnModelClient(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):
+            self._calls += 1
+            if self._calls > 1:
+                d = dict(self.draft)
+                for k, v in d.items():
+                    if isinstance(v, dict) and v.get("Type") == "Model":
+                        d[k] = dict(v)
+                        d[k]["Column::Model"] = []  # empty table pointer
+                return d
+            return self.draft
+
+    c = EmptyHostColumnModelClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(rep, TableReport)
+    assert rep.verified_columns == ()
+    assert rep.missing_columns == ("Round",)
+
+
+def test_apply_table_read_back_with_corrupted_field_or_model_nodes() -> None:
+    class CorruptedNodesClient(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):
+            self._calls += 1
+            if self._calls > 1:
+                d = dict(self.draft)
+                for k, v in list(d.items()):
+                    if isinstance(v, dict) and v.get("Type") == "Model" and v.get("Name") == "Rounds":
+                        t_id = (v.get("Column::Model") or [""])[0]
+                        if t_id in d:
+                            t_node = dict(d[t_id])
+                            f_ids = t_node.get("Model::Field", [])
+                            if f_ids:
+                                d[f_ids[0]] = "not a dict node"
+                                if len(f_ids) > 1:
+                                    d[f_ids[1]] = {"Id": f_ids[1]}  # missing Name key
+                            d[t_id] = t_node
+                return d
+            return self.draft
+
+    c = CorruptedNodesClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds", [("Round", "Number"), ("Notes", "Text")])
+    assert isinstance(rep, TableReport)
+    assert rep.verified_columns == ()
+    assert rep.missing_columns == ("Round", "Notes")
+
+
+def test_apply_table_read_back_with_non_dict_table_node() -> None:
+    class NonDictTableNodeClient(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._calls = 0
+
+        def get_draft(self, kind, flow_id):
+            self._calls += 1
+            if self._calls > 1:
+                d = dict(self.draft)
+                for k, v in list(d.items()):
+                    if isinstance(v, dict) and v.get("Type") == "Model" and v.get("Name") == "Rounds":
+                        t_id = (v.get("Column::Model") or [""])[0]
+                        if t_id in d:
+                            d[t_id] = "not a dict table model"
+                return d
+            return self.draft
+
+    c = NonDictTableNodeClient(_bare_form_draft())
+    rep = apply_table(c, "form", "F1", "Rounds", [("Round", "Number")])
+    assert isinstance(rep, TableReport)
+    assert rep.verified_columns == ()
+    assert rep.missing_columns == ("Round",)
 
 
 # ---- apply_workflow --------------------------------------------------------------------------
@@ -687,6 +984,150 @@ def test_apply_field_events_offline_rejection_never_reaches_put() -> None:
     got = apply_field_events(c, "F1", {"NoSuchField": [("onChange", "1;")]})
     assert isinstance(got, Err) and got.kind == "verify"
     assert c.puts == 0
+
+
+# ---- apply_field_validation ------------------------------------------------------------------
+
+def test_apply_field_validation_wires_and_verifies() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    rep = apply_field_validation(c, "F1", {"Notes": [("CONTAINS", "important"), ("MAX_LENGTH", "200")]})
+    assert isinstance(rep, ValidationReport)
+    assert rep.flow_id == "F1"
+    assert rep.field_name == "Notes"
+    assert rep.rules == (("CONTAINS", "important"), ("MAX_LENGTH", "200"))
+    assert rep.verified == (("CONTAINS", "important"), ("MAX_LENGTH", "200"))
+    assert rep.missing == ()
+    assert rep.published is False
+    assert rep.meta_version == "v2"
+    assert rep.as_tool_result()["isError"] is False
+    assert c.puts == 1
+
+
+def test_apply_field_validation_with_publish_publishes_when_clean() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    rep = apply_field_validation(c, "F1", {"Notes": [("MAX_LENGTH", "100")]}, publish=True)
+    assert isinstance(rep, ValidationReport)
+    assert rep.published is True
+    assert c.published is True
+
+
+def test_apply_field_validation_publish_failure_returns_err() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    c.publish = lambda kind, fid: Err("http", "publish fail")  # type: ignore[assignment]
+    got = apply_field_validation(c, "F1", {"Notes": [("MAX_LENGTH", "100")]}, publish=True)
+    assert isinstance(got, Err)
+    assert got.kind == "http"
+
+
+def test_apply_field_validation_offline_rejection_never_reaches_put() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    got = apply_field_validation(c, "F1", {"NoSuchField": [("CONTAINS", "x")]})
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "offline add_field_validation rejected" in got.message
+    assert c.puts == 0
+
+
+def test_apply_field_validation_get_draft_err_returns_err() -> None:
+    c = FakeClient(_bare_form_draft())
+    c.get_draft = lambda kind, fid: Err("http", "get draft 500")  # type: ignore[assignment]
+    got = apply_field_validation(c, "F1", {"Notes": [("CONTAINS", "x")]})
+    assert isinstance(got, Err)
+    assert got.kind == "http"
+    assert c.puts == 0
+
+
+def test_apply_field_validation_put_draft_conflict_returns_err() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    c.put_draft = lambda kind, fid, new, expect_version: Err("conflict", "version drift")  # type: ignore[assignment]
+    got = apply_field_validation(c, "F1", {"Notes": [("CONTAINS", "x")]})
+    assert isinstance(got, Err)
+    assert got.kind == "conflict"
+
+
+def test_apply_field_validation_read_back_err_returns_err() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+    calls = 0
+
+    def get_draft_mock(kind: Any, fid: str) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return draft
+        return Err("http", "read-back 500")
+
+    c.get_draft = get_draft_mock  # type: ignore[assignment]
+    got = apply_field_validation(c, "F1", {"Notes": [("CONTAINS", "x")]})
+    assert isinstance(got, Err)
+    assert got.kind == "http"
+
+
+def test_apply_field_validation_reports_missing_when_read_back_lacks_condition() -> None:
+    draft = _apply_changes(_bare_form_draft(), [FieldSpec(name="Notes", type=FieldType.TEXT)])
+    c = FakeClient(draft)
+
+    def put_draft_mock(kind: Any, fid: str, new: Any, expect_version: str | None) -> Any:
+        c.puts += 1
+        c.draft = draft
+        return new
+
+    c.put_draft = put_draft_mock  # type: ignore[assignment]
+    rep = apply_field_validation(c, "F1", {"Notes": [("CONTAINS", "xyz")]}, publish=True)
+    assert isinstance(rep, ValidationReport)
+    assert rep.verified == ()
+    assert rep.missing == (("CONTAINS", "xyz"),)
+    assert rep.published is False
+    assert c.published is False
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_apply_field_validation_handles_multiple_fields_and_corrupt_nodes() -> None:
+    draft = _apply_changes(
+        _bare_form_draft(),
+        [FieldSpec(name="A", type=FieldType.TEXT), FieldSpec(name="B", type=FieldType.TEXT)],
+    )
+    c = FakeClient(draft)
+    rep = apply_field_validation(
+        c, "F1", {"A": [("CONTAINS", "1")], "B": [("MAX_LENGTH", "50")]}
+    )
+    assert isinstance(rep, ValidationReport)
+    assert rep.verified == (("CONTAINS", "1"), ("MAX_LENGTH", "50"))
+    assert rep.missing == ()
+
+    # Inject corrupt node references into read-back to exercise edge case guards
+    draft_with_corrupt = dict(c.draft)
+    draft_with_corrupt["corrupt_crit_str"] = "not a dict"
+    draft_with_corrupt["crit_bad_cond_list"] = {"Kind": "Criteria", "Criteria::Condition": "not a list"}
+    draft_with_corrupt["bad_cond_op"] = {"Kind": "Condition", "Operator": 123}
+    draft_with_corrupt["dangling_cond_crit"] = {"Kind": "Criteria", "Criteria::Condition": ["nonexistent_cond"]}
+    fld_a = next(v for v in draft_with_corrupt.values() if isinstance(v, dict) and v.get("Name") == "A")
+    fld_a["FieldValidation::Criteria"] = [
+        "corrupt_crit_str",
+        "crit_bad_cond_list",
+        "dangling_cond_crit",
+        fld_a["FieldValidation::Criteria"][0],
+    ]
+    fld_b = next(v for v in draft_with_corrupt.values() if isinstance(v, dict) and v.get("Name") == "B")
+    fld_b["FieldValidation::Criteria"] = "not a list"
+
+    c2 = FakeClient(draft)
+
+    def put_corrupt(kind: Any, fid: str, new: Any, expect_version: str | None) -> Any:
+        c2.puts += 1
+        c2.draft = draft_with_corrupt
+        return new
+
+    c2.put_draft = put_corrupt  # type: ignore[assignment]
+    # Read-back with corrupt nodes doesn't crash and still audits correctly
+    rep2 = apply_field_validation(c2, "F1", {"A": [("CONTAINS", "1")], "B": [("MAX_LENGTH", "50")]})
+    assert isinstance(rep2, ValidationReport)
+    assert ("CONTAINS", "1") in rep2.verified
+    assert ("MAX_LENGTH", "50") in rep2.missing
 
 
 # ---- apply_section_style ----------------------------------------------------------------------
@@ -2105,6 +2546,60 @@ def test_apply_required_missing_is_a_loud_failure_on_read_back() -> None:
     assert rep.as_tool_result()["isError"] is True and c.published is False
 
 
+def test_apply_required_get_draft_error_returns_err() -> None:
+    class FailingGet(FakeClient):
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "500 Internal Server Error")
+
+    c = FailingGet(_bare_form_draft())
+    got = apply_required(c, "F1", ("a",))
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_required_put_draft_error_returns_err() -> None:
+    class FailingPut(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            return Err("conflict", "version conflict")
+
+    c = FailingPut(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    got = apply_required(c, "F1", ("a",))
+    assert isinstance(got, Err) and got.kind == "conflict"
+
+
+def test_apply_required_read_back_error_returns_err() -> None:
+    class FailingReadBack(FakeClient):
+        def __init__(self, draft: dict):
+            super().__init__(draft)
+            self._reads = 0
+
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            self._reads += 1
+            if self._reads > 1:
+                return Err("http", "readback failed")
+            return self.draft
+
+    c = FailingReadBack(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    got = apply_required(c, "F1", ("a",))
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_required_publish_error_returns_err() -> None:
+    class FailingPublish(FakeClient):
+        def publish(self, kind, flow_id):  # type: ignore[override]
+            return Err("publish", "publish rejected")
+
+    c = FailingPublish(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    got = apply_required(c, "F1", ("a",), publish=True)
+    assert isinstance(got, Err) and got.kind == "publish"
+
+
+def test_apply_required_publish_success() -> None:
+    c = FakeClient(_form_with(FieldSpec(name="a", type=FieldType.TEXT)))
+    rep = apply_required(c, "F1", ("a",), publish=True)
+    assert isinstance(rep, RequiredReport)
+    assert rep.published is True and c.published is True
+
+
 def test_apply_field_events_unknown_field_still_gets_set_field_events_own_message() -> None:
     """The derivation must not steal a refusal it states worse: an unknown NAME with a stated
     trigger falls through to `set_field_events`, which names the field precisely."""
@@ -2790,6 +3285,126 @@ def test_a_section_covered_only_by_field_level_overrides_is_not_uncovered() -> N
     assert rep.as_tool_result()["uncovered_sections"] == []
 
 
+def test_apply_step_permissions_initial_get_draft_error() -> None:
+    class FailingGet(FakeClient):
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "flow not found")
+
+    c = FailingGet(_bare_process_draft())
+    got = apply_step_permissions(c, "F1", {})
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_step_permissions_offline_validation_error() -> None:
+    c = FakeClient(_bare_process_draft())
+    invalid_matrix = {"NonexistentSection": {"Start": "Editable"}}
+    got = apply_step_permissions(c, "F1", invalid_matrix)
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "offline apply rejected the matrix" in got.message
+
+
+def test_apply_step_permissions_put_draft_error() -> None:
+    from kfforge.graph import progressive_matrix
+
+    class FailingPut(FakeClient):
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            return Err("conflict", "version mismatch")
+
+    d = _wide_matrix_draft()
+    c = FailingPut(d)
+    got = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS))
+    assert isinstance(got, Err) and got.kind == "conflict"
+
+
+def test_apply_step_permissions_read_back_error() -> None:
+    from kfforge.graph import progressive_matrix
+
+    class FailingReadBack(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self._reads = 0
+
+        def get_draft(self, kind, flow_id):  # type: ignore[override]
+            self._reads += 1
+            if self._reads > 1:
+                return Err("http", "read-back failed")
+            return self.draft
+
+    d = _wide_matrix_draft()
+    c = FailingReadBack(d)
+    got = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS))
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_step_permissions_publish_success() -> None:
+    from kfforge.graph import progressive_matrix
+
+    d = _wide_matrix_draft()
+    c = FakeClient(d)
+    rep = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS), publish=True)
+    assert isinstance(rep, StepPermissionReport)
+    assert rep.published is True
+    assert c.published is True
+
+
+def test_apply_step_permissions_publish_error() -> None:
+    from kfforge.graph import progressive_matrix
+
+    class FailingPublish(FakeClient):
+        def publish(self, kind, flow_id):  # type: ignore[override]
+            return Err("http", "publish 500")
+
+    d = _wide_matrix_draft()
+    c = FailingPublish(d)
+    got = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS), publish=True)
+    assert isinstance(got, Err) and got.kind == "http"
+
+
+def test_apply_step_permissions_publish_skipped_on_missing_pairs() -> None:
+    from kfforge.graph import progressive_matrix
+
+    class DroppingPublish(FakeClient):
+        def __init__(self, draft: dict) -> None:
+            super().__init__(draft)
+            self.published = False
+
+        def put_draft(self, kind, flow_id, new, expect_version):  # type: ignore[override]
+            got = super().put_draft(kind, flow_id, new, expect_version)
+            acts = [k for k, v in self.draft.items()
+                    if isinstance(v, dict) and v.get("Kind") == "Activity"
+                    and v.get("Name") == "Assess unit"]
+            for pid in [k for k, v in list(self.draft.items())
+                        if isinstance(v, dict) and v.get("Kind") == "Permission"
+                        and v.get("Activity") == acts[0]]:
+                del self.draft[pid]
+            return got
+
+        def publish(self, kind, flow_id):  # type: ignore[override]
+            self.published = True
+
+    d = _wide_matrix_draft()
+    c = DroppingPublish(d)
+    rep = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS), publish=True)
+    assert isinstance(rep, StepPermissionReport)
+    assert rep.published is False
+    assert c.published is False
+    assert rep.missing != ()
+
+
+def test_apply_step_permissions_include_pairs_payload() -> None:
+    from kfforge.graph import progressive_matrix
+
+    d = _wide_matrix_draft()
+    c = FakeClient(d)
+    rep = apply_step_permissions(c, "F1", progressive_matrix(d, _WIDE_OWNERS), include_pairs=True)
+    assert isinstance(rep, StepPermissionReport)
+    assert rep.include_pairs is True
+    res = rep.as_tool_result()
+    assert "pairs" in res
+    assert "added" in res["pairs"]
+    assert "verified" in res["pairs"]
+
+
 # ---- S4(a): forge_create_process must state what the template brought in -----------------------
 
 
@@ -3199,3 +3814,314 @@ def test_group_regrant_proceeds_with_explicit_override() -> None:
 
     assert isinstance(rep, RoleUsersReport)
     assert c.body is not None and c.body.get("Groups"), "override must still issue the write"
+
+
+# ---- apply_sequence_number tests ------------------------------------------
+
+def test_apply_sequence_number_success() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    c = FakeClient(draft)
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step)
+    assert isinstance(rep, SequenceNumberReport)
+    assert rep.flow_id == "F1"
+    assert rep.field_name == "Case ID"
+    assert rep.section == section
+    assert rep.verified is True
+    assert rep.missing is False
+    assert rep.published is False
+    assert rep.meta_version == "v2"
+    res = rep.as_tool_result()
+    assert res["isError"] is False
+    assert res["verified"] is True
+    assert res["missing"] is False
+    assert res["published"] is False
+    assert res["field_name"] == "Case ID"
+    assert res["section"] == section
+
+
+def test_apply_sequence_number_with_publish() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    c = FakeClient(draft)
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step, publish=True)
+    assert isinstance(rep, SequenceNumberReport)
+    assert rep.verified is True
+    assert rep.published is True
+    assert c.published is True
+
+
+def test_apply_sequence_number_initial_get_draft_err() -> None:
+    c = FakeClient(_bare_process_draft())
+    c.get_draft = lambda kind, flow_id: Err("network", "initial get failed")  # type: ignore[assignment]
+    rep = apply_sequence_number(c, "F1", "Case ID", "Section", "CS-", "0001", "Step")
+    assert isinstance(rep, Err)
+    assert rep.message == "initial get failed"
+
+
+def test_apply_sequence_number_offline_validation_err() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    c = FakeClient(draft)
+    rep = apply_sequence_number(c, "F1", "Case ID", "NonExistentSection", "CS-", "0001", "Start")
+    assert isinstance(rep, Err)
+    assert rep.kind == "verify"
+    assert "offline add_sequence_number rejected the spec" in rep.message
+
+
+def test_apply_sequence_number_put_draft_err() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    c = FakeClient(draft)
+    c.put_draft = lambda kind, flow_id, new, expect_version: Err("network", "put failed")  # type: ignore[assignment]
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step)
+    assert isinstance(rep, Err)
+    assert rep.message == "put failed"
+
+
+def test_apply_sequence_number_read_back_err() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    c = FakeClient(draft)
+    get_count = 0
+
+    def fail_second_get(kind: str, flow_id: str) -> dict | Err:
+        nonlocal get_count
+        get_count += 1
+        if get_count > 1:
+            return Err("network", "read back failed")
+        return c.draft
+
+    c.get_draft = fail_second_get  # type: ignore[assignment]
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step)
+    assert isinstance(rep, Err)
+    assert rep.message == "read back failed"
+
+
+def test_apply_sequence_number_publish_err() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+    c = FakeClient(draft)
+    c.publish = lambda kind, flow_id: Err("network", "publish failed")  # type: ignore[assignment]
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step, publish=True)
+    assert isinstance(rep, Err)
+    assert rep.message == "publish failed"
+
+
+def test_apply_sequence_number_verification_branches() -> None:
+    from synthetic import synthetic_process_draft
+    draft = synthetic_process_draft()
+    step = next(v["Name"] for v in draft.values()
+                if isinstance(v, dict) and v.get("Kind") == "Activity"
+                and v.get("NodeType") == "UserTask")
+    section = next(v["Name"] for v in draft.values()
+                   if isinstance(v, dict) and v.get("Kind") == "Column"
+                   and v.get("Type") == "Section" and v.get("Name"))
+
+    class BrokenPropsClient(FakeClient):
+        def get_draft(self, kind: str, flow_id: str) -> dict | Err:
+            d = super().get_draft(kind, flow_id)
+            if isinstance(d, dict) and self.puts > 0:
+                for v in d.values():
+                    if isinstance(v, dict) and v.get("Type") == "SequenceNumber":
+                        v["Field::Property"] = ["only_one_prop"]
+            return d
+
+    c = BrokenPropsClient(draft)
+    rep = apply_sequence_number(c, "F1", "Case ID", section, "CS-", "0001", step, publish=True)
+    assert isinstance(rep, SequenceNumberReport)
+    assert rep.verified is False
+    assert rep.missing is True
+    assert rep.published is False
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_is_sequence_field_and_verify_helpers() -> None:
+    assert _is_sequence_field("not_a_dict", "ID") is False
+    assert _is_sequence_field({"Kind": "Model"}, "ID") is False
+    assert _is_sequence_field({"Kind": "Field", "Type": "Text", "Name": "ID"}, "ID") is False
+    assert _is_sequence_field({"Kind": "Field", "Type": "SequenceNumber", "Name": "Other"}, "ID") is False
+    assert _is_sequence_field({"Kind": "Field", "Type": "SequenceNumber", "Name": "ID"}, "ID") is True
+
+    assert _verify_sequence_number({}, "ID") is False
+    assert _verify_sequence_number({
+        "F1": {"Kind": "Field", "Type": "SequenceNumber", "Name": "ID", "Field::Property": ["p1", "p2"]}
+    }, "ID") is False
+    assert _verify_sequence_number({
+        "F1": {"Kind": "Field", "Type": "SequenceNumber", "Name": "ID", "Field::Property": ["p1", "p2", "p3"]}
+    }, "ID") is True
+
+    c = FakeClient(_bare_process_draft())
+    assert _publish_sequence_flow(c, "process", "F1", publish=False, verified=True) is False
+    assert _publish_sequence_flow(c, "process", "F1", publish=True, verified=False) is False
+    assert _publish_sequence_flow(c, "process", "F1", publish=True, verified=True) is True
+
+
+def test_add_role_users_role_get_error() -> None:
+    c = _FakeRoleClient()
+    c.get_app_role = lambda role_id: Err("net", "network error")  # type: ignore[assignment]
+    got = apply_add_role_users(c, "R1", user_query="Somchai")
+    assert isinstance(got, Err) and got.kind == "net"
+
+
+def test_add_role_users_assignee_get_error() -> None:
+    c = _FakeRoleClient()
+    c.get_assignee = lambda q: Err("net", "assignee lookup failed")  # type: ignore[assignment]
+    got = apply_add_role_users(c, "R1", user_query="Somchai")
+    assert isinstance(got, Err) and got.kind == "net"
+
+
+def test_add_role_users_put_error() -> None:
+    c = _FakeRoleClient()
+    c.put_app_role = lambda role_id, body, app_id=None: Err("net", "write failed")  # type: ignore[assignment]
+    got = apply_add_role_users(c, "R1", user_ids=[{"_id": "U1", "Kind": "User", "Name": "Ann"}])
+    assert isinstance(got, Err) and got.kind == "net"
+
+
+def test_add_role_users_readback_error() -> None:
+    c = _FakeRoleClient()
+    calls = 0
+
+    def fake_get_role(role_id):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return Err("net", "readback failed")
+        return {"_id": role_id, "Name": "Role", "Members": [], "UserCount": 0, "GroupCount": 0}
+
+    c.get_app_role = fake_get_role  # type: ignore[assignment]
+    got = apply_add_role_users(c, "R1", user_ids=[{"_id": "U1", "Kind": "User", "Name": "Ann"}])
+    assert isinstance(got, Err) and got.kind == "net"
+
+
+def test_add_role_users_readback_unverified_user() -> None:
+    c = _FakeRoleClient()
+    c.get_app_role = lambda role_id: {"_id": role_id, "Name": "Role", "Members": [], "UserCount": 0, "GroupCount": 0}  # type: ignore[assignment]
+    rep = apply_add_role_users(c, "R1", user_ids=[{"_id": "U1", "Kind": "User", "Name": "Ann"}])
+    assert isinstance(rep, RoleUsersReport)
+    assert rep.added == ()
+    assert rep.not_found == ("U1",)
+    assert rep.as_tool_result()["isError"] is True
+
+
+def test_add_role_users_with_existing_and_live_group_list() -> None:
+    c = _FakeRoleClient()
+    c.detail["Groups"] = [{"_id": "g_old", "Kind": "Group", "Name": "Old Group"}]
+    calls = 0
+
+    def fake_get_role(role_id):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return {
+                "_id": role_id, "Name": "Role", "Members": [], "UserCount": 0,
+                "Groups": [{"_id": "g_old", "Kind": "Group"}, {"_id": "g_new", "Kind": "Group"}],
+                "GroupCount": 2,
+            }
+        return dict(c.detail)
+
+    c.get_app_role = fake_get_role  # type: ignore[assignment]
+    rep = apply_add_role_users(
+        c, "R1",
+        groups=[{"_id": "g_old", "Kind": "Group"}, {"_id": "g_new", "Kind": "Group"}, {"_id": "g_missing", "Kind": "Group"}],
+        confirm_group_notification=True,
+    )
+    assert isinstance(rep, RoleUsersReport)
+    assert rep.groups_already_present == ("g_old",)
+    assert rep.groups_added == ("g_new",)
+    assert rep.groups_unverified == ("g_missing",)
+
+
+def test_add_role_users_group_notification_name_formatting() -> None:
+    c = _FakeRoleClient()
+    got = apply_add_role_users(
+        c, "R1",
+        groups=[{"_id": "gid_only"}, "not_a_dict"],  # type: ignore[list-item]
+    )
+    assert isinstance(got, Err) and got.kind == "verify"
+    assert "gid_only" in got.message
+
+    got_unnamed = apply_add_role_users(
+        c, "R1",
+        groups=["invalid"],  # type: ignore[list-item]
+    )
+    assert isinstance(got_unnamed, Err) and got_unnamed.kind == "verify"
+    assert "<unnamed>" in got_unnamed.message
+
+
+def test_add_role_users_no_existing_groups_note() -> None:
+    c = _FakeRoleClient(group_count=0)
+    calls = 0
+
+    def fake_get_role(role_id):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return {"_id": role_id, "Name": "Role", "Members": [], "UserCount": 0, "GroupCount": 1}
+        return {"_id": role_id, "Name": "Role", "Members": [], "UserCount": 0, "GroupCount": 0}
+
+    c.get_app_role = fake_get_role  # type: ignore[assignment]
+    rep = apply_add_role_users(
+        c, "R1",
+        groups=[{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}],
+        confirm_group_notification=True,
+    )
+    assert isinstance(rep, RoleUsersReport)
+    assert rep.groups_added == ("everyone",)
+    assert "verified by GroupCount 0 -> 1 only" in (rep.groups_note or "")
+
+
+def test_add_role_users_live_groups_with_no_initial_existing_groups_note() -> None:
+    c = _FakeRoleClient(group_count=0)
+    calls = 0
+
+    def fake_get_role(role_id):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return {
+                "_id": role_id, "Name": "Role", "Members": [], "UserCount": 0,
+                "Groups": [{"_id": "g_new", "Kind": "Group"}],
+                "GroupCount": 1,
+            }
+        return {"_id": role_id, "Name": "Role", "Members": [], "UserCount": 0, "GroupCount": 0}
+
+    c.get_app_role = fake_get_role  # type: ignore[assignment]
+    rep = apply_add_role_users(
+        c, "R1",
+        groups=[{"_id": "g_new", "Kind": "Group"}],
+        confirm_group_notification=True,
+    )
+    assert isinstance(rep, RoleUsersReport)
+    assert rep.groups_added == ("g_new",)
+    assert "existing groups could not be enumerated" in (rep.groups_note or "")

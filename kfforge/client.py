@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 from collections import Counter
 from collections.abc import Iterable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -1278,6 +1279,226 @@ def _permission_rollup(pairs: Iterable[tuple[str, str]], names: _PairNames,
                  for key, (n, ok, bad) in sorted(buckets.items()))
 
 
+@dataclass(frozen=True)
+class _StepPermissionDeltas:
+    added: tuple[str, ...]
+    skipped: tuple[str, ...]
+    added_named: tuple[str, ...]
+    skipped_named: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _StepPermissionAudit:
+    verified_pairs: set[tuple[str, str]]
+    missing_pairs: set[tuple[str, str]]
+    verified: tuple[str, ...]
+    missing: tuple[str, ...]
+    missing_named: tuple[str, ...]
+    verified_named: tuple[str, ...]
+
+
+def _format_pairs(pairs: Iterable[tuple[str, str]]) -> tuple[str, ...]:
+    return tuple(sorted(f"{c}@{a}" for c, a in pairs))
+
+
+def _format_named_pairs(names: _PairNames, pairs: Iterable[tuple[str, str]]) -> tuple[str, ...]:
+    return tuple(sorted(names.pair(c, a) for c, a in pairs))
+
+
+def _prepare_step_permissions(
+    draft: Draft,
+    matrix: Matrix,
+    field_matrix: Matrix | None,
+) -> Draft | Err:
+    try:
+        return set_step_permissions(draft, matrix, field_matrix)
+    except ValueError as e:
+        return Err("verify", f"offline apply rejected the matrix: {e}")
+
+
+def _fetch_and_prepare_step_permissions(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    matrix: Matrix,
+    field_matrix: Matrix | None,
+) -> tuple[Draft, Draft] | Err:
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    new = _prepare_step_permissions(draft, matrix, field_matrix)
+    if isinstance(new, Err):
+        return new
+    return draft, new
+
+
+def _put_and_read_back_draft(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    new: Draft,
+    version: Any,
+) -> Draft | Err:
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+    return client.get_draft(kind, flow_id)
+
+
+def _malformed_permission_collateral(draft: Draft) -> tuple[str, ...]:
+    return tuple(
+        f"deleted malformed Permission {nid} (no readable Column/Activity pair) — it was never "
+        "in the before-matrix and no rebuilt pair replaces it"
+        for nid in _malformed_permissions(draft)
+    )
+
+
+def _step_permission_collateral(
+    draft: Draft,
+    before: dict[tuple[str, str], str],
+    wanted: dict[tuple[str, str], str],
+    names: _PairNames,
+) -> tuple[str, ...]:
+    dropped: list[str] = []
+    for (c, a), v in before.items():
+        if (c, a) not in wanted:
+            dropped.append(
+                f"deleted Permission {c}@{a} ({names.pair(c, a)}) (was {v!r}) — the rebuild covers this "
+                "pair no longer"
+            )
+    return tuple(sorted(dropped)) + _malformed_permission_collateral(draft)
+
+
+def _step_permission_deltas(
+    before: dict[tuple[str, str], str],
+    wanted: dict[tuple[str, str], str],
+    names: _PairNames,
+) -> _StepPermissionDeltas:
+    added_pairs: list[tuple[str, str]] = []
+    skipped_pairs: list[tuple[str, str]] = []
+    for pair, v in wanted.items():
+        if before.get(pair) == v:
+            skipped_pairs.append(pair)
+        else:
+            added_pairs.append(pair)
+    return _StepPermissionDeltas(
+        added=_format_pairs(added_pairs),
+        skipped=_format_pairs(skipped_pairs),
+        added_named=_format_named_pairs(names, added_pairs),
+        skipped_named=_format_named_pairs(names, skipped_pairs),
+    )
+
+
+def _audit_step_permissions(
+    wanted: dict[tuple[str, str], str],
+    live: dict[tuple[str, str], str],
+    names: _PairNames,
+) -> _StepPermissionAudit:
+    verified_pairs: set[tuple[str, str]] = set()
+    missing_pairs: set[tuple[str, str]] = set()
+    for pair, v in wanted.items():
+        if live.get(pair) == v:
+            verified_pairs.add(pair)
+        else:
+            missing_pairs.add(pair)
+    return _StepPermissionAudit(
+        verified_pairs=verified_pairs,
+        missing_pairs=missing_pairs,
+        verified=_format_pairs(verified_pairs),
+        missing=_format_pairs(missing_pairs),
+        missing_named=_format_named_pairs(names, missing_pairs),
+        verified_named=_format_named_pairs(names, verified_pairs),
+    )
+
+
+def _publish_flow(client: KfClient, kind: FlowKind, flow_id: str) -> bool | Err:
+    pub = client.publish(kind, flow_id)
+    if isinstance(pub, Err):
+        return pub
+    return True
+
+
+def _publish_if_clean(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    publish: bool,
+    missing: tuple[str, ...],
+) -> bool | Err:
+    if publish and not missing:
+        return _publish_flow(client, kind, flow_id)
+    return False
+
+
+def _assemble_step_permission_report(
+    flow_id: str,
+    draft: Draft,
+    read_back: Draft,
+    matrix: Matrix,
+    field_matrix: Matrix | None,
+    names: _PairNames,
+    wanted: dict[tuple[str, str], str],
+    audit: _StepPermissionAudit,
+    published: bool,
+    include_pairs: bool,
+) -> StepPermissionReport:
+    before = _permission_pairs(draft)
+    deltas = _step_permission_deltas(before, wanted, names)
+    collateral = _step_permission_collateral(draft, before, wanted, names)
+    remediation = ("forge_set_visibility",) if collateral else ()
+    return StepPermissionReport(
+        flow_id=flow_id,
+        added=deltas.added,
+        skipped=deltas.skipped,
+        verified=audit.verified,
+        missing=audit.missing,
+        changed_ignored=(),
+        collateral=collateral,
+        remediation=remediation,
+        meta_version=read_back.get(_META_VERSION),
+        published=published,
+        by_section=_permission_rollup(wanted, names, audit.verified_pairs, audit.missing_pairs, "section"),
+        by_step=_permission_rollup(wanted, names, audit.verified_pairs, audit.missing_pairs, "step"),
+        uncovered_sections=_uncovered_sections(draft, matrix, field_matrix),
+        missing_named=audit.missing_named,
+        added_named=deltas.added_named,
+        skipped_named=deltas.skipped_named,
+        verified_named=audit.verified_named,
+        include_pairs=include_pairs,
+    )
+
+
+def _publish_and_assemble_step_permissions(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    draft: Draft,
+    read_back: Draft,
+    matrix: Matrix,
+    field_matrix: Matrix | None,
+    names: _PairNames,
+    wanted: dict[tuple[str, str], str],
+    audit: _StepPermissionAudit,
+    publish: bool,
+    include_pairs: bool,
+) -> StepPermissionReport | Err:
+    published = _publish_if_clean(client, kind, flow_id, publish, audit.missing)
+    if isinstance(published, Err):
+        return published
+    return _assemble_step_permission_report(
+        flow_id=flow_id,
+        draft=draft,
+        read_back=read_back,
+        matrix=matrix,
+        field_matrix=field_matrix,
+        names=names,
+        wanted=wanted,
+        audit=audit,
+        published=published,
+        include_pairs=include_pairs,
+    )
+
+
 def apply_step_permissions(
     client: KfClient,
     flow_id: str,
@@ -1305,76 +1526,31 @@ def apply_step_permissions(
     the rollups stand in for. See `StepPermissionReport` for why, and what `include_pairs=True`
     adds back.
     """
-    draft = client.get_draft(kind, flow_id)
-    if isinstance(draft, Err):
-        return draft
-
-    before = _permission_pairs(draft)
-    version = draft.get(_META_VERSION)
-
-    try:
-        new = set_step_permissions(draft, matrix, field_matrix)
-    except ValueError as e:
-        return Err("verify", f"offline apply rejected the matrix: {e}")
-
-    names = _pair_names(draft)
+    prep = _fetch_and_prepare_step_permissions(client, kind, flow_id, matrix, field_matrix)
+    if isinstance(prep, Err):
+        return prep
+    draft, new = prep
     wanted = _permission_pairs(new)
-    skipped = tuple(sorted(f"{c}@{a}" for (c, a), v in wanted.items() if before.get((c, a)) == v))
-    added = tuple(sorted(f"{c}@{a}" for (c, a), v in wanted.items() if before.get((c, a)) != v))
-    collateral = tuple(sorted(
-        f"deleted Permission {c}@{a} ({names.pair(c, a)}) (was {v!r}) — the rebuild covers this "
-        f"pair no longer"
-        for (c, a), v in before.items() if (c, a) not in wanted
-    )) + tuple(
-        f"deleted malformed Permission {nid} (no readable Column/Activity pair) — it was never "
-        "in the before-matrix and no rebuilt pair replaces it"
-        for nid in _malformed_permissions(draft)
-    )
-
-    written = client.put_draft(kind, flow_id, new, expect_version=version)
-    if isinstance(written, Err):
-        return written
-
-    read_back = client.get_draft(kind, flow_id)
+    read_back = _put_and_read_back_draft(client, kind, flow_id, new, draft.get(_META_VERSION))
     if isinstance(read_back, Err):
         return read_back
+
+    names = _pair_names(draft)
     live = _permission_pairs(read_back)
-    verified_pairs = {(c, a) for (c, a), v in wanted.items() if live.get((c, a)) == v}
-    missing_pairs = {(c, a) for (c, a), v in wanted.items() if live.get((c, a)) != v}
-    verified = tuple(sorted(f"{c}@{a}" for c, a in verified_pairs))
-    missing = tuple(sorted(f"{c}@{a}" for c, a in missing_pairs))
+    audit = _audit_step_permissions(wanted, live, names)
 
-    published = False
-    if publish and not missing:
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
-
-    # Names come off the PRE-write draft, which is the graph both `before` and `wanted` were read
-    # from — the read-back can no longer name a column the rebuild dropped, and `collateral` is
-    # exactly the bucket that needs those names.
-    def _named(keys: Iterable[tuple[str, str]]) -> tuple[str, ...]:
-        return tuple(sorted(names.pair(c, a) for c, a in keys))
-
-    return StepPermissionReport(
+    return _publish_and_assemble_step_permissions(
+        client=client,
+        kind=kind,
         flow_id=flow_id,
-        added=added,
-        skipped=skipped,
-        verified=verified,
-        missing=missing,
-        changed_ignored=(),   # a matrix is rebuilt wholesale — nothing to silently ignore
-        collateral=collateral,
-        remediation=("forge_set_visibility",) if collateral else (),
-        meta_version=read_back.get(_META_VERSION),
-        published=published,
-        by_section=_permission_rollup(wanted, names, verified_pairs, missing_pairs, "section"),
-        by_step=_permission_rollup(wanted, names, verified_pairs, missing_pairs, "step"),
-        uncovered_sections=_uncovered_sections(draft, matrix, field_matrix),
-        missing_named=_named(missing_pairs),
-        added_named=_named((c, a) for (c, a), v in wanted.items() if before.get((c, a)) != v),
-        skipped_named=_named((c, a) for (c, a), v in wanted.items() if before.get((c, a)) == v),
-        verified_named=_named(verified_pairs),
+        draft=draft,
+        read_back=read_back,
+        matrix=matrix,
+        field_matrix=field_matrix,
+        names=names,
+        wanted=wanted,
+        audit=audit,
+        publish=publish,
         include_pairs=include_pairs,
     )
 
@@ -1456,6 +1632,146 @@ def apply_fields(
 # =====================================================================================
 
 
+def _transform_fields_and_layout(
+    draft: Draft,
+    specs: list[FieldSpec],
+    groups: list[tuple[str, list[str]]] | None,
+) -> Draft | Err:
+    try:
+        new = apply_changes(draft, specs)
+        if groups:
+            return regroup_into_sections(new, merge_groups(new, groups))
+        return new
+    except (ValueError, NotImplementedError) as e:
+        return Err("verify", f"offline apply rejected the change set: {e}")
+
+
+def _write_fields_and_layout_draft(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    draft: Draft,
+    new: Draft,
+    added: tuple[str, ...],
+    groups: list[tuple[str, list[str]]] | None,
+) -> Draft | None | Err:
+    if not (added or groups):
+        return None
+    return client.put_draft(kind, flow_id, new, expect_version=draft.get(_META_VERSION))
+
+
+def _partition_names(
+    names: list[str],
+    present: AbstractSet[str],
+    excluded: AbstractSet[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    in_bucket: list[str] = []
+    out_bucket: list[str] = []
+    for n in names:
+        if n not in present:
+            out_bucket.append(n)
+        elif n not in excluded:
+            in_bucket.append(n)
+    return tuple(in_bucket), tuple(out_bucket)
+
+
+def _publish_fields_and_layout(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    publish: bool,
+    can_publish: bool,
+) -> bool | Err:
+    if not (publish and can_publish):
+        return False
+    pub = client.publish(kind, flow_id)
+    return pub if isinstance(pub, Err) else True
+
+
+def _build_apply_fields_report(
+    flow_id: str,
+    draft: Draft,
+    read_back: Draft,
+    ignored: _IgnoredChanges,
+    added: tuple[str, ...],
+    skipped: tuple[str, ...],
+    verified: tuple[str, ...],
+    missing: tuple[str, ...],
+    published: bool,
+) -> ApplyReport:
+    collateral = _layout_collateral(draft, read_back, exclude=added)
+    remediation = ignored.remediation + (("forge_apply_layout",) if collateral else ())
+    return ApplyReport(
+        flow_id=flow_id,
+        added=added,
+        skipped=skipped,
+        verified=verified,
+        missing=missing,
+        changed_ignored=ignored.entries,
+        collateral=collateral,
+        remediation=remediation,
+        meta_version=read_back.get(_META_VERSION),
+        published=published,
+    )
+
+
+def _prepare_fields_and_layout(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    specs: list[FieldSpec],
+    groups: list[tuple[str, list[str]]] | None,
+) -> tuple[Draft, Draft] | Err:
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    new = _transform_fields_and_layout(draft, specs, groups)
+    if isinstance(new, Err):
+        return new
+    return draft, new
+
+
+def _sync_fields_and_layout(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    draft: Draft,
+    new: Draft,
+    added: tuple[str, ...],
+    groups: list[tuple[str, list[str]]] | None,
+) -> Draft | Err:
+    written = _write_fields_and_layout_draft(
+        client, kind, flow_id, draft, new, added, groups
+    )
+    if isinstance(written, Err):
+        return written
+    return client.get_draft(kind, flow_id)
+
+
+def _finalize_fields_and_layout(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    draft: Draft,
+    read_back: Draft,
+    specs: list[FieldSpec],
+    ignored: _IgnoredChanges,
+    added: tuple[str, ...],
+    skipped: tuple[str, ...],
+    publish: bool,
+) -> ApplyReport | Err:
+    live_names = field_names(read_back)
+    req_names = [s.name for s in specs]
+    verified, missing = _partition_names(req_names, live_names, ignored.names)
+    can_pub = not (missing or ignored.entries)
+    published = _publish_fields_and_layout(client, kind, flow_id, publish, can_pub)
+    if isinstance(published, Err):
+        return published
+    return _build_apply_fields_report(
+        flow_id, draft, read_back, ignored, added, skipped, verified, missing, published
+    )
+
+
 def apply_fields_and_layout(
     client: KfClient,
     kind: FlowKind,
@@ -1484,49 +1800,20 @@ def apply_fields_and_layout(
     measured on the read-back against the pre-write draft (`_layout_collateral`), with
     `forge_apply_layout` in `remediation`.
     """
-    draft = client.get_draft(kind, flow_id)
-    if isinstance(draft, Err):
-        return draft
-
-    before = field_names(draft)
-    version = draft.get(_META_VERSION)
-    requested = [s.name for s in specs]
+    prep = _prepare_fields_and_layout(client, kind, flow_id, specs, groups)
+    if isinstance(prep, Err):
+        return prep
+    draft, new = prep
     ignored = _changed_ignored(draft, specs)
-    skipped = tuple(n for n in requested if n in before and n not in ignored.names)
-
-    try:
-        new = apply_changes(draft, specs)
-        if groups:
-            new = regroup_into_sections(new, merge_groups(new, groups))
-    except (ValueError, NotImplementedError) as e:
-        return Err("verify", f"offline apply rejected the change set: {e}")
-
-    added = tuple(n for n in requested if n not in before)
-    if added or groups:
-        written = client.put_draft(kind, flow_id, new, expect_version=version)
-        if isinstance(written, Err):
-            return written
-
-    read_back = client.get_draft(kind, flow_id)
+    req_names = [s.name for s in specs]
+    skipped, added = _partition_names(req_names, field_names(draft), ignored.names)
+    read_back = _sync_fields_and_layout(
+        client, kind, flow_id, draft, new, added, groups
+    )
     if isinstance(read_back, Err):
         return read_back
-    live_names = field_names(read_back)
-    verified = tuple(n for n in requested if n in live_names and n not in ignored.names)
-    missing = tuple(n for n in requested if n not in live_names)
-    collateral = _layout_collateral(draft, read_back, exclude=added)
-
-    published = False
-    if publish and not (missing or ignored.entries):
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
-
-    return ApplyReport(
-        flow_id=flow_id, added=added, skipped=skipped, verified=verified, missing=missing,
-        changed_ignored=ignored.entries, collateral=collateral,
-        remediation=ignored.remediation + (("forge_apply_layout",) if collateral else ()),
-        meta_version=read_back.get(_META_VERSION), published=published,
+    return _finalize_fields_and_layout(
+        client, kind, flow_id, draft, read_back, specs, ignored, added, skipped, publish
     )
 
 
@@ -1692,6 +1979,150 @@ def apply_word_list(
     )
 
 
+def _is_table_host(node: Any, name: str) -> bool:
+    if not isinstance(node, dict):
+        return False
+    return node.get("Type") == "Model" and node.get("Name") == name
+
+
+def _find_table_host(draft: Draft, name: str) -> dict[str, Any] | None:
+    for node in draft.values():
+        if _is_table_host(node, name):
+            return node
+    return None
+
+
+def _table_model_node(draft: Draft, host_col: dict[str, Any]) -> dict[str, Any] | None:
+    table_ids = host_col.get("Column::Model", [])
+    if not table_ids:
+        return None
+    node = draft.get(table_ids[0])
+    if isinstance(node, dict):
+        return node
+    return None
+
+
+def _table_child_field_names(draft: Draft, table_node: dict[str, Any]) -> set[str]:
+    field_ids = table_node.get("Model::Field", [])
+    names: set[str] = set()
+    for fid in field_ids:
+        field = draft.get(fid)
+        if isinstance(field, dict):
+            name = field.get("Name")
+            if name is not None:
+                names.add(name)
+    return names
+
+
+def _table_live_columns(draft: Draft, name: str) -> set[str]:
+    host = _find_table_host(draft, name)
+    if host is None:
+        return set()
+    table_node = _table_model_node(draft, host)
+    if table_node is None:
+        return set()
+    return _table_child_field_names(draft, table_node)
+
+
+def _audit_table_columns(
+    wanted: tuple[str, ...],
+    live: set[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    verified: list[str] = []
+    missing: list[str] = []
+    for col in wanted:
+        if col in live:
+            verified.append(col)
+        else:
+            missing.append(col)
+    return tuple(verified), tuple(missing)
+
+
+def _prepare_table_draft(
+    draft: Draft,
+    name: str,
+    columns: list[tuple[str, str]] | list[tuple[str, str, dict[str, Any] | None]],
+    max_rows: int | None,
+    allow_import: bool,
+    after_section: str | None,
+) -> tuple[Draft, bool] | Err:
+    already = _find_table_host(draft, name) is not None
+    try:
+        new_draft = add_table(
+            draft, name, columns, max_rows=max_rows, allow_import=allow_import,
+            after_section=after_section,
+        )
+    except ValueError as e:
+        return Err("verify", f"offline add_table rejected the spec: {e}")
+    return new_draft, already
+
+
+def _sync_table_changes(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    draft: Draft,
+    name: str,
+    columns: list[tuple[str, str]] | list[tuple[str, str, dict[str, Any] | None]],
+    max_rows: int | None,
+    allow_import: bool,
+    after_section: str | None,
+) -> tuple[bool, Err | None]:
+    prep = _prepare_table_draft(draft, name, columns, max_rows, allow_import, after_section)
+    if isinstance(prep, Err):
+        return False, prep
+    new_draft, already = prep
+    if already:
+        return False, None
+    written = client.put_draft(kind, flow_id, new_draft, expect_version=draft.get(_META_VERSION))
+    if isinstance(written, Err):
+        return False, written
+    return True, None
+
+
+def _publish_table(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    publish: bool,
+    missing: tuple[str, ...],
+) -> tuple[bool, Err | None]:
+    if not publish or missing:
+        return False, None
+    pub = client.publish(kind, flow_id)
+    if isinstance(pub, Err):
+        return False, pub
+    return True, None
+
+
+def _verify_and_publish_table(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    name: str,
+    columns: list[tuple[str, str]] | list[tuple[str, str, dict[str, Any] | None]],
+    created: bool,
+    publish: bool,
+) -> TableReport | Err:
+    read_back = client.get_draft(kind, flow_id)
+    if isinstance(read_back, Err):
+        return read_back
+
+    wanted_cols = tuple(c[0] for c in columns)
+    live_cols = _table_live_columns(read_back, name)
+    verified, missing = _audit_table_columns(wanted_cols, live_cols)
+
+    published, pub_err = _publish_table(client, kind, flow_id, publish, missing)
+    if pub_err is not None:
+        return pub_err
+
+    return TableReport(
+        flow_id=flow_id, table_name=name, created=created, columns=wanted_cols,
+        verified_columns=verified, missing_columns=missing,
+        meta_version=read_back.get(_META_VERSION), published=published,
+    )
+
+
 def apply_table(
     client: KfClient,
     kind: FlowKind,
@@ -1713,55 +2144,14 @@ def apply_table(
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
         return draft
-    version = draft.get(_META_VERSION)
-    wanted_cols = tuple(c[0] for c in columns)
 
-    already = any(isinstance(v, dict) and v.get("Type") == "Model" and v.get("Name") == name
-                 for v in draft.values())
-    try:
-        new = add_table(draft, name, columns, max_rows=max_rows, allow_import=allow_import,
-                        after_section=after_section)
-    except ValueError as e:
-        return Err("verify", f"offline add_table rejected the spec: {e}")
-
-    if not already:
-        written = client.put_draft(kind, flow_id, new, expect_version=version)
-        if isinstance(written, Err):
-            return written
-
-    read_back = client.get_draft(kind, flow_id)
-    if isinstance(read_back, Err):
-        return read_back
-
-    # graph.add_table's OWN idempotency check matches the HOST COLUMN (Type:"Model", Name:<name>)
-    # — the table's own Model node carries Kind:"Model" but no Type key at all. Follow the SAME
-    # path add_table itself uses: host column -> Column::Model[0] -> the real table Model node ->
-    # Model::Field, rather than re-deriving a different (wrong) lookup here.
-    host_col = next((v for v in read_back.values()
-                     if isinstance(v, dict) and v.get("Type") == "Model"
-                     and v.get("Name") == name), None)
-    live_col_names: set[Any] = set()
-    if host_col is not None:
-        table_ids = host_col.get("Column::Model") or []
-        table_node = read_back.get(table_ids[0]) if table_ids else None
-        if table_node is not None:
-            child_field_ids = table_node.get("Model::Field") or []
-            live_col_names = {read_back.get(fid, {}).get("Name") for fid in child_field_ids}
-    verified = tuple(c for c in wanted_cols if c in live_col_names)
-    missing = tuple(c for c in wanted_cols if c not in live_col_names)
-
-    published = False
-    if publish and not missing:
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
-
-    return TableReport(
-        flow_id=flow_id, table_name=name, created=not already, columns=wanted_cols,
-        verified_columns=verified, missing_columns=missing,
-        meta_version=read_back.get(_META_VERSION), published=published,
+    created, sync_err = _sync_table_changes(
+        client, kind, flow_id, draft, name, columns, max_rows, allow_import, after_section
     )
+    if sync_err is not None:
+        return sync_err
+
+    return _verify_and_publish_table(client, kind, flow_id, name, columns, created, publish)
 
 
 @dataclass(frozen=True)
@@ -2478,6 +2868,61 @@ class SequenceNumberReport:
         }
 
 
+def _is_sequence_field(v: Any, name: str) -> bool:
+    return (
+        isinstance(v, dict)
+        and v.get("Kind") == "Field"
+        and v.get("Type") == "SequenceNumber"
+        and v.get("Name") == name
+    )
+
+
+def _verify_sequence_number(draft: Draft, name: str) -> bool:
+    for v in draft.values():
+        if _is_sequence_field(v, name):
+            props = v.get("Field::Property")
+            return isinstance(props, list) and len(props) == 3
+    return False
+
+
+def _publish_sequence_flow(
+    client: KfClient, kind: FlowKind, flow_id: str, publish: bool, verified: bool,
+) -> bool | Err:
+    if not (publish and verified):
+        return False
+    pub = client.publish(kind, flow_id)
+    return pub if isinstance(pub, Err) else True
+
+
+def _save_sequence_draft(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    field_name: str,
+    section_name: str,
+    prefix: str,
+    padding: str,
+    step_activity_name: str,
+    start: int,
+    end: int,
+) -> Draft | Err:
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    version = draft.get(_META_VERSION)
+    try:
+        new = add_sequence_number(
+            draft, field_name, section_name, prefix, padding,
+            step_activity_name, start=start, end=end,
+        )
+    except ValueError as e:
+        return Err("verify", f"offline add_sequence_number rejected the spec: {e}")
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+    return client.get_draft(kind, flow_id)
+
+
 def apply_sequence_number(
     client: KfClient,
     flow_id: str,
@@ -2495,40 +2940,27 @@ def apply_sequence_number(
     guarded PUT -> read-back verify the SequenceNumber Field + its 3 Property nodes landed ->
     optional publish.
     """
-    draft = client.get_draft(kind, flow_id)
-    if isinstance(draft, Err):
-        return draft
-    version = draft.get(_META_VERSION)
-
-    try:
-        new = add_sequence_number(draft, field_name, section_name, prefix, padding,
-                                  step_activity_name, start=start, end=end)
-    except ValueError as e:
-        return Err("verify", f"offline add_sequence_number rejected the spec: {e}")
-
-    written = client.put_draft(kind, flow_id, new, expect_version=version)
-    if isinstance(written, Err):
-        return written
-
-    read_back = client.get_draft(kind, flow_id)
+    read_back = _save_sequence_draft(
+        client, kind, flow_id, field_name, section_name, prefix, padding,
+        step_activity_name, start, end,
+    )
     if isinstance(read_back, Err):
         return read_back
-    fld = next((v for v in read_back.values()
-                if isinstance(v, dict) and v.get("Kind") == "Field"
-                and v.get("Type") == "SequenceNumber" and v.get("Name") == field_name), None)
-    props_ok = bool(fld and len(fld.get("Field::Property") or []) == 3)
-    verified = fld is not None and props_ok
 
-    published = False
-    if publish and verified:
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
+    verified = _verify_sequence_number(read_back, field_name)
+    pub = _publish_sequence_flow(client, kind, flow_id, publish, verified)
+    if isinstance(pub, Err):
+        return pub
 
-    return SequenceNumberReport(flow_id=flow_id, field_name=field_name, section=section_name,
-                                verified=verified, missing=not verified,
-                                meta_version=read_back.get(_META_VERSION), published=published)
+    return SequenceNumberReport(
+        flow_id=flow_id,
+        field_name=field_name,
+        section=section_name,
+        verified=verified,
+        missing=not verified,
+        meta_version=read_back.get(_META_VERSION),
+        published=pub,
+    )
 
 
 @dataclass(frozen=True)
@@ -2552,6 +2984,122 @@ class ValidationReport:
         }
 
 
+def _node_child_ids(draft: Draft, node_id: str, key: str) -> list[str]:
+    node = draft.get(node_id)
+    if not isinstance(node, dict):
+        return []
+    items = node.get(key)
+    return items if isinstance(items, list) else []
+
+
+def _condition_rule(cond: Any) -> tuple[str, str] | None:
+    if isinstance(cond, dict) and isinstance(cond.get("Operator"), str):
+        return (cond["Operator"], str(cond.get("RHSValue")))
+    return None
+
+
+def _criteria_conditions(read_back: Draft, cid: str) -> set[tuple[str, str]]:
+    out: set[tuple[str, str]] = set()
+    for condid in _node_child_ids(read_back, cid, "Criteria::Condition"):
+        rule = _condition_rule(read_back.get(condid))
+        if rule is not None:
+            out.add(rule)
+    return out
+
+
+def _field_live_rules(read_back: Draft, field_node: dict[str, Any]) -> set[tuple[str, str]]:
+    criteria_ids = field_node.get("FieldValidation::Criteria")
+    if not isinstance(criteria_ids, list):
+        return set()
+    live: set[tuple[str, str]] = set()
+    for cid in criteria_ids:
+        live.update(_criteria_conditions(read_back, cid))
+    return live
+
+
+def _field_map(draft: Draft) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for v in draft.values():
+        if isinstance(v, dict) and v.get("Kind") == "Field":
+            out[v.get("Name")] = v
+    return out
+
+
+def _audit_all_field_rules(
+    read_back: Draft,
+    rules: dict[str, list[tuple[str, str]]],
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    by_name = _field_map(read_back)
+    flat: list[tuple[str, str]] = []
+    verified: list[tuple[str, str]] = []
+    for fname, fl_rules in rules.items():
+        flat.extend(fl_rules)
+        live = _field_live_rules(read_back, by_name.get(fname, {}))
+        for rule in fl_rules:
+            if rule in live:
+                verified.append(rule)
+    return flat, verified
+
+
+def _calc_missing(
+    flat: list[tuple[str, str]],
+    verified: list[tuple[str, str]],
+) -> tuple[tuple[str, str], ...]:
+    verified_set = set(verified)
+    missing: list[tuple[str, str]] = []
+    for r in flat:
+        if r not in verified_set:
+            missing.append(r)
+    return tuple(missing)
+
+
+def _apply_field_validation_offline(
+    draft: Draft,
+    rules: dict[str, list[tuple[str, str]]],
+) -> Draft | Err:
+    try:
+        new = draft
+        for fname, fl_rules in rules.items():
+            for operator, value in fl_rules:
+                new = add_field_validation(new, fname, operator, value)
+        return new
+    except ValueError as e:
+        return Err("verify", f"offline add_field_validation rejected the spec: {e}")
+
+
+def _sync_field_validation_draft(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    rules: dict[str, list[tuple[str, str]]],
+) -> Draft | Err:
+    draft = client.get_draft(kind, flow_id)
+    if isinstance(draft, Err):
+        return draft
+    new = _apply_field_validation_offline(draft, rules)
+    if isinstance(new, Err):
+        return new
+    written = client.put_draft(kind, flow_id, new, expect_version=draft.get(_META_VERSION))
+    if isinstance(written, Err):
+        return written
+    return client.get_draft(kind, flow_id)
+
+
+def _publish_validation(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    publish: bool,
+    missing: tuple[tuple[str, str], ...],
+) -> bool | Err:
+    if not publish or bool(missing):
+        return False
+    pub = client.publish(kind, flow_id)
+    if isinstance(pub, Err):
+        return pub
+    return True
+
+
 def apply_field_validation(
     client: KfClient,
     flow_id: str,
@@ -2563,53 +3111,25 @@ def apply_field_validation(
     reusing the field's existing Criteria) -> guarded PUT -> read-back verify each rule landed ->
     optional publish. `rules` is `{field_name: [(operator, value), ...]}`.
     """
-    draft = client.get_draft(kind, flow_id)
-    if isinstance(draft, Err):
-        return draft
-    version = draft.get(_META_VERSION)
-
-    new = draft
-    try:
-        for fname, fl_rules in rules.items():
-            for operator, value in fl_rules:
-                new = add_field_validation(new, fname, operator, value)
-    except ValueError as e:
-        return Err("verify", f"offline add_field_validation rejected the spec: {e}")
-
-    written = client.put_draft(kind, flow_id, new, expect_version=version)
-    if isinstance(written, Err):
-        return written
-
-    read_back = client.get_draft(kind, flow_id)
+    read_back = _sync_field_validation_draft(client, kind, flow_id, rules)
     if isinstance(read_back, Err):
         return read_back
-    by_name = {v.get("Name"): v for v in read_back.values()
-               if isinstance(v, dict) and v.get("Kind") == "Field"}
-    flat: tuple[tuple[str, str], ...] = tuple((op, val) for _, rs in rules.items() for op, val in rs)
-    verified: list[tuple[str, str]] = []
-    for fname, fl_rules in rules.items():
-        fld = by_name.get(fname, {})
-        live: set[tuple[str, str]] = set()
-        for cid in fld.get("FieldValidation::Criteria") or []:
-            for condid in (read_back.get(cid, {}).get("Criteria::Condition") or []):
-                c = read_back.get(condid, {})
-                if isinstance(c.get("Operator"), str):
-                    live.add((c["Operator"], str(c.get("RHSValue"))))
-        for op, val in fl_rules:
-            if (op, val) in live:
-                verified.append((op, val))
-    missing = tuple(r for r in flat if r not in verified)
 
-    published = False
-    if publish and not missing:
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
+    flat, verified = _audit_all_field_rules(read_back, rules)
+    missing = _calc_missing(flat, verified)
+    pub_result = _publish_validation(client, kind, flow_id, publish, missing)
+    if isinstance(pub_result, Err):
+        return pub_result
 
-    return ValidationReport(flow_id=flow_id, field_name=",".join(rules), rules=flat,
-                            verified=tuple(verified), missing=missing,
-                            meta_version=read_back.get(_META_VERSION), published=published)
+    return ValidationReport(
+        flow_id=flow_id,
+        field_name=",".join(rules),
+        rules=tuple(flat),
+        verified=tuple(verified),
+        missing=missing,
+        meta_version=read_back.get(_META_VERSION),
+        published=pub_result,
+    )
 
 
 @dataclass(frozen=True)
@@ -3320,6 +3840,418 @@ class RoleUsersReport:
         return out
 
 
+@dataclass(frozen=True)
+class _PreparedRoleUpdate:
+    detail: dict[str, Any]
+    existing_members: list[dict[str, Any]]
+    existing_groups: list[dict[str, Any]]
+    new_ones: list[dict[str, Any]]
+    new_groups: list[dict[str, Any]]
+    already: tuple[str, ...]
+    groups_already: tuple[str, ...]
+    groups_refused: tuple[str, ...]
+    not_found: tuple[str, ...]
+    blocked_note: str | None
+
+
+def _validate_role_user_args(
+    user_query: str | None,
+    user_ids: list[dict[str, Any]] | None,
+    groups: list[dict[str, Any]] | None,
+) -> Err | None:
+    if not any((user_query is not None, bool(user_ids), bool(groups))):
+        return Err("verify", "apply_add_role_users: give user_query, user_ids or groups")
+    return None
+
+
+def _group_display_name(g: Any) -> str:
+    if isinstance(g, dict):
+        return str(g.get("Name") or g.get("_id") or "")
+    return ""
+
+
+def _format_group_names(groups: list[dict[str, Any]]) -> str:
+    names = [name for g in groups if (name := _group_display_name(g))]
+    return ", ".join(names) or "<unnamed>"
+
+
+def _validate_role_group_notification(
+    groups: list[dict[str, Any]] | None,
+    confirm: bool,
+) -> Err | None:
+    if not groups or confirm:
+        return None
+    named = _format_group_names(groups)
+    return Err(
+        "verify",
+        f"refusing to grant group(s) [{named}] without confirm_group_notification=True — "
+        f"Kissflow FANS OUT A NOTIFICATION TO EVERY MEMBER the moment the grant lands, and on "
+        f"a whole-tenant group that is every person in the account (CLAUDE.md Members first: "
+        f"this happened, 2026-08-20). AND IT CANNOT BE UNDONE: membership writes are ADD-ONLY "
+        f"— nine removal shapes were probed live and none of them remove a group, so the only "
+        f"recovery is to build a REPLACEMENT role, re-point the workflow assignees at it, "
+        f"rebuild the visibility matrix that re-point wipes, and delete the polluted role. "
+        f"To TEST this tool, grant ONE named developer instead: user_query='<your name>'. "
+        f"Pass confirm_group_notification=True only after a human has confirmed the actual "
+        f"recipient list, the same as sending mail.",
+    )
+
+
+def _is_valid_group_dict(g: Any) -> bool:
+    return isinstance(g, dict) and bool(g.get("_id"))
+
+
+def _validate_role_groups_shape(groups: list[dict[str, Any]] | None) -> Err | None:
+    for g in groups or ():
+        if not _is_valid_group_dict(g):
+            return Err(
+                "verify",
+                f"apply_add_role_users: each group must be an assignee-shaped dict with an "
+                f"_id, e.g. {{'_id': 'everyone', 'Kind': 'Group', 'Name': 'Everyone'}} — got "
+                f"{g!r}",
+            )
+    return None
+
+
+def _validate_role_update_inputs(
+    user_query: str | None,
+    user_ids: list[dict[str, Any]] | None,
+    groups: list[dict[str, Any]] | None,
+    confirm_group_notification: bool,
+) -> Err | None:
+    return (
+        _validate_role_user_args(user_query, user_ids, groups)
+        or _validate_role_group_notification(groups, confirm_group_notification)
+        or _validate_role_groups_shape(groups)
+    )
+
+
+def _match_assignee_nodes(found: list[Any]) -> list[dict[str, Any]]:
+    return [c for c in found if isinstance(c, dict) and c.get("_id")]
+
+
+def _resolve_role_user_query(
+    client: KfClient,
+    user_query: str | None,
+) -> tuple[list[dict[str, Any]], tuple[str, ...]] | Err:
+    if user_query is None:
+        return [], ()
+    found = client.get_assignee(user_query)
+    if isinstance(found, Err):
+        return found
+    matched = _match_assignee_nodes(found)
+    if matched:
+        return matched, ()
+    return [], (user_query,)
+
+
+def _member_ids(members: Iterable[Any]) -> set[str]:
+    return {str(m.get("_id")) for m in members if isinstance(m, dict)}
+
+
+def _partition_user_candidates(
+    candidates: list[dict[str, Any]],
+    existing_members: list[dict[str, Any]],
+) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
+    existing_ids = _member_ids(existing_members)
+    already: list[str] = []
+    new_ones: list[dict[str, Any]] = []
+    for c in candidates:
+        cid = str(c.get("_id"))
+        if cid in existing_ids:
+            already.append(cid)
+        else:
+            new_ones.append(c)
+    return tuple(already), new_ones
+
+
+def _partition_candidate_groups(
+    groups: list[dict[str, Any]] | None,
+    existing_groups: list[dict[str, Any]],
+) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
+    existing_ids = _member_ids(existing_groups)
+    already: list[str] = []
+    new_groups: list[dict[str, Any]] = []
+    for g in groups or ():
+        gid = str(g.get("_id"))
+        if gid in existing_ids:
+            already.append(gid)
+        else:
+            new_groups.append(g)
+    return tuple(already), new_groups
+
+
+def _is_group_regrant_blocked(detail: dict[str, Any], force: bool) -> bool:
+    if force:
+        return False
+    gc = detail.get("GroupCount")
+    return isinstance(gc, int) and gc > 0
+
+
+def _gate_group_regrant(
+    new_groups: list[dict[str, Any]],
+    detail: dict[str, Any],
+    force: bool,
+) -> tuple[list[dict[str, Any]], tuple[str, ...], str | None]:
+    if not new_groups or not _is_group_regrant_blocked(detail, force):
+        return new_groups, (), None
+    refused = tuple(str(g["_id"]) for g in new_groups)
+    note = (
+        f"refused to re-issue the Groups write for {', '.join(refused)}: GroupCount is "
+        f"already {detail['GroupCount']} on this role and no group LIST exists to prove these "
+        f"are different groups, so a repeat grant is assumed to be a duplicate and skipped to "
+        f"avoid re-broadcasting the notification — pass force_regrant_groups=True to override"
+    )
+    return [], refused, note
+
+
+def _has_no_new_members(new_ones: list[Any], new_groups: list[Any]) -> bool:
+    return not new_ones and not new_groups
+
+
+def _fetch_and_resolve_role(
+    client: KfClient,
+    role_id: str,
+    user_query: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], tuple[str, ...]] | Err:
+    detail = client.get_app_role(role_id)
+    if isinstance(detail, Err):
+        return detail
+    query_res = _resolve_role_user_query(client, user_query)
+    if isinstance(query_res, Err):
+        return query_res
+    query_candidates, not_found = query_res
+    return detail, query_candidates, not_found
+
+
+def _partition_role_members(
+    detail: dict[str, Any],
+    user_ids: list[dict[str, Any]] | None,
+    query_candidates: list[dict[str, Any]],
+    groups: list[dict[str, Any]] | None,
+    force_regrant_groups: bool,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    str | None,
+]:
+    existing_members: list[dict[str, Any]] = list(detail.get("Members") or ())
+    candidates = list(user_ids or ()) + query_candidates
+    already, new_ones = _partition_user_candidates(candidates, existing_members)
+
+    existing_groups = _existing_group_list(detail)
+    groups_already, candidate_groups = _partition_candidate_groups(groups, existing_groups)
+    new_groups, groups_refused, blocked_note = _gate_group_regrant(
+        candidate_groups, detail, force_regrant_groups
+    )
+    return (
+        existing_members, existing_groups, new_ones, new_groups,
+        already, groups_already, groups_refused, blocked_note,
+    )
+
+
+def _prepare_role_update(
+    client: KfClient,
+    role_id: str,
+    user_query: str | None,
+    user_ids: list[dict[str, Any]] | None,
+    groups: list[dict[str, Any]] | None,
+    confirm_group_notification: bool,
+    force_regrant_groups: bool,
+) -> _PreparedRoleUpdate | RoleUsersReport | Err:
+    val_err = _validate_role_update_inputs(user_query, user_ids, groups, confirm_group_notification)
+    if val_err is not None:
+        return val_err
+
+    fetched = _fetch_and_resolve_role(client, role_id, user_query)
+    if isinstance(fetched, Err):
+        return fetched
+    detail, query_candidates, not_found = fetched
+
+    (
+        existing_members, existing_groups, new_ones, new_groups,
+        already, groups_already, groups_refused, blocked_note,
+    ) = _partition_role_members(detail, user_ids, query_candidates, groups, force_regrant_groups)
+
+    if _has_no_new_members(new_ones, new_groups):
+        return RoleUsersReport(
+            role_id=role_id, added=(), already_present=already,
+            not_found=not_found, user_count=detail.get("UserCount"),
+            groups_already_present=groups_already, groups_refused=groups_refused,
+            group_count=detail.get("GroupCount"), groups_note=blocked_note,
+        )
+
+    return _PreparedRoleUpdate(
+        detail=detail,
+        existing_members=existing_members,
+        existing_groups=existing_groups,
+        new_ones=new_ones,
+        new_groups=new_groups,
+        already=already,
+        groups_already=groups_already,
+        groups_refused=groups_refused,
+        not_found=not_found,
+        blocked_note=blocked_note,
+    )
+
+
+def _build_role_write_body(
+    detail: dict[str, Any],
+    existing_members: list[dict[str, Any]],
+    new_ones: list[dict[str, Any]],
+    existing_groups: list[dict[str, Any]],
+    new_groups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    body = _role_write_body(detail)
+    body["Users"] = existing_members + new_ones
+    if new_groups or existing_groups:
+        body["Groups"] = existing_groups + new_groups
+    return body
+
+
+def _verify_users_readback(
+    new_ones: list[dict[str, Any]],
+    read_back: dict[str, Any],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    live_ids = _member_ids(read_back.get("Members") or ())
+    added: list[str] = []
+    unverified: list[str] = []
+    for c in new_ones:
+        cid = str(c.get("_id"))
+        if cid in live_ids:
+            added.append(cid)
+        else:
+            unverified.append(cid)
+    return tuple(added), tuple(unverified)
+
+
+def _verify_groups_by_list(
+    new_groups: list[dict[str, Any]],
+    live_groups: set[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    added: list[str] = []
+    unver: list[str] = []
+    for g in new_groups:
+        gid = str(g.get("_id"))
+        if gid in live_groups:
+            added.append(gid)
+        else:
+            unver.append(gid)
+    return tuple(added), tuple(unver)
+
+
+def _is_group_count_increased(count_before: Any, count_after: Any) -> bool:
+    return isinstance(count_before, int) and isinstance(count_after, int) and count_after > count_before
+
+
+def _group_ids(groups: Iterable[dict[str, Any]]) -> tuple[str, ...]:
+    return tuple(str(g["_id"]) for g in groups)
+
+
+def _eval_groups_by_count(
+    new_groups: list[dict[str, Any]],
+    count_before: Any,
+    count_after: Any,
+) -> tuple[tuple[str, ...], tuple[str, ...], str | None]:
+    if not new_groups:
+        return (), (), None
+    gids = _group_ids(new_groups)
+    if _is_group_count_increased(count_before, count_after):
+        return gids, (), (
+            f"verified by GroupCount {count_before} -> {count_after} only — this tenant exposes "
+            f"no group LIST on the role detail, so membership is proven by count movement, not by "
+            f"naming the group back"
+        )
+    return (), gids, (
+        f"WRITTEN BUT UNPROVEN: no group list on the role detail and GroupCount did not move "
+        f"({count_before!r} -> {count_after!r}). Confirm in the builder UI before relying on "
+        f"it — a 200 from the write proves nothing (THE RULE)"
+    )
+
+
+def _eval_groups_readback_note(
+    new_groups: list[dict[str, Any]],
+    count_before: Any,
+    count_after: Any,
+    live_groups: set[str],
+) -> tuple[tuple[str, ...], tuple[str, ...], str | None]:
+    if live_groups:
+        return *_verify_groups_by_list(new_groups, live_groups), None
+    return _eval_groups_by_count(new_groups, count_before, count_after)
+
+
+def _should_note_unenumerated_groups(
+    new_groups: list[Any],
+    existing_groups: list[Any],
+    note: str | None,
+) -> bool:
+    return bool(new_groups) and not existing_groups and note is None
+
+
+def _verify_groups_readback(
+    new_groups: list[dict[str, Any]],
+    existing_groups: list[dict[str, Any]],
+    count_before: Any,
+    read_back: dict[str, Any],
+    blocked_note: str | None,
+) -> tuple[tuple[str, ...], tuple[str, ...], str | None]:
+    live_groups = _member_ids(_existing_group_list(read_back))
+    count_after = read_back.get("GroupCount")
+    g_added, g_unver, note = _eval_groups_readback_note(
+        new_groups, count_before, count_after, live_groups
+    )
+    if _should_note_unenumerated_groups(new_groups, existing_groups, note):
+        note = (
+            "existing groups could not be enumerated (no group list on the role detail), so this "
+            "write cannot promise it preserved any that were already there"
+        )
+    return g_added, g_unver, note or blocked_note
+
+
+def _execute_and_verify_role_update(
+    client: KfClient,
+    role_id: str,
+    prep: _PreparedRoleUpdate,
+    app_id: str | None,
+) -> RoleUsersReport | Err:
+    count_before = prep.detail.get("GroupCount")
+    body = _build_role_write_body(
+        prep.detail, prep.existing_members, prep.new_ones,
+        prep.existing_groups, prep.new_groups,
+    )
+    written = client.put_app_role(role_id, body, app_id)
+    if isinstance(written, Err):
+        return written
+
+    read_back = client.get_app_role(role_id)
+    if isinstance(read_back, Err):
+        return read_back
+
+    added, unverified = _verify_users_readback(prep.new_ones, read_back)
+    g_added, g_unver, groups_note = _verify_groups_readback(
+        prep.new_groups, prep.existing_groups, count_before, read_back, prep.blocked_note,
+    )
+
+    return RoleUsersReport(
+        role_id=role_id,
+        added=added,
+        already_present=prep.already,
+        not_found=prep.not_found + unverified,
+        user_count=read_back.get("UserCount"),
+        groups_added=g_added,
+        groups_already_present=prep.groups_already,
+        groups_unverified=g_unver,
+        groups_refused=prep.groups_refused,
+        group_count=read_back.get("GroupCount"),
+        groups_note=groups_note,
+    )
+
+
 def apply_add_role_users(
     client: KfClient,
     role_id: str,
@@ -3359,159 +4291,14 @@ def apply_add_role_users(
     is not a tool error on its own — it lands in `not_found`, the same "state it, never silently
     drop it" discipline as every other audit in this pack.
     """
-    if user_query is None and not user_ids and not groups:
-        return Err("verify", "apply_add_role_users: give user_query, user_ids or groups")
-
-    # A GROUP GRANT NOTIFIES EVERY MEMBER OF THAT GROUP BY EMAIL, and an email cannot be recalled.
-    # On a whole-tenant group ("everyone") that is every person in the account. This is the one
-    # effect on this surface that reaches PEOPLE rather than the graph, so it fails CLOSED: the
-    # caller must say, in the call itself, that they mean it. Granting a single USER
-    # (`user_query`/`user_ids`) is unaffected — that is the safe way to test this tool, and the
-    # refusal below says so, because a refusal a caller cannot act on is just a dead end.
-    if groups and not confirm_group_notification:
-        named = ", ".join(str(g.get("Name") or g.get("_id")) for g in groups
-                          if isinstance(g, dict)) or "<unnamed>"
-        return Err(
-            "verify",
-            f"refusing to grant group(s) [{named}] without confirm_group_notification=True — "
-            f"Kissflow FANS OUT A NOTIFICATION TO EVERY MEMBER the moment the grant lands, and on "
-            f"a whole-tenant group that is every person in the account (CLAUDE.md Members first: "
-            f"this happened, 2026-08-20). AND IT CANNOT BE UNDONE: membership writes are ADD-ONLY "
-            f"— nine removal shapes were probed live and none of them remove a group, so the only "
-            f"recovery is to build a REPLACEMENT role, re-point the workflow assignees at it, "
-            f"rebuild the visibility matrix that re-point wipes, and delete the polluted role. "
-            f"To TEST this tool, grant ONE named developer instead: user_query='<your name>'. "
-            f"Pass confirm_group_notification=True only after a human has confirmed the actual "
-            f"recipient list, the same as sending mail.",
-        )
-
-    for g in groups or []:
-        if not isinstance(g, dict) or not g.get("_id"):
-            return Err("verify",
-                       f"apply_add_role_users: each group must be an assignee-shaped dict with an "
-                       f"_id, e.g. {{'_id': 'everyone', 'Kind': 'Group', 'Name': 'Everyone'}} — got "
-                       f"{g!r}")
-
-    detail = client.get_app_role(role_id)
-    if isinstance(detail, Err):
-        return detail
-
-    candidates: list[dict[str, Any]] = list(user_ids or [])
-    not_found: list[str] = []
-    if user_query is not None:
-        found = client.get_assignee(user_query)
-        if isinstance(found, Err):
-            return found
-        matched = [c for c in found if isinstance(c, dict) and c.get("_id")]
-        if matched:
-            candidates.extend(matched)
-        else:
-            not_found.append(user_query)
-
-    existing_members = list(detail.get("Members") or [])
-    existing_ids = {str(m.get("_id")) for m in existing_members if isinstance(m, dict)}
-    already = tuple(str(c["_id"]) for c in candidates if str(c.get("_id")) in existing_ids)
-    new_ones = [c for c in candidates if str(c.get("_id")) not in existing_ids]
-
-    # GROUPS ride the SAME PUT under their own write key. Reported live by an operator and
-    # reproduced: a group object placed in `Users` is refused with UserDoesNotExistError — the
-    # endpoint validates that array as users only. The body must carry BOTH keys:
-    #   {"Users": [...], "Groups": [{"_id": "everyone", "Kind": "Group", "Name": "Everyone"}]}
-    # `Groups` is a second asymmetric write key alongside `Users` (which reads back as `Members`).
-    # ⚠️ The READ key for groups is UNCAPTURED on this tenant: the detail route carries a
-    # `GroupCount` (nullable) but no group LIST that we have ever seen. So existing groups cannot
-    # be enumerated, and this write therefore CANNOT promise to preserve them the way the `Users`
-    # merge preserves members. That is stated in `groups_note` rather than assumed away, and the
-    # read-back verifies by `GroupCount` movement, never by claiming the group is present.
-    existing_groups = _existing_group_list(detail)
-    group_ids = [str(g["_id"]) for g in (groups or [])]
-    groups_already = tuple(gid for gid in group_ids
-                           if gid in {str(g.get("_id")) for g in existing_groups})
-    new_groups = [g for g in (groups or []) if str(g["_id"]) not in
-                  {str(e.get("_id")) for e in existing_groups}]
-
-    # `_existing_group_list` is always `[]` on this tenant (see its own docstring), so the merge
-    # above never actually drops a group that's already there — `new_groups` still equals `groups`
-    # on every repeat call. `GroupCount` is the one signal this tenant's detail DOES carry, so gate
-    # the repeat write on IT: a role that already reports `GroupCount > 0` has some group on it
-    # already, and this SAME `groups` argument is treated as a duplicate rather than resent, unless
-    # the caller passes `force_regrant_groups=True` in the same call — the identical
-    # "state your intent" discipline `confirm_group_notification` already uses above.
-    blocked_note: str | None = None
-    groups_refused: tuple[str, ...] = ()
-    if new_groups and force_regrant_groups is False \
-            and isinstance(detail.get("GroupCount"), int) and detail["GroupCount"] > 0:
-        # GroupCount is a COUNT, not a membership check — a role with any group reads > 0, so this
-        # cannot prove the requested group is the same one already present. The refused group lands
-        # in its OWN `groups_refused` bucket, never `groups_already_present`: reporting a group as
-        # "present" that was never proven present is exactly the invariant this pack forbids.
-        groups_refused = tuple(str(g["_id"]) for g in new_groups)
-        new_groups = []
-        blocked_note = (
-            f"refused to re-issue the Groups write for {', '.join(groups_refused)}: GroupCount is "
-            f"already {detail['GroupCount']} on this role and no group LIST exists to prove these "
-            f"are different groups, so a repeat grant is assumed to be a duplicate and skipped to "
-            f"avoid re-broadcasting the notification — pass force_regrant_groups=True to override"
-        )
-
-    if not new_ones and not new_groups:
-        return RoleUsersReport(role_id=role_id, added=(), already_present=already,
-                               not_found=tuple(not_found), user_count=detail.get("UserCount"),
-                               groups_already_present=groups_already, groups_refused=groups_refused,
-                               group_count=detail.get("GroupCount"), groups_note=blocked_note)
-
-    count_before = detail.get("GroupCount")
-    body = _role_write_body(detail)
-    body["Users"] = existing_members + new_ones
-    if new_groups or existing_groups:
-        body["Groups"] = existing_groups + new_groups
-
-    written = client.put_app_role(role_id, body, app_id)
-    if isinstance(written, Err):
-        return written
-
-    read_back = client.get_app_role(role_id)
-    if isinstance(read_back, Err):
-        return read_back
-    live_ids = {str(m.get("_id")) for m in (read_back.get("Members") or []) if isinstance(m, dict)}
-    added = tuple(str(c["_id"]) for c in new_ones if str(c["_id"]) in live_ids)
-    unverified = tuple(str(c["_id"]) for c in new_ones if str(c["_id"]) not in live_ids)
-
-    # Group read-back: verify by the only signal this tenant exposes. A group list, if the detail
-    # ever grows one, wins; otherwise GroupCount MOVING is the evidence. When neither is available
-    # the group lands in `groups_unverified` — written, not proven — because a write we cannot read
-    # back is exactly what THE RULE says never to report as success.
-    live_groups = {str(g.get("_id")) for g in _existing_group_list(read_back)}
-    count_after = read_back.get("GroupCount")
-    groups_note = None
-    if live_groups:
-        g_added = tuple(str(g["_id"]) for g in new_groups if str(g["_id"]) in live_groups)
-        g_unver = tuple(str(g["_id"]) for g in new_groups if str(g["_id"]) not in live_groups)
-    elif new_groups and isinstance(count_after, int) and isinstance(count_before, int) \
-            and count_after > count_before:
-        g_added, g_unver = tuple(str(g["_id"]) for g in new_groups), ()
-        groups_note = (f"verified by GroupCount {count_before} -> {count_after} only — this tenant "
-                       f"exposes no group LIST on the role detail, so membership is proven by count "
-                       f"movement, not by naming the group back")
-    elif new_groups:
-        g_added, g_unver = (), tuple(str(g["_id"]) for g in new_groups)
-        groups_note = (f"WRITTEN BUT UNPROVEN: no group list on the role detail and GroupCount did "
-                       f"not move ({count_before!r} -> {count_after!r}). Confirm in the builder UI "
-                       f"before relying on it — a 200 from the write proves nothing (THE RULE)")
-    else:
-        g_added, g_unver = (), ()
-    if new_groups and not existing_groups and groups_note is None:
-        groups_note = ("existing groups could not be enumerated (no group list on the role detail), "
-                       "so this write cannot promise it preserved any that were already there")
-    groups_note = groups_note or blocked_note
-
-    return RoleUsersReport(
-        role_id=role_id, added=added, already_present=already,
-        not_found=tuple(not_found) + unverified, user_count=read_back.get("UserCount"),
-        groups_added=g_added, groups_already_present=groups_already,
-        groups_unverified=g_unver, groups_refused=groups_refused,
-        group_count=count_after, groups_note=groups_note,
+    prep = _prepare_role_update(
+        client, role_id, user_query, user_ids, groups,
+        confirm_group_notification, force_regrant_groups,
     )
+    if isinstance(prep, (Err, RoleUsersReport)):
+        return prep
+
+    return _execute_and_verify_role_update(client, role_id, prep, app_id)
 
 
 def _existing_group_list(detail: dict[str, Any]) -> list[dict[str, Any]]:
@@ -4783,6 +5570,125 @@ def _root_field_nodes(draft: Draft) -> dict[str, dict[str, Any]]:
             if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Model") == root}
 
 
+def _unfillable_required_reason(node: dict[str, Any]) -> str | None:
+    if node.get("Field::Expression"):
+        return "computed"
+    return "SequenceNumber" if node.get("Type") == "SequenceNumber" else None
+
+
+def _unsatisfiable_required_fields(
+    root_fields: dict[str, dict[str, Any]],
+    wanted: set[str],
+) -> list[str]:
+    unsatisfiable: list[str] = []
+    for name in sorted(wanted):
+        node = root_fields.get(name)
+        reason = _unfillable_required_reason(node) if node is not None else None
+        if reason is not None:
+            unsatisfiable.append(f"{name} ({reason})")
+    return unsatisfiable
+
+
+def _cleared_required_fields(
+    root_fields: dict[str, dict[str, Any]],
+    wanted: set[str],
+) -> tuple[str, ...]:
+    cleared = [
+        name for name, node in root_fields.items()
+        if node.get("Required") and name not in wanted
+    ]
+    return tuple(sorted(cleared))
+
+
+def _prepare_required_draft(
+    draft: Draft,
+    wanted: set[str],
+) -> tuple[Draft, tuple[str, ...]] | Err:
+    root_fields = _root_field_nodes(draft)
+    unsatisfiable = _unsatisfiable_required_fields(root_fields, wanted)
+    if unsatisfiable:
+        return Err("verify", f"refusing to mark un-fillable field(s) Required: {unsatisfiable} — "
+                             "a value the user cannot type makes that step permanently "
+                             "unsubmittable (graph.set_required, CLAUDE.md Visibility)")
+    try:
+        new = set_required(draft, wanted)
+    except ValueError as e:
+        return Err("verify", f"offline set_required rejected the spec: {e}")
+    return new, _cleared_required_fields(root_fields, wanted)
+
+
+def _sync_required_draft(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+    new: Draft,
+    version: str | None,
+) -> Draft | Err:
+    written = client.put_draft(kind, flow_id, new, expect_version=version)
+    if isinstance(written, Err):
+        return written
+    return client.get_draft(kind, flow_id)
+
+
+def _is_required_verified(node: dict[str, Any] | None, wanted: bool) -> bool:
+    return node is not None and bool(node.get("Required", False)) is wanted
+
+
+def _audit_required_readback(
+    live: dict[str, dict[str, Any]],
+    wanted: set[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    # The audit unit is EVERY root field the read-back knows about, UNION every name the caller
+    # REQUESTED. The union is the load-bearing half: iterating the read-back population alone
+    # (what this used to do) means a requested name that was on the form before the write and is
+    # NOT in the read-back lands in no bucket at all — `{"required": ["A"], "verified": ["B"],
+    # "missing": [], "published": true}`. Every sibling here (delete_fields, rename_form_fields,
+    # apply_fields) iterates the REQUESTED set; this one used to invert it. Keeping the read-back
+    # side too is deliberate and is what `apply_required` alone needs: a SET operation that
+    # flipped a field the caller never mentioned is exactly what this report exists to surface.
+    verified: list[str] = []
+    missing: list[str] = []
+    for name in sorted(set(live) | wanted):
+        target = verified if _is_required_verified(live.get(name), name in wanted) else missing
+        target.append(name)
+    return tuple(verified), tuple(missing)
+
+
+def _publish_required_flow(
+    client: KfClient,
+    kind: FlowKind,
+    flow_id: str,
+) -> bool | Err:
+    pub = client.publish(kind, flow_id)
+    if isinstance(pub, Err):
+        return pub
+    return True
+
+
+def _finalize_required_report(
+    client: KfClient,
+    flow_id: str,
+    kind: FlowKind,
+    required: tuple[str, ...],
+    cleared: tuple[str, ...],
+    read_back: Draft,
+    wanted: set[str],
+    publish: bool,
+) -> RequiredReport | Err:
+    verified, missing = _audit_required_readback(_root_field_nodes(read_back), wanted)
+    if publish and not missing:
+        pub = _publish_required_flow(client, kind, flow_id)
+        if isinstance(pub, Err):
+            return pub
+        published = True
+    else:
+        published = False
+    return RequiredReport(
+        flow_id=flow_id, required=tuple(required), verified=verified, missing=missing,
+        cleared=cleared, meta_version=read_back.get(_META_VERSION), published=published,
+    )
+
+
 def apply_required(
     client: KfClient,
     flow_id: str,
@@ -4807,59 +5713,17 @@ def apply_required(
     draft = client.get_draft(kind, flow_id)
     if isinstance(draft, Err):
         return draft
-    version = draft.get(_META_VERSION)
 
-    root_fields = _root_field_nodes(draft)
     wanted = set(required)
-    unsatisfiable = sorted(
-        f"{name} ({'computed' if node.get('Field::Expression') else 'SequenceNumber'})"
-        for name, node in root_fields.items()
-        if name in wanted and (node.get("Field::Expression") or node.get("Type") == "SequenceNumber")
-    )
-    if unsatisfiable:
-        return Err("verify", f"refusing to mark un-fillable field(s) Required: {unsatisfiable} — "
-                             "a value the user cannot type makes that step permanently "
-                             "unsubmittable (graph.set_required, CLAUDE.md Visibility)")
+    prepared = _prepare_required_draft(draft, wanted)
+    if isinstance(prepared, Err):
+        return prepared
+    new, cleared = prepared
 
-    was_required = {name for name, node in root_fields.items() if node.get("Required")}
-
-    try:
-        new = set_required(draft, wanted)
-    except ValueError as e:
-        return Err("verify", f"offline set_required rejected the spec: {e}")
-
-    written = client.put_draft(kind, flow_id, new, expect_version=version)
-    if isinstance(written, Err):
-        return written
-
-    read_back = client.get_draft(kind, flow_id)
+    read_back = _sync_required_draft(client, kind, flow_id, new, draft.get(_META_VERSION))
     if isinstance(read_back, Err):
         return read_back
 
-    # The audit unit is EVERY root field the read-back knows about, UNION every name the caller
-    # REQUESTED. The union is the load-bearing half: iterating the read-back population alone
-    # (what this used to do) means a requested name that was on the form before the write and is
-    # NOT in the read-back lands in no bucket at all — `{"required": ["A"], "verified": ["B"],
-    # "missing": [], "published": true}`. Every sibling here (delete_fields, rename_form_fields,
-    # apply_fields) iterates the REQUESTED set; this one used to invert it. Keeping the read-back
-    # side too is deliberate and is what `apply_required` alone needs: a SET operation that
-    # flipped a field the caller never mentioned is exactly what this report exists to surface.
-    live = _root_field_nodes(read_back)
-    audited = sorted(set(live) | wanted)
-    verified = tuple(n for n in audited
-                     if n in live and bool(live[n].get("Required", False)) is (n in wanted))
-    missing = tuple(n for n in audited
-                    if n not in live or bool(live[n].get("Required", False)) is not (n in wanted))
-    cleared = tuple(sorted(was_required - wanted))
-
-    published = False
-    if publish and not missing:
-        pub = client.publish(kind, flow_id)
-        if isinstance(pub, Err):
-            return pub
-        published = True
-
-    return RequiredReport(
-        flow_id=flow_id, required=tuple(required), verified=verified, missing=missing,
-        cleared=cleared, meta_version=read_back.get(_META_VERSION), published=published,
+    return _finalize_required_report(
+        client, flow_id, kind, required, cleared, read_back, wanted, publish,
     )

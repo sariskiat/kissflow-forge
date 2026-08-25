@@ -205,14 +205,7 @@ def _allowed_redirect(uri: str) -> bool:
     return False
 
 
-def _requested_redirect_uris() -> list[AnyUrl] | None:
-    """Whatever redirect this request asked for, if it passes `_allowed_redirect`; None when one
-    was asked for and refused, which the caller turns into a clean "invalid client". Desktop's
-    callback is not knowable ahead of time and there is no registration step to learn it in —
-    DCR is deliberately off, which is exactly why the connector dialog shows the manual fields.
-
-    The `refresh_token` grant carries no redirect at all, and the client model requires at least
-    one, so that leg gets a placeholder that is never redirected to."""
+def _raw_redirect_uris() -> list[str]:
     seen: list[str] = []
     form_uri = _TOKEN_FORM.get().get("redirect_uri")
     if form_uri:
@@ -222,12 +215,24 @@ def _requested_redirect_uris() -> list[AnyUrl] | None:
         query_uri = req.query_params.get("redirect_uri")
         if query_uri:
             seen.append(query_uri)
+    return seen
+
+
+def _requested_redirect_uris() -> list[AnyUrl] | None:
+    """Whatever redirect this request asked for, if it passes `_allowed_redirect`; None when one
+    was asked for and refused, which the caller turns into a clean "invalid client". Desktop's
+    callback is not knowable ahead of time and there is no registration step to learn it in —
+    DCR is deliberately off, which is exactly why the connector dialog shows the manual fields.
+
+    The `refresh_token` grant carries no redirect at all, and the client model requires at least
+    one, so that leg gets a placeholder that is never redirected to."""
+    seen = _raw_redirect_uris()
     if not seen:
         return [AnyUrl(PLACEHOLDER_REDIRECT)]
-    allowed = [u for u in seen if _allowed_redirect(u)]
+    allowed = list(map(AnyUrl, filter(_allowed_redirect, seen)))
     if not allowed:
         return None
-    return [AnyUrl(u) for u in allowed]
+    return allowed
 
 
 # --- ASGI middleware -----------------------------------------------------------------
