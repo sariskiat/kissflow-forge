@@ -6,14 +6,17 @@ default:
     - cjexpress-internal
 
 workflow:
-  name: 'Deploy: $ENVIRONMENT | tag=$DEPLOY_TAG'
+  name: '$PIPELINE_NAME'
   rules:
-    - if: '$CUSTOM_IMAGE_TAG != ""'
+    - if: '$CI_COMMIT_BRANCH == "main" && $CUSTOM_IMAGE_TAG != ""'
       variables:
-        DEPLOY_TAG: "$CUSTOM_IMAGE_TAG"
+        PIPELINE_NAME: 'Deploy: $ENVIRONMENT | tag=$CUSTOM_IMAGE_TAG'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      variables:
+        PIPELINE_NAME: 'Deploy: $ENVIRONMENT | tag=$CI_COMMIT_SHORT_SHA'
     - when: always
       variables:
-        DEPLOY_TAG: "$CI_COMMIT_SHORT_SHA"
+        PIPELINE_NAME: ""
 
 variables:
   SERVICE_NAME: "kissflow-mcp"
