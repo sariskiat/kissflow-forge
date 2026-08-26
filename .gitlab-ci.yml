@@ -6,7 +6,7 @@ default:
     - cjexpress-internal
 
 workflow:
-  name: 'Deploy [$ENVIRONMENT] tag=$DEPLOY_TAG'
+  name: 'Deploy: $ENVIRONMENT | tag=$DEPLOY_TAG'
   rules:
     - if: '$CUSTOM_IMAGE_TAG != ""'
       variables:
@@ -20,11 +20,13 @@ variables:
   GITOPS_REPO: "mcp/kissflow-mcp"
   ENVIRONMENT:
     value: "dev"
+    description: "Environment to deploy to"
     options:
       - "dev"
       - "prod"
   CUSTOM_IMAGE_TAG:
     value: ""
+    description: "Image tag to deploy, e.g. abc1234ef"
 
 include:
   - project: cjexpress/tildi/infra/sre/gitlab-ci-modules
