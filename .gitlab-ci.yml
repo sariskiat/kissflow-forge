@@ -24,6 +24,7 @@ stages:
   - build-and-push
   - update-on-image-tag-helm
   - prod-retag-and-push
+  - update-on-image-tag-helm-prod
 
 .dev-build-service:
   extends:
@@ -48,7 +49,7 @@ stages:
 
 .prod-update-gitops:
   extends: .update-image-tag-helm
-  stage: prod-retag-and-push
+  stage: update-on-image-tag-helm-prod
   variables:
     ENVIRONMENT: prod
     IMAGE_TAG: "dev-$CI_COMMIT_SHORT_SHA"
