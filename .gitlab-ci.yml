@@ -84,6 +84,9 @@ retag-prod:
   needs:
     - job: update-gitops-dev
       artifacts: false
+  variables:
+    SOURCE_IMAGE_TAG: "dev-$CI_COMMIT_SHORT_SHA"
+    TARGET_IMAGE_TAG: "dev-$CI_COMMIT_SHORT_SHA"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" && $CI_COMMIT_TAG == null'
       when: manual
