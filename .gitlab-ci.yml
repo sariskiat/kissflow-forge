@@ -1,10 +1,5 @@
 # Gitlab Variables on Repository
 # APPLICATION_TEAM: ai
-# ARTIFACT_REGISTRY_DEV: asia-southeast1-docker.pkg.dev/sre-platform-dev
-# ARTIFACT_REGISTRY_PROD: asia-southeast1-docker.pkg.dev/sre-platform-prod-462106
-# GIT_TOKEN: gitlab-token
-# GIT_USER: gitlab-user
-# GOOGLE_APPLICATION_CREDENTIALS_JSON: json-key
 
 default:
   tags:
@@ -12,9 +7,7 @@ default:
 
 variables:
   SERVICE_NAME: "kissflow-mcp"
-  CUSTOM_IMAGE_TAG:
-    value: ""
-    description: "Dev image tag to retag for prod (e.g. abc1234ef)"
+  GITOPS_REPO: "mcp/kissflow-mcp"
 
 include:
   - project: cjexpress/tildi/infra/sre/gitlab-ci-modules
@@ -29,8 +22,9 @@ include:
 stages:
   - quality-gate
   - build-and-push
-  - prod-retag-and-push
   - update-on-image-tag-helm
+  - prod-retag-and-push
+  - update-on-image-tag-helm-prod
 
 .dev-build-service:
   extends:
@@ -38,14 +32,14 @@ stages:
     - .gcp-auth
   stage: build-and-push
   variables:
-    IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+    IMAGE_TAG: "dev-$CI_COMMIT_SHORT_SHA"
 
 .dev-update-gitops:
   extends: .update-image-tag-helm
   stage: update-on-image-tag-helm
   variables:
     ENVIRONMENT: dev
-    IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+    IMAGE_TAG: "dev-$CI_COMMIT_SHORT_SHA"
 
 .prod-retag-service:
   extends:
@@ -55,10 +49,10 @@ stages:
 
 .prod-update-gitops:
   extends: .update-image-tag-helm
-  stage: update-on-image-tag-helm
+  stage: update-on-image-tag-helm-prod
   variables:
     ENVIRONMENT: prod
-    IMAGE_TAG: "$CUSTOM_IMAGE_TAG"
+    IMAGE_TAG: "dev-$CI_COMMIT_SHORT_SHA"
 
 sonar-scan-dev:
   extends: .sonar-scanner
@@ -68,9 +62,7 @@ sonar-scan-dev:
     PROJECT_ID: ${CI_PROJECT_NAME}
     SONAR_WAIT_GATE: "false"
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_COMMIT_TAG == null'
 
 build-dev:
   extends: .dev-build-service
@@ -78,7 +70,7 @@ build-dev:
     DOCKER_BUILD_ARGS: ""
     DOCKER_BUILD_CONTEXT: ""
   rules:
-    - if: '$CI_PIPELINE_SOURCE != "web" && $CI_COMMIT_BRANCH == "main" && $CI_COMMIT_TAG == null'
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_COMMIT_TAG == null'
 
 update-gitops-dev:
   extends: .dev-update-gitops
@@ -86,12 +78,18 @@ update-gitops-dev:
     - job: build-dev
       artifacts: false
   rules:
-    - if: '$CI_PIPELINE_SOURCE != "web" && $CI_COMMIT_BRANCH == "main" && $CI_COMMIT_TAG == null'
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_COMMIT_TAG == null'
 
 retag-prod:
   extends: .prod-retag-service
+  needs:
+    - job: update-gitops-dev
+      artifacts: false
+  variables:
+    SOURCE_IMAGE_TAG: "dev-$CI_COMMIT_SHORT_SHA"
+    TARGET_IMAGE_TAG: "dev-$CI_COMMIT_SHORT_SHA"
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web" && $CUSTOM_IMAGE_TAG != ""'
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_COMMIT_TAG == null'
       when: manual
       allow_failure: true
 
@@ -101,4 +99,4 @@ update-gitops-prod:
     - job: retag-prod
       artifacts: false
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "web" && $CUSTOM_IMAGE_TAG != ""'
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_COMMIT_TAG == null'
