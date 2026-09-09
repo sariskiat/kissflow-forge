@@ -1,10 +1,12 @@
 """Live Kissflow builder client — the write path (§2 sign-off obtained 2026-08-03, DEV ONLY).
 
-⚠️ Talks to Kissflow's UNDOCUMENTED internal /flow + /metadata builder API. AUP §1.10 applies;
-this module is authorized for the DEV tenant only and refuses anything else by construction:
+⚠️ Talks to Kissflow's UNDOCUMENTED internal /flow + /metadata builder API. AUP §1.10 applies.
+Two tenant paths, chosen by which env var is set (see `_tenant_env`):
 
-  * `KfConfig.from_env` reads ONLY `KF_DEV_*` vars — prod creds are never even loaded.
-  * a `raise` (not an assert — survives `python -O`) rejects any domain without "dev-".
+  * `KF_DEV_DOMAIN` set → reads `KF_DEV_*`, and a `raise` (not an assert — survives `python -O`)
+    rejects any domain without "dev-". This is the default, guarded path.
+  * else `KF_DOMAIN` set → reads `KF_*`, ANY tenant (prod included), no "dev-" guard — an
+    explicit opt-in for citizen-developer / non-dev use, never the fallback.
   * `put_draft` is read-verify-write: it re-reads `_meta_version` immediately before writing and
     aborts with a Conflict if the draft moved under us (FINDINGS.md refuted If-Match/ETag).
 
@@ -83,6 +85,28 @@ class Err:
         return {"isError": True, "error": f"{self.kind}: {self.message}", "status": self.status}
 
 
+def _tenant_env() -> tuple[str, str, str] | Err:
+    """Resolve (env prefix, domain, account) for the target tenant.
+
+    Invariant: `KF_DEV_DOMAIN` set -> prefix "KF_DEV_", and the domain MUST contain "dev-"
+    (existing refusal, unchanged). Else `KF_DOMAIN` set -> prefix "KF_", ANY tenant, no "dev-"
+    guard (explicit opt-in, e.g. prod; citizen-developer use). Neither set -> prefix stays
+    "KF_DEV_" so the resulting KeyError still names `KF_DEV_DOMAIN`, matching the pre-existing
+    missing-var message tests/test_mcp_boundary.py asserts on.
+    """
+    dev_domain = os.environ.get("KF_DEV_DOMAIN", "").strip()
+    nondev_domain = os.environ.get("KF_DOMAIN", "").strip()
+    prefix = "KF_DEV_" if dev_domain or not nondev_domain else "KF_"
+    try:
+        domain = os.environ[f"{prefix}DOMAIN"]
+        account = os.environ[f"{prefix}ACCOUNT_ID"]
+    except KeyError as e:
+        return Err("config", f"missing env var {e.args[0]}")
+    if prefix == "KF_DEV_" and "dev-" not in domain:
+        return Err("config", f"refusing non-dev domain {domain!r}")
+    return prefix, domain, account
+
+
 @dataclass(frozen=True)
 class KfConfig:
     key_id: str
@@ -99,19 +123,20 @@ class KfConfig:
         # Empty app_id is allowed here on purpose — the "an app must be chosen" guard now lives at
         # the _client() chokepoint (server.py) so a tool carrying its own app_id, plus the
         # list/use-app tools, can run before any app is selected. See CLAUDE.md Members/Pages.
+        resolved = _tenant_env()
+        if isinstance(resolved, Err):
+            return resolved
+        prefix, domain, account = resolved
         try:
-            domain = os.environ["KF_DEV_DOMAIN"]
             cfg = KfConfig(
-                key_id=os.environ["KF_DEV_ACCESS_KEY_ID"],
-                key_secret=os.environ["KF_DEV_ACCESS_KEY_SECRET"],
-                account=os.environ["KF_DEV_ACCOUNT_ID"],
+                key_id=os.environ[f"{prefix}ACCESS_KEY_ID"],
+                key_secret=os.environ[f"{prefix}ACCESS_KEY_SECRET"],
+                account=account,
                 domain=domain,
                 app_id=(app_id_override or os.environ.get("KF_APP", "")),
             )
         except KeyError as e:
             return Err("config", f"missing env var {e.args[0]}")
-        if "dev-" not in domain:
-            return Err("config", f"refusing non-dev domain {domain!r}")
         return cfg
 
     @staticmethod
@@ -119,21 +144,19 @@ class KfConfig:
         """Same config, but the ACCESS-KEY PAIR comes from the calling user (kfforge.auth carries
         it in over OAuth) instead of the process env. Domain and account stay env-side on purpose:
         the caller picks their own Kissflow identity, never the tenant, so the `dev-` refusal
-        below is exactly as unskippable as it is in `from_env`."""
-        try:
-            domain = os.environ["KF_DEV_DOMAIN"]
-            cfg = KfConfig(
-                key_id=key_id,
-                key_secret=key_secret,
-                account=os.environ["KF_DEV_ACCOUNT_ID"],
-                domain=domain,
-                app_id=(app_id_override or os.environ.get("KF_APP", "")),
-            )
-        except KeyError as e:
-            return Err("config", f"missing env var {e.args[0]}")
-        if "dev-" not in domain:
-            return Err("config", f"refusing non-dev domain {domain!r}")
-        return cfg
+        (see `_tenant_env`) is exactly as unskippable as it is in `from_env` — and the same
+        `KF_DOMAIN` opt-in lets a user's own key pair target a non-dev tenant too."""
+        resolved = _tenant_env()
+        if isinstance(resolved, Err):
+            return resolved
+        _prefix, domain, account = resolved
+        return KfConfig(
+            key_id=key_id,
+            key_secret=key_secret,
+            account=account,
+            domain=domain,
+            app_id=(app_id_override or os.environ.get("KF_APP", "")),
+        )
 
     @property
     def base(self) -> str:

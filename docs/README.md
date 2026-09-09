@@ -79,11 +79,13 @@ The server runs in one of two modes, and the mode decides who acts as whom:
   Kissflow **Access Key ID / Secret** in its OAuth Client ID / Secret fields.
   The server validates the pair once against Kissflow, then runs every call as
   that person — nobody shares a key, and Kissflow's own roles bound each caller.
-  Tokens are stateless, Fernet-sealed, and never stored. Leaving
-  `MCP_OAUTH_BASE_URL` unset serves the endpoint **unauthenticated** (it logs a
-  loud warning) — only safe behind a network edge.
-- **Always on:** `client.py` refuses any domain without `dev-` in it, in either
-  mode, before any read or write. There is no way to point the engine at prod.
+  OAuth transaction state and issued-token records use FastMCP's encrypted, local disk-backed
+  store; bearer tokens also carry only Fernet-sealed credentials. Hosted deployment is limited
+  to one Cloud Run copy, so state survives within that copy but users must re-login after it is
+  replaced. HTTP startup fails closed when the OAuth base URL, Entra settings, or signing key is missing.
+- **Tenant safety:** `client.py` refuses non-`dev-` domains on the `KF_DEV_*`
+  path. `KF_*` is an explicit non-dev opt-in; HTTP still requires each caller's
+  own valid Kissflow credentials.
 - **One caveat worth knowing:** the `/token` endpoint validates a pasted key
   pair by hitting Kissflow, so it is a credential-testing oracle. In the hosted
   deployment the **Azure Entra / oauth2-proxy + Istio mesh edge is the shield**

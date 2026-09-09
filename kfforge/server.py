@@ -1,7 +1,8 @@
 """Kissflow Builder MCP server.
 
 Write/publish are LIVE as of the §2 compliance sign-off (Kissflow AUP §1.10, 2026-08-03) and are
-DEV-ONLY by construction: kfforge.client reads only KF_DEV_* and refuses any domain without "dev-".
+DEV-ONLY by default: kfforge.client reads KF_DEV_* and refuses any domain without "dev-", unless
+KF_DOMAIN is set instead — an explicit opt-in to any tenant (see kfforge.client._tenant_env).
 Every write is read-verify-write with a post-write read-back audit. See PLAN.md / FINDINGS.md.
 
 Three tool families:
@@ -132,10 +133,9 @@ from .pages_live import (
     create_page_flow,
 )
 
-# HTTP mode authenticates per user: the connector's OAuth Client ID / Client Secret fields carry
-# the CALLER's own Kissflow access-key pair, so nobody shares a key and Kissflow's own role model
-# bounds each caller (see kfforge.auth). Unset MCP_OAUTH_BASE_URL leaves the endpoint exactly as
-# unauthenticated as it was, warned about in main().
+# HTTP mode authenticates through Entra and then binds the caller's own Kissflow pair from the
+# OAuth client fields (see kfforge.auth). `provider_from_env` fails closed for incomplete config;
+# stdio alone leaves `_oauth` unset and retains its process-env credential path.
 _oauth = auth_provider_from_env() if os.environ.get("MCP_HTTP") else None
 
 # `instructions` reaches EVERY connecting client in the initialize handshake, before any tool is
@@ -276,10 +276,10 @@ def _client(app_id: str | None = None, require_app: bool = True) -> KfClient | E
     pair = creds_from_token()
     if pair is not None:
         cfg = KfConfig.from_user(pair[0], pair[1], app_id_override=app_id)
-    elif os.environ.get("MCP_HTTP") and os.environ.get("MCP_OAUTH_BASE_URL", "").strip():
-        return Err("config", "not authenticated — paste your own Kissflow access-key ID into "
-                             "this connector's 'OAuth Client ID' field and your access-key "
-                             "secret into 'OAuth Client Secret', then reconnect")
+    elif os.environ.get("MCP_HTTP"):
+        return Err("config", "not authenticated — complete Entra login with your own Kissflow "
+                             "access-key ID in OAuth Client ID and secret in OAuth Client Secret, "
+                             "then reconnect")
     else:
         cfg = KfConfig.from_env(app_id_override=app_id)
     if isinstance(cfg, Err):
@@ -2395,16 +2395,9 @@ def forge_plan_app(spec: dict[str, Any], approval_token: str) -> dict[str, Any]:
 
 def main() -> None:
     if os.environ.get("MCP_HTTP"):
-        # Unset MCP_OAUTH_BASE_URL means no app auth at all: this endpoint writes to a live
-        # Kissflow tenant, so it MUST then be protected at the network layer (private ingress /
-        # IAM / VPC). Anyone who can reach the URL can build or delete. Warn loudly, never silent.
-        if _oauth is None:
-            print("WARNING: MCP_HTTP serving WITHOUT app auth — the live-tenant write API is open "
-                  "to anyone who can reach this URL. Set MCP_OAUTH_BASE_URL (plus "
-                  "MCP_OAUTH_SIGNING_KEY) for per-user Kissflow auth, or protect it at the "
-                  "network layer.", file=sys.stderr, flush=True)
-        # CaptureTokenBody must wrap /token: the pasted secret is otherwise unreachable from the
-        # provider (see kfforge.auth). Harmless on every other path.
+        # provider_from_env() has already failed closed during module import if any HTTP auth
+        # setting is missing. CaptureTokenBody makes the client secret available to static lookup;
+        # it is harmless on every non-token path.
         mcp.run(transport="streamable-http", host="0.0.0.0",
                 port=int(os.environ.get("PORT", "8080")),
                 middleware=[ASGIMiddleware(CaptureTokenBody)])

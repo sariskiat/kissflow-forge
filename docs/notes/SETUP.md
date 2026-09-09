@@ -36,7 +36,7 @@ If missing:
 - **Windows:** `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`.
 
 You do NOT need to install Python separately — `uv` handles it. Every command uses
-`uv run --with 'fastmcp>=3' --no-project ...`, which fetches the dependency each run.
+`uv run --with 'fastmcp==3.4.7' --no-project ...`, which fetches the dependency each run.
 
 ## Step 2 — create the secrets file `.env`  ← **ASK THE HUMAN**
 The server needs 5 secret values. There is a template at `kf.env.example`. Copy it to `.env`
@@ -52,6 +52,9 @@ KF_DEV_ACCESS_KEY_ID=   # a secret
 KF_DEV_ACCESS_KEY_SECRET=  # a secret
 KF_APP=                 # which app to build in
 ```
+To build on a tenant that is NOT dev (no `dev-` in the URL), leave every `KF_DEV_*` line empty
+and fill `KF_DOMAIN`, `KF_ACCOUNT_ID`, `KF_ACCESS_KEY_ID`, `KF_ACCESS_KEY_SECRET` instead — same
+values, no dev-only guard. Same endpoints on every tenant; only domain + credentials change.
 **ASK THE HUMAN to get these 5 values from the person who gave them this folder** (send them
 privately — a DM or password manager, never a public chat). Paste the values in and save.
 ⚠️ `.env` holds live credentials. It is already git-ignored — never commit it, never paste the
@@ -65,7 +68,7 @@ printf '%s\n' \
  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-| uv run --with 'fastmcp>=3' --no-project python -m kfforge.server 2>/dev/null
+| uv run --with 'fastmcp==3.4.7' --no-project python -m kfforge.server 2>/dev/null
 ```
 Success = a big JSON blob listing tools whose names start with `forge_` and `kf_`.
 (First run is slow — it downloads the dependency once. If it errors, the `.env` values are
@@ -82,7 +85,7 @@ missing — and add a server entry. **Use the real absolute `REPO` path**:
   "mcpServers": {
     "kissflow-forge": {
       "command": "sh",
-      "args": ["-lc", "cd 'REPO' && set -a; . ./.env; set +a; exec uv run --with 'fastmcp>=3' --no-project python -m kfforge.server"]
+      "args": ["-lc", "cd 'REPO' && set -a; . ./.env; set +a; exec uv run --with 'fastmcp==3.4.7' --no-project python -m kfforge.server"]
     }
   }
 }
@@ -93,7 +96,7 @@ object — don't delete what's there. Then **fully quit and reopen Claude Deskto
 ### If you are **Claude Code** (the CLI)
 From `REPO`, run:
 ```bash
-claude mcp add kissflow-forge -- sh -lc "cd '$(pwd)' && set -a; . ./.env; set +a; exec uv run --with 'fastmcp>=3' --no-project python -m kfforge.server"
+claude mcp add kissflow-forge -- sh -lc "cd '$(pwd)' && set -a; . ./.env; set +a; exec uv run --with 'fastmcp==3.4.7' --no-project python -m kfforge.server"
 ```
 Then restart the session (or run `/mcp` and reconnect).
 

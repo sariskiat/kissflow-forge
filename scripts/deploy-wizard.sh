@@ -205,12 +205,12 @@ gcp_secret() {
 
 TOTAL_STAGES=6
 
-banner "kissflow-forge → Cloud Run (Google OAuth)"
+banner "kissflow-forge → Cloud Run (Microsoft Entra OAuth)"
 
 # ── Stage 1 · Preflight ───────────────────────────────────────────────────
 stage "Preflight — tools, project, APIs"
-say "This deploys the kissflow-forge MCP to Cloud Run, gated by Google OAuth (each Cowork"
-say "user logs in with their org Google account). You must be logged in to gcloud first."
+say "This deploys the kissflow-forge MCP to Cloud Run, gated by Microsoft Entra OAuth (each"
+say "user logs in with their org account). You must be logged in to gcloud first."
 if ! command -v gcloud >/dev/null 2>&1; then
   warn "gcloud not found — install the Google Cloud SDK, then re-run."; exit 1
 fi
@@ -243,28 +243,19 @@ SERVER_BASE_URL="https://${SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"
 write_env SERVER_BASE_URL "$SERVER_BASE_URL"
 note "predicted service URL: $SERVER_BASE_URL"
 
-# ── Stage 2 · Google OAuth client ─────────────────────────────────────────
-stage "Google — OAuth consent + client ID"
-say "Create the OAuth client claude.ai authenticates users against. Do this in the SAME"
-say "GCP project you are deploying to. No Azure, no new account."
-open_url "https://console.cloud.google.com/apis/credentials/consent?project=${PROJECT}"
-step "OAuth consent screen → User type: INTERNAL (locks logins to your org domain) → Create."
-note "  If INTERNAL is greyed out (no Workspace admin): pick EXTERNAL, and under 'Test users'"
-note "  add every org email that will use this — testing mode allows up to 100 without review."
-step "Fill app name + support email → Save (scopes/optional pages can stay default)."
-open_url "https://console.cloud.google.com/apis/credentials?project=${PROJECT}"
-step "Create credentials → OAuth client ID → Application type: Web application."
-step "Name: kissflow-forge-mcp"
-step "Under 'Authorized redirect URIs' → Add URI:"
-say  "    ${BOLD}${SERVER_BASE_URL}/auth/callback${RESET}"
-step "Create → copy the Client ID and Client secret from the dialog."
-ask        GOOGLE_CLIENT_ID     "Google Client ID:"
-ask_secret GOOGLE_CLIENT_SECRET "Google Client secret:"
-write_env  GOOGLE_CLIENT_ID     "$GOOGLE_CLIENT_ID"
-say "Optional app-level allowlist ON TOP of the domain lock: only these emails may call any"
-say "tool. Leave BLANK to allow any org user who passes OAuth."
-ask ALLOWED_EMAILS "ALLOWED_EMAILS (comma-separated, or blank):"
-write_env ALLOWED_EMAILS "$ALLOWED_EMAILS"
+# ── Stage 2 · Microsoft Entra OAuth client ─────────────────────────────────
+stage "Microsoft Entra — OAuth client"
+say "Register a single-tenant Entra web application and add this redirect URI:"
+say "    ${BOLD}${SERVER_BASE_URL}/auth/callback${RESET}"
+ask AZURE_TENANT_ID "Entra tenant ID:"
+ask AZURE_CLIENT_ID "Entra application (client) ID:"
+ask_secret AZURE_CLIENT_SECRET "Entra client secret:"
+ask AZURE_REQUIRED_SCOPES "Entra application scope (e.g. api://APP-ID/mcp-access):"
+write_env AZURE_TENANT_ID "$AZURE_TENANT_ID"
+write_env AZURE_CLIENT_ID "$AZURE_CLIENT_ID"
+write_env AZURE_REQUIRED_SCOPES "$AZURE_REQUIRED_SCOPES"
+ask ALLOWED_EMAIL_DOMAINS "ALLOWED_EMAIL_DOMAINS (comma-separated, or blank):"
+write_env ALLOWED_EMAIL_DOMAINS "$ALLOWED_EMAIL_DOMAINS"
 
 # ── Stage 3 · Kissflow engine config ──────────────────────────────────────
 stage "Kissflow — dev-tenant config + keys"
@@ -277,25 +268,22 @@ ask KF_APP            "KF_APP (target application id — one deploy = one app):"
 write_env KF_DEV_DOMAIN     "$KF_DEV_DOMAIN"
 write_env KF_DEV_ACCOUNT_ID "$KF_DEV_ACCOUNT_ID"
 write_env KF_APP            "$KF_APP"
-ask_secret KF_DEV_ACCESS_KEY_ID     "KF_DEV_ACCESS_KEY_ID:"
-ask_secret KF_DEV_ACCESS_KEY_SECRET "KF_DEV_ACCESS_KEY_SECRET:"
+# HTTP callers provide their own Kissflow access-key pair through OAuth; do not deploy one.
 
 # ── Stage 4 · Secret Manager + IAM ────────────────────────────────────────
 stage "GCP — store secrets + grant Cloud Run access"
 say "Pushing secrets and granting the runtime service account read access."
-gcp_secret google-client-secret      "$GOOGLE_CLIENT_SECRET"
-gcp_secret kf-dev-access-key-id      "$KF_DEV_ACCESS_KEY_ID"
-gcp_secret kf-dev-access-key-secret  "$KF_DEV_ACCESS_KEY_SECRET"
-# Stable JWT signing key so server-issued tokens survive a restart/redeploy (no forced re-login).
-MCP_JWT_SIGNING_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
-gcp_secret mcp-jwt-signing-key       "$MCP_JWT_SIGNING_KEY"
+gcp_secret azure-client-secret      "$AZURE_CLIENT_SECRET"
+# Stable OAuth signing key is generated locally and stored only in Secret Manager.
+MCP_OAUTH_SIGNING_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
+gcp_secret mcp-oauth-signing-key    "$MCP_OAUTH_SIGNING_KEY"
 RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 say "Ensuring the runtime SA (${RUNTIME_SA}) can read the secrets…"
 # Best-effort: if the runtime SA already has project-level access (e.g. the default compute SA
 # carries roles/editor, which includes secretmanager.versions.access) this is redundant, and
 # a plain Editor deployer can't setIamPolicy on a secret anyway. So warn, don't abort — a real
 # access gap surfaces loudly at container boot, not silently.
-for s in google-client-secret kf-dev-access-key-id kf-dev-access-key-secret mcp-jwt-signing-key; do
+for s in azure-client-secret mcp-oauth-signing-key; do
   if gcloud secrets add-iam-policy-binding "$s" --project "$PROJECT" \
        --member "serviceAccount:${RUNTIME_SA}" --role roles/secretmanager.secretAccessor \
        >/dev/null 2>&1; then
@@ -308,14 +296,14 @@ done
 # ── Stage 5 · Deploy ──────────────────────────────────────────────────────
 stage "Cloud Run — deploy"
 say "Building from source and deploying. --allow-unauthenticated is CORRECT here:"
-say "Cloud Run lets the request in at the infra layer; the GoogleProvider does the real"
-say "OAuth gating at the app layer. --min-instances=1 + session affinity keep the OAuth"
-say "session on one instance (the default token store is per-instance)."
+say "Cloud Run lets the request in at the infra layer; Microsoft Entra does the real OAuth"
+say "gating at the app layer. --min-instances=1 and --max-instances=1 keep the encrypted"
+say "disk-backed OAuth store on one copy; users must re-login after replacement."
 confirm "Run 'gcloud run deploy $SERVICE --source .' now?" || { warn "skipped deploy"; finish; exit 0; }
 gcloud run deploy "$SERVICE" --source . --project "$PROJECT" --region "$REGION" \
-  --allow-unauthenticated --min-instances 1 --session-affinity --timeout 3600 \
-  --set-env-vars "MCP_HTTP=1,KF_DEV_DOMAIN=${KF_DEV_DOMAIN},KF_DEV_ACCOUNT_ID=${KF_DEV_ACCOUNT_ID},KF_APP=${KF_APP},GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID},SERVER_BASE_URL=${SERVER_BASE_URL}" \
-  --set-secrets "GOOGLE_CLIENT_SECRET=google-client-secret:latest,KF_DEV_ACCESS_KEY_ID=kf-dev-access-key-id:latest,KF_DEV_ACCESS_KEY_SECRET=kf-dev-access-key-secret:latest,MCP_JWT_SIGNING_KEY=mcp-jwt-signing-key:latest"
+  --allow-unauthenticated --min-instances 1 --max-instances 1 --session-affinity --timeout 3600 \
+  --set-env-vars "MCP_HTTP=1,KF_DEV_DOMAIN=${KF_DEV_DOMAIN},KF_DEV_ACCOUNT_ID=${KF_DEV_ACCOUNT_ID},KF_APP=${KF_APP},AZURE_TENANT_ID=${AZURE_TENANT_ID},AZURE_CLIENT_ID=${AZURE_CLIENT_ID},AZURE_REQUIRED_SCOPES=${AZURE_REQUIRED_SCOPES},SERVER_BASE_URL=${SERVER_BASE_URL},MCP_OAUTH_BASE_URL=${SERVER_BASE_URL}" \
+  --set-secrets "AZURE_CLIENT_SECRET=azure-client-secret:latest,MCP_OAUTH_SIGNING_KEY=mcp-oauth-signing-key:latest"
 ACTUAL_URL=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
   --format='value(status.url)')
 note "predicted: $SERVER_BASE_URL"
@@ -328,12 +316,12 @@ if [[ "$ACTUAL_URL" != "$SERVER_BASE_URL" ]]; then
     --update-env-vars "SERVER_BASE_URL=${SERVER_BASE_URL}"
 fi
 say "Deployed at: ${BOLD}${SERVER_BASE_URL}${RESET}"
-# ALLOWED_EMAILS holds commas, which would break --set-env-vars' own comma delimiter, so it
-# rides in as its own update with a custom '@' delimiter. Empty = allow any org user.
-if [[ -n "${ALLOWED_EMAILS:-}" ]]; then
+# ALLOWED_EMAIL_DOMAINS holds commas, which would break gcloud's delimiter, so it
+# rides in as its own update. Empty = allow any configured Entra user.
+if [[ -n "${ALLOWED_EMAIL_DOMAINS:-}" ]]; then
   gcloud run services update "$SERVICE" --project "$PROJECT" --region "$REGION" \
-    --update-env-vars "^@^ALLOWED_EMAILS=${ALLOWED_EMAILS}"
-  say "App-level allowlist active: ${ALLOWED_EMAILS}"
+    --update-env-vars "^@^ALLOWED_EMAIL_DOMAINS=${ALLOWED_EMAIL_DOMAINS}"
+  say "Entra domain allowlist active: ${ALLOWED_EMAIL_DOMAINS}"
 fi
 
 # ── Stage 6 · Connect claude.ai ───────────────────────────────────────────
@@ -343,8 +331,8 @@ say "    ${BOLD}${SERVER_BASE_URL}/mcp${RESET}"
 open_url "https://claude.ai/settings/connectors"
 step "Settings → Connectors → Add custom connector."
 step "Name: kissflow-forge   ·   Remote MCP server URL: the /mcp URL above."
-step "Leave OAuth Client ID / Secret BLANK — FastMCP self-registers (DCR)."
-step "Add → Connect → sign in with your org Google account → Allow."
+step "Enter each user's Kissflow Access Key ID as OAuth Client ID and Access Key Secret as OAuth Client Secret."
+step "Add → Connect → sign in with your org Entra account → Allow."
 note "Smoke test: check discovery is live —"
 note "    curl -s ${SERVER_BASE_URL}/.well-known/oauth-protected-resource | head"
 

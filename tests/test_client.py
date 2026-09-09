@@ -241,6 +241,34 @@ def test_missing_env_returns_err_not_keyerror() -> None:
     assert isinstance(got, Err) and got.kind == "config"
 
 
+def test_kf_domain_is_explicit_non_dev_opt_in() -> None:
+    """Blank documented dev variables select the populated non-dev variable names."""
+    with pytest.MonkeyPatch.context() as mp:
+        for k, v in {"KF_DEV_DOMAIN": "", "KF_DEV_ACCOUNT_ID": "",
+                     "KF_DEV_ACCESS_KEY_ID": "", "KF_DEV_ACCESS_KEY_SECRET": "",
+                     "KF_DOMAIN": "acme.kissflow.com", "KF_ACCOUNT_ID": "A",
+                     "KF_ACCESS_KEY_ID": "k", "KF_ACCESS_KEY_SECRET": "s"}.items():
+            mp.setenv(k, v)
+        got = KfConfig.from_env()
+    assert isinstance(got, KfConfig), got
+    assert got.domain == "acme.kissflow.com" and got.account == "A"
+    assert got.key_id == "k" and got.key_secret == "s"
+
+
+def test_kf_dev_domain_wins_over_kf_domain_and_stays_guarded() -> None:
+    """KF_DEV_DOMAIN, when set, always wins over KF_DOMAIN — and the win keeps the dev- guard,
+    even though a (differently named, unguarded) KF_DOMAIN is ALSO present."""
+    with pytest.MonkeyPatch.context() as mp:
+        for k, v in {"KF_DEV_ACCESS_KEY_ID": "k", "KF_DEV_ACCESS_KEY_SECRET": "s",
+                     "KF_DEV_ACCOUNT_ID": "A", "KF_DEV_DOMAIN": "acme.kissflow.com"}.items():
+            mp.setenv(k, v)
+        for k, v in {"KF_DOMAIN": "also-acme.kissflow.com", "KF_ACCOUNT_ID": "A2",
+                     "KF_ACCESS_KEY_ID": "k2", "KF_ACCESS_KEY_SECRET": "s2"}.items():
+            mp.setenv(k, v)
+        got = KfConfig.from_env()
+    assert isinstance(got, Err) and got.kind == "config"
+
+
 def test_apply_fields_adds_and_verifies() -> None:
     c = FakeClient(_bare_form_draft())
     rep = apply_fields(c, "form", "F1", [FieldSpec(name="alpha", type=FieldType.TEXTAREA)])

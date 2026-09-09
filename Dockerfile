@@ -1,13 +1,13 @@
-# kissflow-forge MCP — HTTP transport for Cloud Run. NO app-level auth: the HTTP endpoint is
-# unauthenticated and writes to a live Kissflow tenant, so it MUST be protected at the network
-# layer (private ingress / IAM / VPC). server.main() logs a loud warning when it serves HTTP.
+# kissflow-forge MCP — HTTP transport. HTTP mode requires Entra + per-user Kissflow
+# authentication; incomplete auth configuration aborts startup rather than falling back to a
+# shared process key. Stdio remains the local process-env mode.
 # The engine is pure stdlib apart from fastmcp; the only runtime data are the repo dirs the code
 # reads by path (shapes/, docs/capabilities/, skills/) — all anchored at kfforge/../, so the
 # working-tree layout must be preserved under /app.
 FROM python:3.12-slim
 WORKDIR /app
 
-RUN pip install --no-cache-dir "fastmcp>=3"
+RUN pip install --no-cache-dir "fastmcp==3.4.7"
 
 COPY kfforge/ ./kfforge/
 COPY shapes/ ./shapes/

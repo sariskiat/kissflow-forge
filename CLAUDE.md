@@ -14,9 +14,11 @@ what "should" be true. Treat every shape in this file as a proven capture, not
 a spec: if the platform changes and a capture stops matching reality, recapture
 it, don't patch around the mismatch.
 
-The engine is dev-tenant only by construction and targets one app at a time via
-config — no default app, no writing to anything that isn't an explicit dev
-domain. Before any destructive build, produce a confirmation artifact (a
+The engine is dev-tenant by default (`KF_DEV_*` refuses any domain without
+`dev-`; the plain `KF_*` set is the explicit no-guard opt-in for another tenant,
+see `kf.env.example`) and targets one app at a time via
+config — no default app, no writing to anything that isn't the one explicitly
+configured domain. Before any destructive build, produce a confirmation artifact (a
 diagram or an HTML mockup of the intended shape) for a human to sign off on —
 building blind against an undocumented API is how sessions get lost.
 
@@ -50,31 +52,31 @@ as evidence of anything beyond "the API accepted the bytes."
 ## Commands
 
 No `.venv` here. Deps arrive per-run via `uv --with` (`requirements.txt` =
-`fastmcp>=3`, `pytest>=8`).
+`fastmcp==3.4.7`, `pytest>=8`). FastMCP is pinned because the auth seam is version-specific.
 
 ```bash
-# unit + integration — 2251 passed, 31 skipped (verified 2026-08-25). The 31
+# unit + integration — 2270 passed, 31 skipped (verified 2026-09-08). The 31
 # skips are the live suites — excluded by default, see conftest.py: 25 in the two
 # below, 5 in tests/test_live_template_app.py, plus tests/test_live_page_plan.py.
-uv run --with pytest --with 'fastmcp>=3' --no-project pytest -q
+uv run --with pytest --with 'fastmcp==3.4.7' --no-project pytest -q
 
 # one file / one test by name
-uv run --with pytest --with 'fastmcp>=3' --no-project pytest -q tests/test_pages.py
-uv run --with pytest --with 'fastmcp>=3' --no-project pytest -q -k step_permissions
+uv run --with pytest --with 'fastmcp==3.4.7' --no-project pytest -q tests/test_pages.py
+uv run --with pytest --with 'fastmcp==3.4.7' --no-project pytest -q -k step_permissions
 
 # live acceptance — 30 tests collected (verified 2026-08-25), 25 passed when last
 # run live (2026-08-10). Hits the REAL
 # Kissflow dev tenant (KF_APP) via direct in-process calls to kfforge.server's own
 # tool functions — no subprocess, no Robot Framework. Opt in with --run-live, or
 # these 30 just skip (see above).
-uv run --with pytest --with 'fastmcp>=3' --no-project pytest --run-live -q \
+uv run --with pytest --with 'fastmcp==3.4.7' --no-project pytest --run-live -q \
   tests/test_live_lifecycle.py tests/test_live_branching.py tests/test_live_template_app.py
 
 # MCP server
-uv run --with 'fastmcp>=3' python -m kfforge.server
+uv run --with 'fastmcp==3.4.7' python -m kfforge.server
 ```
 
-**Dropping `--with 'fastmcp>=3'` silently loses 1073 tests** (verified
+**Dropping `--with 'fastmcp==3.4.7'` silently loses 1073 tests** (verified
 2026-08-21). Twelve files die at collection with `ModuleNotFoundError: No module
 named 'fastmcp'` — `test_capabilities`, `test_capability_docs`,
 `test_live_branching`, `test_live_lifecycle`, `test_live_template_app`,

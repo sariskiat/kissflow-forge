@@ -93,59 +93,71 @@ It blocks browser-based clients only.
 
 ### Per-user Kissflow credentials, carried in over OAuth
 
-Over HTTP the server holds **no** shared Kissflow key. Each caller pastes their **own**
-access-key pair into Claude Desktop's connector dialog — key ID into `OAuth Client ID`,
-key secret into `OAuth Client Secret` — and `kfforge/auth.py` turns that pair into the
-credential every `forge_*` call spends. Kissflow's own role model, not ours, then bounds
-what each person can do, and no key needs an admin to mint.
+The combined provider is intentionally narrow. FastMCP 3.4.7's AzureProvider keeps the Entra
+PKCE, CSRF/state, callback, upstream token validation, refresh rotation, and JTI mappings. The
+Kissflow extension only does the following:
 
-Those two dialog fields are **not** a pipe for two loose strings. Desktop spends them in a
-real OAuth 2.1 authorization-code exchange, so the server has to be an authorization
-server for the pair to arrive at all. Enable it with `MCP_OAUTH_BASE_URL` (the public
-`https://` origin) plus `MCP_OAUTH_SIGNING_KEY` (≥32 chars of entropy, **identical on
-every replica** — a per-process key breaks refresh and breaks multi-pod). Leave
-`MCP_OAUTH_BASE_URL` unset and the endpoint stays exactly as unauthenticated as before,
-warned about at startup.
+1. Static `get_client` synthesizes a `ProxyDCRClient`; it never falls through to DCR storage or
+   CIMD. `/authorize` needs the key ID and redirect only. `/token` requires a presented secret but
+   does not validate it during lookup.
+2. `exchange_authorization_code` runs only after FastMCP has loaded the code and checked redirect
+   binding plus PKCE. A failed Kissflow check consumes that code. A successful check calls the
+   AzureProvider exchange, then reissues only the access JWT with the same JTI, client, scopes,
+   and remaining expiry.
+3. `exchange_refresh_token` runs only after FastMCP has found the stored refresh-token metadata.
+   It validates the pair before upstream refresh, calls the parent exchange, leaves the parent's
+   rotated refresh token unchanged, and binds the newly issued access JWT again.
+4. The encrypted pair is merged into `upstream_claims`; existing Entra claims such as `oid` and
+   `sub` remain. The raw secret is absent from JWT text. The visible OAuth `client_id` is the
+   caller's Kissflow key ID, which is an identifier rather than a secret.
 
-`/token` itself is unauthenticated and unthrottled by design — each POST validates a
-pasted Kissflow key pair and its 200-vs-401 response is a live oracle for guessing one —
-so the Entra/oauth2-proxy + Istio mesh edge in front of this server is the required
-shield (rate limiting and access control both live there, no rate limiter lives in the
-code); never expose this endpoint raw to the internet without that edge.
+HTTP startup requires `MCP_OAUTH_BASE_URL` (or `AZURE_BASE_URL`), `MCP_OAUTH_SIGNING_KEY`
+(≥32 chars of entropy), `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`,
+`AZURE_REQUIRED_SCOPES` with at least one application scope, and a complete Kissflow tenant
+domain/account. A partial set aborts startup; there is no unauthenticated HTTP mode and no
+`KF_*` fallback. Stdio does not construct the provider and keeps its process-env path. Istio is
+not required by this authentication layer.
 
-Everything is **stateless**: auth codes, access tokens and refresh tokens are all Fernet
-blobs sealed with a key derived from `MCP_OAUTH_SIGNING_KEY`. Nothing is kept in memory,
-so a pod restart or a second replica changes nothing. Sealed rather than merely signed
-because the tenant secret rides inside the token, and a token in a log must not leak a
-Kissflow key.
+`ALLOWED_EMAIL_DOMAINS` is optional. When configured, the provider reads only email-shaped claims
+from the validated Azure upstream claims (`preferred_username`, `email`, or `upn`), normalizes the
+domain, and rejects missing or disallowed values. `oid` and `sub` are preserved. This allowlist
+checks directory claims only; the two-gate exchange does **not** prove that the Entra account owns
+the Kissflow account. That stronger directory-to-Kissflow identity comparison would require a
+captured Kissflow identity lookup and is deliberately not added here.
 
-Four wire facts, each probed live against fastmcp 3.4.7, none of them guessable from the
-docs:
+Redirects use FastMCP's component-aware validator with explicit defaults:
+`http://localhost:*`, `http://127.0.0.1:*`, `http://[::1]:*`, `https://claude.ai/*`, and
+`https://*.claude.ai/*`. Configured patterns reject userinfo, unsafe schemes, encoded or literal
+dot-segments, and non-HTTPS remote callbacks; the same list protects authorization and the
+upstream callback. `/register` and CIMD metadata are absent. Metadata still advertises the
+configured application scopes and `client_secret_post`/`client_secret_basic` methods.
 
-- **The `/token` request body is unreadable from `get_client`.** fastmcp's request
-  contextvar hands back a *different* `Request` object than the one the SDK's
-  `TokenHandler` already drained, so `await req.form()` there dies with `Receive channel
-  has not been made available`. Headers survive; the body does not. That is the entire
-  reason `CaptureTokenBody` exists — an ASGI middleware that drains `/token` once, stashes
-  the parsed form in a contextvar, and replays it downstream.
-- **`validate_scope` refuses any scope the client was not "registered" with**, and there
-  is no registration step to register one in (DCR is deliberately off — that is *why* the
-  connector shows manual fields). The provider echoes the requested scope straight back
-  onto the client record. Scopes carry no authorization meaning here.
-- **`redirect_uris` must hold at least one entry** or the pydantic model raises and the
-  route 500s. The `refresh_token` grant sends no redirect at all, so that leg gets a
-  placeholder that is never redirected to; a redirect outside the allowlist returns `None`
-  from `get_client` (a clean invalid-client), never an empty list.
-- **`fastmcp.server.middleware.Middleware` and `starlette.middleware.Middleware` collide.**
-  Importing the Starlette one unaliased into `server.py` silently re-parents
-  `_CoerceJsonStringArgs` and every tool call dies with `'_CoerceJsonStringArgs' object is
-  not callable`. It is imported as `ASGIMiddleware`.
+The default FastMCP encrypted disk store contains transactions, authorization codes, encrypted
+upstream token sets, JTI mappings, and refresh metadata. It is safe for exactly one active replica.
+An ephemeral-disk restart loses sessions and requires re-login; add shared client storage before
+scale-out. No Firestore, proxy, or tool argument carries a secret.
 
-`/authorize` is a **browser** hit, so the Entra proxy in front may bounce it through
-Microsoft login first. That is fine — and arguably a second layer — **provided the proxy
-preserves the query string** across the bounce; OAuth dies without `state`,
-`redirect_uri` and `code_challenge`. Check before deploying, from a machine that can
-reach the host:
+`CaptureTokenBody` preserves the 3.4.7 request-body seam for static lookup and returns an empty 413
+before accumulating more than 64 KiB. It never logs or echoes a malformed or oversized body.
+`tests/test_oauth_per_user.py` uses a local ASGI harness with fake identity and Kissflow services;
+it does not call live Entra or Kissflow. Its contract checks include authorize redirect ordering,
+code consumption, refresh rotation, encrypted-claim tampering, DCR/CIMD absence, redirect
+bypasses, bounded token bodies, startup failure, and HTTP refusal of process keys.
+
+Four wire facts, each probed against FastMCP 3.4.7:
+
+- The SDK's `TokenHandler` drains `/token` before `get_client`; `CaptureTokenBody` is the bounded
+  replay seam. It preserves headers, never logs the form, and returns an empty 413 over 64 KiB.
+- `validate_scope` still runs on the synthetic static client, so configured application scopes stay
+  correct even though DCR is disabled.
+- `redirect_uris` must contain a placeholder entry for the Pydantic model. Actual callbacks are
+  checked by FastMCP's component-aware patterns, and refresh uses a never-redirected placeholder.
+- `fastmcp.server.middleware.Middleware` and `starlette.middleware.Middleware` remain distinct;
+  `server.py` imports the latter as `ASGIMiddleware`.
+
+`/authorize` is a **browser** hit and the AzureProvider sends it to Microsoft Entra. Any optional
+edge in front must preserve the query string across a bounce; OAuth dies without `state`,
+`redirect_uri` and `code_challenge`. Check before deploying, from a machine that can reach the host:
 
 ```bash
 curl -sS -D- -o /dev/null \
@@ -153,15 +165,12 @@ curl -sS -D- -o /dev/null \
   | grep -i "^HTTP\|^location"
 ```
 
-A 404 is a pass — it proves the proxy let the request reach the app. If `PROBE123` is
-missing from the `location` header, the mesh owner must exempt `/authorize`, `/token` and
-`/.well-known/*` from the Entra redirect. **UNVERIFIED as of 2026-08-19**: this probe has
-not been run; the repo host has no route to that endpoint.
+A 404 is a pass — it proves the edge let the request reach the app. If `PROBE123` is missing from
+the `location` header, the edge owner must preserve `/authorize`, `/token`, and `/.well-known/*`
+without dropping their query strings. This repository has not run that live probe.
 
-Ceilings, stated rather than hidden. A stateless auth code is replayable inside its 60s
-TTL, unlike a consumed one — PKCE binds it to the caller's verifier and `/token`
-re-validates the Kissflow secret, so a replay needs both, but there is no single-use
-table. A stateless token cannot be revoked; rotate the key in Kissflow instead, which a
-refresh notices within the hour. `tests/test_oauth_per_user.py` proves the flow end to end
-against a real spawned server — offline unit tests of the provider would have proven none
-of it.
+Ceilings, stated rather than hidden. FastMCP's encrypted file store is one-replica state: an
+ephemeral-disk restart loses transactions, codes, upstream tokens, JTI mappings, and refresh
+metadata, so sessions require re-login. Access-token revocation follows the upstream Kissflow
+pair; shared storage is required before scale-out. The offline ASGI tests do not call live Entra or
+Kissflow.

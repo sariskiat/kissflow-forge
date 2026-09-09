@@ -1,9 +1,9 @@
 # Security findings — dev-kissflow-mcp deployment
 
-**Status: recorded, not fixed.** This document is the written record of two security findings
-that surfaced while writing the spec for issue #2. It ships no code change, no deployment change,
-and no configuration change. That is deliberate, and the reason is stated in
-[No fix ships in this body of work](#no-fix-ships-in-this-body-of-work) below.
+**Status: historical record and remediation note.** Finding A described the former unauthenticated
+HTTP deployment. The application now fails closed in HTTP mode unless Entra configuration and the
+OAuth signing key are present; the deployment wizard supplies those values through Secret Manager.
+Finding B remains a credential-rotation action for the tenant administrator.
 
 | | Finding | Recorded | Owner | Status |
 |---|---|---|---|---|
