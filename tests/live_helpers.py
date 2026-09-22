@@ -5,22 +5,24 @@ Mirrors the old tests/robot/ForgeKeywords.py "direct (non-MCP) reads" section �
 own WalkReport never carries, because it echoes the PLANNED step names and never reads them back
 (CLAUDE.md > THE RULE: an echo of the plan proves nothing about what actually landed).
 
-Called in-process (no MCP/STDIO transport) — `kfforge.server`'s tool functions are plain Python
+Called in-process (no MCP/STDIO transport) — `app.infrastructure.mcp.server`'s tool functions are plain Python
 functions once imported (proven by tests/test_p2_server.py: `getattr(srv, name)(**kwargs)`), so a
 live acceptance test can call them directly instead of going through the wire protocol a real MCP
 client would use. The wire protocol itself (schema-building, JSON-RPC framing) already has its own
 offline coverage in test_p2_server.py; these tests exist to prove the tenant-facing behavior, which
 direct calls exercise identically.
 """
+
 from __future__ import annotations
 
 import os
 import pathlib
 from typing import Any
 
-import kfforge.server as srv
-from kfforge.client import Err, KfClient, KfConfig
-from kfforge.dataplane import LiveDataPlane
+import app.infrastructure.mcp.server as srv
+from app.infrastructure.kissflow.client import Err, KfClient, KfConfig
+from app.infrastructure.kissflow.dataplane import LiveDataPlane
+from app.infrastructure.mcp.server import SchemaKind
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
@@ -51,19 +53,20 @@ def _live_data_plane() -> LiveDataPlane:
     return LiveDataPlane(KfClient(cfg))
 
 
-def resolve_field_ids(flow_id: str, kind: str = "process") -> dict[str, str]:
+def resolve_field_ids(flow_id: str, kind: SchemaKind = "process") -> dict[str, str]:
     """{field NAME: field ID} for every Field node on the flow's LIVE draft. forge_simulate_case's
     `values` payload must be keyed by field ID, never name (CLAUDE.md > Item data plane)."""
     draft = srv.kf_get_flow_schema(flow_kind=kind, flow_id=flow_id)
     if draft.get("isError"):
         raise RuntimeError(f"could not fetch draft to resolve field ids: {draft}")
     return {
-        node["Name"]: node_id for node_id, node in draft.items()
+        node["Name"]: node_id
+        for node_id, node in draft.items()
         if isinstance(node, dict) and node.get("Kind") == "Field" and node.get("Name")
     }
 
 
-def resolve_assigned_role_ids(flow_id: str, kind: str = "process") -> list[str]:
+def resolve_assigned_role_ids(flow_id: str, kind: SchemaKind = "process") -> list[str]:
     """Live read-back of every step's real AppRole assignee (Resource nodes), in
     ProcessDef::Activity order — forge_build_workflow's own `assigned` is an echo of the input,
     never proof of what actually landed (CLAUDE.md > Members first)."""
@@ -71,9 +74,12 @@ def resolve_assigned_role_ids(flow_id: str, kind: str = "process") -> list[str]:
     if draft.get("isError"):
         raise RuntimeError(f"could not fetch draft to resolve assignee resources: {draft}")
     return [
-        node["Value"] for node in draft.values()
-        if isinstance(node, dict) and node.get("Kind") == "Resource"
-        and node.get("ValueType") == "AppRole" and isinstance(node.get("Value"), str)
+        node["Value"]
+        for node in draft.values()
+        if isinstance(node, dict)
+        and node.get("Kind") == "Resource"
+        and node.get("ValueType") == "AppRole"
+        and isinstance(node.get("Value"), str)
     ]
 
 

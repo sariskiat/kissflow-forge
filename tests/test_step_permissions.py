@@ -3,6 +3,7 @@
 Same rules as the original suite, but every expectation is COMPUTED from the generated
 draft (tests/synthetic.py) — no live counts, no real-app content.
 """
+
 from __future__ import annotations
 
 import copy
@@ -11,14 +12,14 @@ from typing import Any
 import pytest
 from synthetic import OWNERS, synthetic_process_draft
 
-from kfforge.graph import (
+from app.domain.graph import (
     NO_PERMISSION_NODETYPES,
     add_sequence_number,
     add_table,
     progressive_matrix,
     set_step_permissions,
 )
-from kfforge.types import FieldType, Visibility
+from app.domain.types import FieldType, Visibility
 
 Draft = dict[str, Any]
 
@@ -43,8 +44,11 @@ def _nodes(d: Draft, kind: str) -> dict[str, Any]:
 
 
 def _bearing(d: Draft) -> set[str]:
-    return {k for k, v in _nodes(d, "Activity").items()
-            if v.get("NodeType") not in NO_PERMISSION_NODETYPES}
+    return {
+        k
+        for k, v in _nodes(d, "Activity").items()
+        if v.get("NodeType") not in NO_PERMISSION_NODETYPES
+    }
 
 
 def _act(d: Draft, name: str) -> str:
@@ -57,14 +61,18 @@ def _section_cols(d: Draft) -> dict[str, list[str]]:
     for sec in cols.values():
         if sec.get("Type") not in ("Section", "Model") or not sec.get("Name"):
             continue
-        members = [cid for rid in (sec.get("Column::Row") or [])
-                   for cid in ((rows.get(rid) or {}).get("Row::Column") or [])
-                   if cid in cols and cols[cid].get("Type") == "Field"]
+        members = [
+            cid
+            for rid in (sec.get("Column::Row") or [])
+            for cid in ((rows.get(rid) or {}).get("Row::Column") or [])
+            if cid in cols and cols[cid].get("Type") == "Field"
+        ]
         out[sec["Name"]] = members
     return out
 
 
 # ---- matrix shape ----------------------------------------------------------
+
 
 def test_matrix_covers_every_named_section(draft, matrix):
     secs = _section_cols(draft)
@@ -109,6 +117,7 @@ def test_unowned_section_readonly_everywhere(draft, matrix):
 
 # ---- applying the matrix ---------------------------------------------------
 
+
 def test_apply_writes_field_level_pairs(draft, applied, matrix):
     secs = _section_cols(draft)
     expected = sum(len(secs[name]) * len(row) for name, row in matrix.items())
@@ -126,8 +135,11 @@ def test_backrefs_bidirectional(applied):
 
 
 def test_no_permissions_on_structural_nodes(applied):
-    structural = {k for k, v in _nodes(applied, "Activity").items()
-                  if v.get("NodeType") in NO_PERMISSION_NODETYPES}
+    structural = {
+        k
+        for k, v in _nodes(applied, "Activity").items()
+        if v.get("NodeType") in NO_PERMISSION_NODETYPES
+    }
     for p in _nodes(applied, "Permission").values():
         assert p["Activity"] not in structural
 
@@ -148,14 +160,16 @@ def test_sparse_matrix_raises(draft, matrix):
 # CLAUDE.md > Visibility: "Hidden columns ... and sequence-number columns themselves
 # take no Permissions at all." Rule is stated on column properties, not field names.
 
+
 @pytest.fixture(scope="module")
 def seq_draft(draft: Draft) -> Draft:
     return add_sequence_number(draft, "Running No", "Intake", "TCK-", "0001", "Ticket arrives")
 
 
 def _seq_col(d: Draft) -> str:
-    return next(v["Column"] for v in _nodes(d, "Field").values()
-                if v.get("Type") == "SequenceNumber")
+    return next(
+        v["Column"] for v in _nodes(d, "Field").values() if v.get("Type") == "SequenceNumber"
+    )
 
 
 def test_sequence_column_gets_no_permissions(seq_draft, matrix):
@@ -183,8 +197,14 @@ def test_field_matrix_on_excluded_column_raises(seq_draft, matrix):
 def test_sequence_exclusion_is_call_order_independent(draft, seq_draft, matrix):
     # the ticket's requirement: seq-then-visibility and visibility-then-seq give the same graph
     seq_first = set_step_permissions(seq_draft, matrix)
-    vis_first = add_sequence_number(set_step_permissions(draft, matrix),
-                                    "Running No", "Intake", "TCK-", "0001", "Ticket arrives")
+    vis_first = add_sequence_number(
+        set_step_permissions(draft, matrix),
+        "Running No",
+        "Intake",
+        "TCK-",
+        "0001",
+        "Ticket arrives",
+    )
     assert len(_nodes(seq_first, "Permission")) == len(_nodes(vis_first, "Permission"))
     for d in (seq_first, vis_first):
         col = _seq_col(d)
@@ -196,8 +216,9 @@ def test_sequence_exclusion_does_not_ride_on_ishidden(seq_draft, matrix):
     d = copy.deepcopy(seq_draft)
     del d[_seq_col(d)]["IsHidden"]
     applied = set_step_permissions(d, matrix)
-    assert [p for p in _nodes(applied, "Permission").values()
-            if p["Column"] == _seq_col(applied)] == []
+    assert [
+        p for p in _nodes(applied, "Permission").values() if p["Column"] == _seq_col(applied)
+    ] == []
 
 
 # ---- a table host column takes no Permission and never breaks coverage (#table+vis) ----------
@@ -206,11 +227,11 @@ def test_sequence_exclusion_does_not_ride_on_ishidden(seq_draft, matrix):
 # Before this fix, set_step_permissions and add_table were mutually exclusive: a table-bearing
 # flow was rejected here as "field columns outside every matrix section".
 
+
 def _table_cols(d: Draft) -> tuple[str, set[str]]:
     """(host column id, {child column ids}) for the single table in the draft."""
     host = next(k for k, v in _nodes(d, "Column").items() if v.get("Type") == "Model")
-    children = {v["Column"] for v in _nodes(d, "Field").values()
-                if v.get("Name") in ("SKU", "Qty")}
+    children = {v["Column"] for v in _nodes(d, "Field").values() if v.get("Name") in ("SKU", "Qty")}
     return host, children
 
 

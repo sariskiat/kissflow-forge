@@ -8,6 +8,7 @@ one). These tests pin the node inventory to the capture's and prove zero persona
 tokens, pattern-enforced — never eyeballed. The generic envelope/mint/backref contract comes
 free from tests/test_shapes.py; only the shape-specific inventory lives here.
 """
+
 from __future__ import annotations
 
 import collections
@@ -20,29 +21,68 @@ SHAPE_PATH = pathlib.Path(__file__).parent.parent / "shapes" / "process_template
 # The capture's exact per-Kind census. A recapture that changes ANY of these numbers must
 # change this table in the same commit — the point is that drift is loud, never silent.
 EXPECTED_KINDS: dict[str, int] = {
-    "Node": 104, "Column": 40, "Row": 29, "Field": 28, "Condition": 19, "Expression": 16,
-    "Criteria": 16, "Activity": 5, "QueryDefinition": 5, "Appearance": 4, "Style": 4,
-    "Model": 1, "ProcessDef": 1, "User": 1, "Permission": 1, "Component": 1, "Property": 1,
+    "Node": 104,
+    "Column": 40,
+    "Row": 29,
+    "Field": 28,
+    "Condition": 19,
+    "Expression": 16,
+    "Criteria": 16,
+    "Activity": 5,
+    "QueryDefinition": 5,
+    "Appearance": 4,
+    "Style": 4,
+    "Model": 1,
+    "ProcessDef": 1,
+    "User": 1,
+    "Permission": 1,
+    "Component": 1,
+    "Property": 1,
     "Resource": 1,
 }
 
 EXPECTED_FIELD_TYPES: dict[str, int] = {
-    "Text": 20, "User": 3, "Reference": 2, "Number": 1, "Boolean": 1, "Textarea": 1,
+    "Text": 20,
+    "User": 3,
+    "Reference": 2,
+    "Number": 1,
+    "Boolean": 1,
+    "Textarea": 1,
 }
 
 # The capture's exact edge census: total elements per "::"-list key, summed over all nodes. Kind
 # counts alone let a fully unwired shape pass (every node present, no node connected) — the wiring
 # IS the value of this shape, so it gets pinned as hard as the node census.
 EXPECTED_EDGES: dict[str, int] = {
-    "Model::Row": 5, "Model::Field": 28, "Model::ProcessDef": 1, "Model::Component": 1,
-    "Button::Row": 1, "Row::Column": 39, "Column::Row": 23, "Column::Field": 28,
-    "Column::Permission": 1, "Column::Appearance": 4, "ColumnVisibility::Criteria": 9,
-    "ProcessDef::Activity": 4, "Activity::Permission": 1, "Activity::Resource": 1,
-    "Initiator::Column": 1, "Field::Expression": 16, "Field::Node": 24,
-    "Field::QueryDefinition": 5, "Field::Component": 1, "Field::Resource": 1,
-    "LHSOwnField::Condition": 10, "RHSField::Condition": 4, "Expression::Node": 16,
-    "Node::Node": 88, "Criteria::Condition": 19, "FieldValidation::Criteria": 4,
-    "Permission::Criteria": 1, "QueryDefinition::Criteria": 2, "Component::Property": 1,
+    "Model::Row": 5,
+    "Model::Field": 28,
+    "Model::ProcessDef": 1,
+    "Model::Component": 1,
+    "Button::Row": 1,
+    "Row::Column": 39,
+    "Column::Row": 23,
+    "Column::Field": 28,
+    "Column::Permission": 1,
+    "Column::Appearance": 4,
+    "ColumnVisibility::Criteria": 9,
+    "ProcessDef::Activity": 4,
+    "Activity::Permission": 1,
+    "Activity::Resource": 1,
+    "Initiator::Column": 1,
+    "Field::Expression": 16,
+    "Field::Node": 24,
+    "Field::QueryDefinition": 5,
+    "Field::Component": 1,
+    "Field::Resource": 1,
+    "LHSOwnField::Condition": 10,
+    "RHSField::Condition": 4,
+    "Expression::Node": 16,
+    "Node::Node": 88,
+    "Criteria::Condition": 19,
+    "FieldValidation::Criteria": 4,
+    "Permission::Criteria": 1,
+    "QueryDefinition::Criteria": 2,
+    "Component::Property": 1,
     "Appearance::Style": 4,
 }
 
@@ -51,10 +91,31 @@ EXPECTED_EDGES: dict[str, int] = {
 # ComponentId's cross-graph widget-definition ref (resolves to no node in the source draft either
 # — see the shape's notes).
 SCALAR_REF_KEYS = {
-    "Model", "Column", "Row", "ProcessDef", "Button", "Initiator", "Appearance",
-    "RootProcessDef", "Node", "Field", "Criteria", "Expression", "FieldModel", "LHSOwnField",
-    "ColumnVisibility", "FieldValidation", "RHSField", "Activity", "QueryDefinition", "Root",
-    "Permission", "Component", "Resource", "Style", "BaseMetadata",
+    "Model",
+    "Column",
+    "Row",
+    "ProcessDef",
+    "Button",
+    "Initiator",
+    "Appearance",
+    "RootProcessDef",
+    "Node",
+    "Field",
+    "Criteria",
+    "Expression",
+    "FieldModel",
+    "LHSOwnField",
+    "ColumnVisibility",
+    "FieldValidation",
+    "RHSField",
+    "Activity",
+    "QueryDefinition",
+    "Root",
+    "Permission",
+    "Component",
+    "Resource",
+    "Style",
+    "BaseMetadata",
 }
 ALLOWED_SYSTEM_FIELD_REFS = {"_created_by", "_submitted_at"}
 
@@ -148,9 +209,13 @@ def test_workflow_kept_verbatim_including_duplicate_step() -> None:
 def test_zero_personal_identity_tokens() -> None:
     text = SHAPE_PATH.read_text(encoding="utf-8")
     stray_emails = set(EMAIL_RE.findall(text)) - ALLOWED_EMAIL_TOKENS
-    assert not stray_emails, f"personal email token(s) leaked into the vendored shape: {stray_emails}"
+    assert not stray_emails, (
+        f"personal email token(s) leaked into the vendored shape: {stray_emails}"
+    )
     stray_user_ids = set(USER_ID_RE.findall(text))
-    assert not stray_user_ids, f"Kissflow user id(s) leaked into the vendored shape: {stray_user_ids}"
+    assert not stray_user_ids, (
+        f"Kissflow user id(s) leaked into the vendored shape: {stray_user_ids}"
+    )
 
 
 def test_publisher_record_is_fully_scrubbed() -> None:

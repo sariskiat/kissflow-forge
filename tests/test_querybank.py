@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from kfforge.querybank import (
+from app.application.querybank import (
     ANSWER,
     GRAPH_DIFF,
     MODULES,
@@ -108,9 +108,7 @@ def test_main_combined_filter(capsys: pytest.CaptureFixture[str]) -> None:
     assert ret == 0
     captured = capsys.readouterr()
     lines = [line for line in captured.out.strip().split("\n") if line]
-    expected_count = len(
-        [q for q in BANK if q.sweep == "roles" and q.observable == GRAPH_DIFF]
-    )
+    expected_count = len([q for q in BANK if q.sweep == "roles" and q.observable == GRAPH_DIFF])
     assert len(lines) == expected_count
     for line in lines:
         data = json.loads(line)
@@ -139,9 +137,7 @@ def test_main_count_with_filter(capsys: pytest.CaptureFixture[str]) -> None:
     assert ret == 0
     captured = capsys.readouterr()
     lines = [line for line in captured.out.strip().split("\n") if line]
-    expected_count = len(
-        [q for q in BANK if q.sweep == "pages" and q.observable == ANSWER]
-    )
+    expected_count = len([q for q in BANK if q.sweep == "pages" and q.observable == ANSWER])
     assert lines == [f"pages\t{expected_count}", f"total\t{expected_count}"]
 
 

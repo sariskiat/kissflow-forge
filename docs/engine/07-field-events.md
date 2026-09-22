@@ -24,7 +24,7 @@ issue #12 — replacing the earlier belief that only `onChange` was captured):
 a Select source fires `onClick`, Date and Number sources fire `onSelect`,
 Text/Textarea sources fire `onChange`. A hand-picked wrong trigger writes
 fine, publishes fine, and simply never fires — derive it from the source
-type (`kfforge.intake.schema.trigger_for`), never guess it. User→`onSelect`
+type (`app.application.intake.schema.trigger_for`), never guess it. User→`onSelect`
 and Boolean→`onClick` are family-inferred, still unverified live.
 
 Six field types never get an event at all — the builder offers no Event tab

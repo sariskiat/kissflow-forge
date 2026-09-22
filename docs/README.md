@@ -71,10 +71,10 @@ The server runs in one of two modes, and the mode decides who acts as whom:
                                             server runs each call as that user
 ```
 
-- **stdio** (`kfforge/server.py`, no `MCP_HTTP`): the tools run under the single
+- **stdio** (`src/app/infrastructure/mcp/server.py`, no `MCP_HTTP`): the tools run under the single
   `KF_DEV_*` credential in the environment. Fine for one operator on their own
   machine; everyone shares one identity.
-- **HTTP + per-user OAuth** (`kfforge/auth.py`): set `MCP_OAUTH_BASE_URL` and a
+- **HTTP + per-user OAuth** (`src/app/infrastructure/kissflow/auth.py`): set `MCP_OAUTH_BASE_URL` and a
   32-char `MCP_OAUTH_SIGNING_KEY`, and each connector carries the caller's own
   Kissflow **Access Key ID / Secret** in its OAuth Client ID / Secret fields.
   The server validates the pair once against Kissflow, then runs every call as
@@ -139,6 +139,8 @@ The same image runs unchanged behind the platform team's mesh:
 | `docs/research/` | 2 findings from primary sources | You need a fact someone already chased down |
 | `docs/connect-claude-desktop.md` | End-user connector walkthrough | A non-technical person needs to connect |
 | `docs/demo-user-setup.md` | Demo handout for the Claude Code tab, with VPN preflight | Onboarding demo users to the shared server |
+| `docs/capture-guideline-th.md` | Thai guideline: describe a feature, build it once in the builder, paste the network requests, let Claude diff; branch → GitHub PR → our review | A colleague whose Claude builds something wrong or incomplete |
+| `docs/agents/developerguide.md` | Agent-facing guide for a colleague's Claude: plan → red test → browser capture → diff → engine change → shape saved → GitHub PR | Their Claude is about to add a feature the engine cannot build yet |
 | `docs/security-findings.md` | Open security findings, with owners | Before exposing the server to anyone |
 | `docs/sre-mcp-curl-repro.md` | Endpoint reproduction for the platform team | The hosted endpoint misbehaves |
 

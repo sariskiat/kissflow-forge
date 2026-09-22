@@ -51,39 +51,35 @@ as evidence of anything beyond "the API accepted the bytes."
 
 ## Commands
 
-No `.venv` here. Deps arrive per-run via `uv --with` (`requirements.txt` =
-`fastmcp==3.4.7`, `pytest>=8`). FastMCP is pinned because the auth seam is version-specific.
+This is a `uv` project: `pyproject.toml` + `uv.lock` own every dependency, and
+`uv run` resolves them. There is no `requirements.txt` and no `--with` flag any
+more — the old per-run form silently dropped 1073 tests whenever the `--with
+'fastmcp'` argument was forgotten, and a lockfile removes that failure mode
+entirely. FastMCP is pinned EXACTLY (`fastmcp==4.0.2`) because the OAuth-proxy
+seam in `src/app/infrastructure/kissflow/auth.py` reaches into
+`fastmcp.server.auth` internals that semver does not cover.
 
 ```bash
-# unit + integration — 2270 passed, 31 skipped (verified 2026-09-08). The 31
-# skips are the live suites — excluded by default, see conftest.py: 25 in the two
-# below, 5 in tests/test_live_template_app.py, plus tests/test_live_page_plan.py.
-uv run --with pytest --with 'fastmcp==3.4.7' --no-project pytest -q
+uv sync                  # create/refresh .venv from uv.lock
+
+make test                # unit + integration — 2284 passed, 31 skipped (verified 2026-09-17).
+                         # The 31 skips are the live suites, excluded by default (conftest.py).
+make lint                # ruff format --check + ruff check + import-linter + ty check .
+                         # All four are GREEN and blocking, over src/ AND tests/.
+make architecture        # import-linter alone — the layer rules, enforced
+make verify              # lint + test, the pre-push gate (coverage gate: 90%)
+make format              # ruff --fix + ruff format
 
 # one file / one test by name
-uv run --with pytest --with 'fastmcp==3.4.7' --no-project pytest -q tests/test_pages.py
-uv run --with pytest --with 'fastmcp==3.4.7' --no-project pytest -q -k step_permissions
+uv run pytest tests/test_pages.py
+uv run pytest -k step_permissions
 
-# live acceptance — 30 tests collected (verified 2026-08-25), 25 passed when last
-# run live (2026-08-10). Hits the REAL
-# Kissflow dev tenant (KF_APP) via direct in-process calls to kfforge.server's own
-# tool functions — no subprocess, no Robot Framework. Opt in with --run-live, or
-# these 30 just skip (see above).
-uv run --with pytest --with 'fastmcp==3.4.7' --no-project pytest --run-live -q \
-  tests/test_live_lifecycle.py tests/test_live_branching.py tests/test_live_template_app.py
+# live acceptance — hits the REAL Kissflow dev tenant (KF_APP) via direct in-process
+# calls to app.infrastructure.mcp.server's own tool functions. Opt in, or these skip.
+make test-live
 
-# MCP server
-uv run --with 'fastmcp==3.4.7' python -m kfforge.server
+make start               # the MCP server (= uv run mcp-server = python -m app.main)
 ```
-
-**Dropping `--with 'fastmcp==3.4.7'` silently loses 1073 tests** (verified
-2026-08-21). Twelve files die at collection with `ModuleNotFoundError: No module
-named 'fastmcp'` — `test_capabilities`, `test_capability_docs`,
-`test_live_branching`, `test_live_lifecycle`, `test_live_template_app`,
-`test_mcp_boundary`, `test_mcp_surface`, `test_p2_server`, `test_p3_surface`,
-`test_proxy_headers`, `test_reader_boundary`, `test_tool_claims` — and pytest
-reports `1083 tests collected, 12 errors` against the full run's 2156 — not a
-failure you'd notice if you only read the tail.
 
 `tests/test_engine_doc.py` is a contract test over **this file plus every
 `docs/engine/*.md`**: it requires every `##` heading listed in its `HEADINGS`,
@@ -95,30 +91,48 @@ detail goes in `docs/engine/`, never here.
 
 ## Layout
 
+Clean Architecture: dependencies point **inward**, and that is a check, not a
+docstring — `make architecture` (import-linter) fails the build if an edge ever
+turns around. See `code_architecture.md` for the layer rules.
+
 ```
-kfforge/
-  types.py         # frozen structs, closed enums — the typed core
-  graph.py         # pure offline ops on the normalized node-graph
-  expr.py          # Expression/Node AST for branch conditions + GotoTask gates
-  nav.py           # pure offline ops on the app-level navigation graph
-  pages.py         # pure offline ops on the app-PAGE graph
-  verify.py        # health check: every reference that would break the form
-  client.py        # live builder client — THE WRITE PATH (dev tenant only)
-  pages_live.py    # live orchestration for page + navigation graphs
-  dataplane.py     # documented /process API — create an item, fill it, move it
-  engine.py        # offline planning; apply/publish orchestration lands here later
-  tools.py         # framework-agnostic tool logic (dict in / dict out)
-  server.py        # fastmcp MCP server
-  design/          # confirm.py (approval protocol) · diagram.py (draw.io XML) ·
+src/app/
+  main.py          # composition root: transport + port, nothing else
+  resources.py     # the ONE filesystem anchor (shapes/, docs/capabilities/, skills/)
+  domain/          # the node-graph model + pure ops. No HTTP, no fastmcp, no I/O clients.
+    types.py       # frozen structs, closed enums — the typed core
+    graph.py       # pure offline ops on the normalized node-graph
+    expr.py        # Expression/Node AST for branch conditions + GotoTask gates
+    pages.py       # pure offline ops on the app-PAGE graph
+    nav.py         # pure offline ops on the app-level navigation graph
+    coverage.py    # the coverage contract — which shapes may be built, refused by row
+  application/     # use cases over the domain. May import domain, never infrastructure.
+    engine.py      # offline planning; apply/publish orchestration lands here later
+    tools.py       # framework-agnostic tool logic (dict in / dict out)
+    verify.py      # health check: every reference that would break the form
+    compare.py     # draft-vs-draft diffing
+    querybank.py   # copilot probe-prompt catalog
+    design/        # confirm.py (approval protocol) · diagram.py (draw.io XML) ·
                    # mockup.py (self-contained HTML for the business owner)
-  intake/          # schema.py (11-dimension AppSpec) · questions.py (grilling
+    intake/        # schema.py (11-dimension AppSpec) · questions.py (grilling
                    # script) · compile.py (AppSpec → ordered BuildPlan) · serde.py
+  infrastructure/  # adapters onto the outside world. May import anything inward.
+    kissflow/      # client.py — THE WRITE PATH (dev tenant only) · auth.py (Entra +
+                   # per-user OAuth) · dataplane.py (/process API) · pages_live.py
+    mcp/server.py  # the FastMCP adapter — thin: tool surface, no business rules
+    capabilities.py / playbook.py   # docs + vendored-skill readers (filesystem)
 shapes/            # 85 captured JSON node shapes (2026-08-20) — the proven-capture reference
 tests/             # pytest suites + fixtures/ + live_helpers.py
 scripts/           # mcp-curl-probe.sh — 7-check HTTP-transport probe, run per URL and diff
 docs/adr/          # 5 ADRs (2026-08-19) — locked decisions, don't re-litigate
 CONTEXT.md         # domain glossary
 ```
+
+`shapes/`, `docs/capabilities/` and `skills/` stay at the REPO ROOT, not inside
+the package: `docs/capabilities/*.md` cross-references its captures as
+repo-relative `shapes/...` strings. Everything resolves them through
+`src/app/resources.py` — one anchor, not four modules each climbing `..` on
+their own.
 
 Trunk is `develop`. `CONTEXT.md` and `docs/` are **tracked**, ADRs included
 (verified 2026-08-19) — a clone carries the whole manual, not just this file.
@@ -233,7 +247,7 @@ The fresh-context builder brain (THE RULE, the numbered build order, the intent�
 refuse-loudly table, the copilot fallback) is vendored at `skills/kissflow-forge-builder/SKILL.md`
 so it version-controls with the codebase and ships with the MCP — `~/.claude/skills` is local-dev
 only and does NOT deploy. It is served over the wire by the `forge_playbook` tool
-(`kfforge/playbook.py`), so a remote user's Claude fetches the doctrine at runtime with no local
+(`src/app/infrastructure/playbook.py`), so a remote user's Claude fetches the doctrine at runtime with no local
 file; deep wire shapes it references live in `forge_capabilities(<id>)`.
 
 ### Issue tracker
@@ -258,7 +272,7 @@ Turn the two input files (a `.drawio` flow capture + an HTML page design) into
 spec JSON, consumed via the existing `forge_update_spec` → `forge_approve_spec`
 → `forge_plan_app` surface — the engine never parses `.drawio` (D5). Ask on any
 blocking gap, never enrich a guess; validate every routing literal against the
-LIVE word list; refuse any `kfforge.coverage` shape marked `refuses-loudly`,
+LIVE word list; refuse any `app.domain.coverage` shape marked `refuses-loudly`,
 naming the row. Token discipline: never open the XML whole, analyze with
 `python3`. See `docs/agents/reader.md`; its output boundary is proven by
 `tests/test_reader_boundary.py`.

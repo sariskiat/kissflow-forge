@@ -1,50 +1,52 @@
-"""Unit spec for kfforge.design: the confirm-before-you-build layer (diagrams, HTML mockups,
+"""Unit spec for app.application.design: the confirm-before-you-build layer (diagrams, HTML mockups,
 the approval protocol).
 
-Everything here is a plain, hand-built stub -- NOT an import from kfforge.intake. That package is
-a parallel, independently-authored node building the real `AppSpec` dataclasses; kfforge.design
+Everything here is a plain, hand-built stub -- NOT an import from app.application.intake. That package is
+a parallel, independently-authored node building the real `AppSpec` dataclasses; app.application.design
 only ever promises to work against the small structural protocol it defines in
-kfforge/design/__init__.py (name/attribute shapes only, checked by nothing but normal attribute
+src/app/design/__init__.py (name/attribute shapes only, checked by nothing but normal attribute
 access).
 
-The stub shape below deliberately MIRRORS kfforge.intake.schema's real nesting: every dimension
-kfforge.intake.schema wraps in its own container (`Stages.stages`, `Routing.points`,
+The stub shape below deliberately MIRRORS app.application.intake.schema's real nesting: every dimension
+app.application.intake.schema wraps in its own container (`Stages.stages`, `Routing.points`,
 `ReworkLoops.loops`, `TestCases.cases`, `VisibilityMatrix.entries`) is wrapped the same way here,
 `kpis`/`actions` live on `PersonaView` (never on the page), and `AppSpec`'s rework-loop attribute
 is named `rework_loops` (never `loops`) -- two review rounds proved these details load-bearing,
-not decorative: a mismatch here is exactly what let kfforge.design ship code that raised against
+not decorative: a mismatch here is exactly what let app.application.design ship code that raised against
 a real AppSpec, and a shallow fixture (visibility/computed/sections all empty) is exactly what let
 a first round of "faithfulness" bugs (a Hidden field rendering as a live input, a computed field
 rendering as something the user types) through unnoticed. `bare_shape_spec()` separately proves
 the OTHER half of the contract: this package's own minimal protocol also accepts a bare sequence
-in place of any wrapper, via `kfforge.design.diagram._seq()`.
+in place of any wrapper, via `app.application.design.diagram._seq()`.
 
 Domain is deliberately neutral (a small equipment-repair intake flow) -- no real app names/ids/
 real-app vocabulary anywhere in this file, per repo policy.
 """
+
 from __future__ import annotations
 
 import dataclasses
 import html.parser
 import re
 import xml.etree.ElementTree as ET
+from typing import Any
 
 import pytest
 
-from kfforge.design.confirm import (
+from app.application.design.confirm import (
     ConfirmationRequest,
     apply_revisions,
     is_approved,
     request_confirmation,
 )
-from kfforge.design.diagram import (
+from app.application.design.diagram import (
     _loop_direction,
     _stage_index,
     flow_diagram_xml,
     schema_diagram_xml,
     verify_flow_diagram_branches,
 )
-from kfforge.design.mockup import (
+from app.application.design.mockup import (
     _format_sequence,
     design_bundle_html,
     form_mockups_html,
@@ -52,9 +54,9 @@ from kfforge.design.mockup import (
 )
 
 # --------------------------------------------------------------------------------------------
-# Stub domain objects -- plain frozen dataclasses, mirroring kfforge.intake.schema's real
+# Stub domain objects -- plain frozen dataclasses, mirroring app.application.intake.schema's real
 # attribute names/nesting (see this file's own module docstring for why). Never imported by
-# kfforge/design/*.py; that would defeat the point.
+# src/app/design/*.py; that would defeat the point.
 # --------------------------------------------------------------------------------------------
 
 
@@ -178,7 +180,7 @@ class VisibilityMatrix:
 @dataclasses.dataclass(frozen=True)
 class Page:
     name: str
-    widgets: tuple[str, ...]
+    widgets: tuple[Any, ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -253,37 +255,57 @@ def sample_spec() -> AppSpec:
     TestVisibilityAwareRendering.test_table_level_hidden_entry_hides_the_whole_table), so the
     "no cap" rendering test and the "table hidden" rendering test don't interact.
     """
-    stages = Stages(stages=(
-        Stage("Intake", "Front Desk", "Customer drops off the equipment and describes the issue."),
-        Stage("Diagnosis", "Technician", "Technician inspects the equipment and records findings."),
-        Stage("Repair", "Technician", "Technician repairs the equipment and logs parts used."),
-        Stage("Quality Check", "QA Lead", "QA lead verifies the repair before releasing it."),
-    ))
-    routing = Routing(points=(
-        RoutingPoint(
-            at_stage="Diagnosis",
-            field_name="Diagnosis Result",
-            options=("Repairable", "Needs Parts", "Beyond Repair"),
-            route_per_option=(
-                ("Repairable", ("Repair",)),
-                ("Needs Parts", ("Repair",)),
-                ("Beyond Repair", ("Closed - Rejected",)),
+    stages = Stages(
+        stages=(
+            Stage(
+                "Intake", "Front Desk", "Customer drops off the equipment and describes the issue."
             ),
-        ),
-    ))
-    rework_loops = ReworkLoops(loops=(
-        Loop(from_stage="Quality Check", to_stage="Repair", gate_field="Rework Needed"),
-    ))
+            Stage(
+                "Diagnosis", "Technician", "Technician inspects the equipment and records findings."
+            ),
+            Stage("Repair", "Technician", "Technician repairs the equipment and logs parts used."),
+            Stage("Quality Check", "QA Lead", "QA lead verifies the repair before releasing it."),
+        )
+    )
+    routing = Routing(
+        points=(
+            RoutingPoint(
+                at_stage="Diagnosis",
+                field_name="Diagnosis Result",
+                options=("Repairable", "Needs Parts", "Beyond Repair"),
+                route_per_option=(
+                    ("Repairable", ("Repair",)),
+                    ("Needs Parts", ("Repair",)),
+                    ("Beyond Repair", ("Closed - Rejected",)),
+                ),
+            ),
+        )
+    )
+    rework_loops = ReworkLoops(
+        loops=(Loop(from_stage="Quality Check", to_stage="Repair", gate_field="Rework Needed"),)
+    )
     data_model = DataModel(
         fields=(
             Field("Customer Name", "Text", True, "Intake", section="Customer Info"),
-            Field("Equipment Type", "Select", True, "Intake", list_name="Equipment Type",
-                  section="Customer Info"),
+            Field(
+                "Equipment Type",
+                "Select",
+                True,
+                "Intake",
+                list_name="Equipment Type",
+                section="Customer Info",
+            ),
             Field("Issue Description", "Textarea", True, "Intake", section="Issue Details"),
             # Hidden at its own stage via a FIELD-LEVEL VisibilityEntry below -- blocker 1's own
             # example (a Date field named "Due Date" that must not render as a live input here).
             Field("Due Date", "Date", False, "Intake", section="Issue Details"),
-            Field("Diagnosis Result", "Select", True, "Diagnosis", list_name="Diagnosis Result Options"),
+            Field(
+                "Diagnosis Result",
+                "Select",
+                True,
+                "Diagnosis",
+                list_name="Diagnosis Result Options",
+            ),
             # ReadOnly at its own stage via a FIELD-LEVEL VisibilityEntry below.
             Field("Repair Notes", "Textarea", False, "Repair", section="Repair Work"),
             # A COMPUTED target (see `computed=` below) -- must render as auto-calculated, never
@@ -295,20 +317,27 @@ def sample_spec() -> AppSpec:
         ),
         tables=(
             Table(
-                "Parts Used", "Repair",
-                (TableColumn("Part Name", "Text", True), TableColumn("Quantity", "Number", True),
-                 TableColumn("Unit Cost", "Number", False)),
+                "Parts Used",
+                "Repair",
+                (
+                    TableColumn("Part Name", "Text", True),
+                    TableColumn("Quantity", "Number", True),
+                    TableColumn("Unit Cost", "Number", False),
+                ),
                 10,
             ),
             # No max_rows set (renders "no cap") -- NOT hidden by default; the table-level-hidden
             # scenario (major 3's "banner+table pattern": a table is ALSO a legal visibility-
             # matrix section) is exercised separately, on a spec derived from this one, so the
             # two concerns (no-cap rendering, hidden-table rendering) don't interact.
-            Table("Attachments Log", "Quality Check", (TableColumn("File Name", "Text", False),), None),
+            Table(
+                "Attachments Log", "Quality Check", (TableColumn("File Name", "Text", False),), None
+            ),
         ),
         computed=(
             ComputedReq(
-                target_field="Estimated Cost", source_fields=("Diagnosis Result",),
+                target_field="Estimated Cost",
+                source_fields=("Diagnosis Result",),
                 formula_intent="Estimate repair cost from the diagnosis result and typical parts pricing.",
             ),
         ),
@@ -319,45 +348,61 @@ def sample_spec() -> AppSpec:
         ),
         sequence=SequenceReq(prefix="RPR", padding="0001"),
     )
-    master_data = MasterData(lists=(
-        ListSpec("Equipment Type", ("Laptop", "Printer", "Router", "Other")),
-        ListSpec("Diagnosis Result Options", ("Repairable", "Needs Parts", "Beyond Repair")),
-    ))
-    visibility = VisibilityMatrix(entries=(
-        VisibilityEntry("Customer Info", "Intake", "Editable"),
-        VisibilityEntry("Issue Details", "Intake", "Editable"),
-        VisibilityEntry("Issue Details", "Intake", "Hidden", field="Due Date"),
-        VisibilityEntry("Diagnosis", "Diagnosis", "Editable"),
-        VisibilityEntry("Repair Work", "Repair", "Editable"),
-        VisibilityEntry("Repair Work", "Repair", "ReadOnly", field="Repair Notes"),
-        VisibilityEntry("Quality Check", "Quality Check", "Editable"),
-    ))
-    personas = Personas(views=(
-        PersonaView(
-            role="Front Desk",
-            pages=(Page("My Intakes", ("view/table",)),),
-            kpis=("Open Tickets", "Closed Today"), actions=("New Intake",),
-        ),
-        PersonaView(
-            role="Technician",
-            pages=(Page("My Repairs", ("view/kanban",)),),
-            kpis=("In Progress", "Awaiting Parts"), actions=("Start Diagnosis", "Mark Repaired"),
-        ),
-    ))
-    test_cases = TestCases(cases=(
-        CaseWalk(
-            name="happy path",
-            fills=(
-                StepFill("Intake", (("Customer Name", "Jane Doe"), ("Equipment Type", "Laptop"),
-                                     ("Issue Description", "Won't turn on"))),
-                StepFill("Diagnosis", (("Diagnosis Result", "Repairable"),)),
-                StepFill("Repair", (("Repair Notes", "Replaced battery"),)),
-                StepFill("Quality Check", (("Rework Needed", "false"),)),
+    master_data = MasterData(
+        lists=(
+            ListSpec("Equipment Type", ("Laptop", "Printer", "Router", "Other")),
+            ListSpec("Diagnosis Result Options", ("Repairable", "Needs Parts", "Beyond Repair")),
+        )
+    )
+    visibility = VisibilityMatrix(
+        entries=(
+            VisibilityEntry("Customer Info", "Intake", "Editable"),
+            VisibilityEntry("Issue Details", "Intake", "Editable"),
+            VisibilityEntry("Issue Details", "Intake", "Hidden", field="Due Date"),
+            VisibilityEntry("Diagnosis", "Diagnosis", "Editable"),
+            VisibilityEntry("Repair Work", "Repair", "Editable"),
+            VisibilityEntry("Repair Work", "Repair", "ReadOnly", field="Repair Notes"),
+            VisibilityEntry("Quality Check", "Quality Check", "Editable"),
+        )
+    )
+    personas = Personas(
+        views=(
+            PersonaView(
+                role="Front Desk",
+                pages=(Page("My Intakes", ("view/table",)),),
+                kpis=("Open Tickets", "Closed Today"),
+                actions=("New Intake",),
             ),
-            expected_path=("Intake", "Diagnosis", "Repair", "Quality Check"),
-            expected_result="Repaired",
-        ),
-    ))
+            PersonaView(
+                role="Technician",
+                pages=(Page("My Repairs", ("view/kanban",)),),
+                kpis=("In Progress", "Awaiting Parts"),
+                actions=("Start Diagnosis", "Mark Repaired"),
+            ),
+        )
+    )
+    test_cases = TestCases(
+        cases=(
+            CaseWalk(
+                name="happy path",
+                fills=(
+                    StepFill(
+                        "Intake",
+                        (
+                            ("Customer Name", "Jane Doe"),
+                            ("Equipment Type", "Laptop"),
+                            ("Issue Description", "Won't turn on"),
+                        ),
+                    ),
+                    StepFill("Diagnosis", (("Diagnosis Result", "Repairable"),)),
+                    StepFill("Repair", (("Repair Notes", "Replaced battery"),)),
+                    StepFill("Quality Check", (("Rework Needed", "false"),)),
+                ),
+                expected_path=("Intake", "Diagnosis", "Repair", "Quality Check"),
+                expected_result="Repaired",
+            ),
+        )
+    )
     return AppSpec(
         app_name="Equipment Repair Intake",
         problem_goal=ProblemGoal(
@@ -367,14 +412,19 @@ def sample_spec() -> AppSpec:
             terminal_states=("Quality Check", "Closed - Rejected"),
             result_values=("Repaired", "Beyond repair"),
         ),
-        stages=stages, routing=routing, rework_loops=rework_loops,
-        data_model=data_model, master_data=master_data, visibility=visibility, personas=personas,
+        stages=stages,
+        routing=routing,
+        rework_loops=rework_loops,
+        data_model=data_model,
+        master_data=master_data,
+        visibility=visibility,
+        personas=personas,
         test_cases=test_cases,
     )
 
 
 def bare_shape_spec() -> AppSpec:
-    """Same content as sample_spec, but the 5 dimensions kfforge.intake wraps (stages/routing/
+    """Same content as sample_spec, but the 5 dimensions app.application.intake wraps (stages/routing/
     rework_loops/visibility/test_cases) are handed over as BARE tuples instead -- proving
     `_seq()` accepts this package's own minimal protocol shape too, not only intake's real
     wrapper shape."""
@@ -394,22 +444,36 @@ def spec_with_orphan_stage() -> AppSpec:
     that receives NO edge at all (the implicit A->B edge is suppressed because A branches, and
     nothing routes to B either). Proves an orphan is flagged, never fabricated a way in (major 6).
     """
-    stages = Stages(stages=(
-        Stage("A", "Role A", "Starts here."),
-        Stage("B", "Role B", "Never actually reached by this routing."),
-        Stage("C", "Role C", "Ends here."),
-    ))
-    routing = Routing(points=(
-        RoutingPoint(at_stage="A", field_name="Choice", options=("X", "Y"),
-                     route_per_option=(("X", ("C",)), ("Y", ("C",)))),
-    ))
+    stages = Stages(
+        stages=(
+            Stage("A", "Role A", "Starts here."),
+            Stage("B", "Role B", "Never actually reached by this routing."),
+            Stage("C", "Role C", "Ends here."),
+        )
+    )
+    routing = Routing(
+        points=(
+            RoutingPoint(
+                at_stage="A",
+                field_name="Choice",
+                options=("X", "Y"),
+                route_per_option=(("X", ("C",)), ("Y", ("C",))),
+            ),
+        )
+    )
     empty_dm = DataModel(fields=(), tables=())
     empty_md = MasterData(lists=())
     empty_personas = Personas(views=())
     return AppSpec(
-        app_name="Orphan Test", problem_goal=_empty_problem_goal(), stages=stages, routing=routing,
-        rework_loops=ReworkLoops(loops=()), data_model=empty_dm, master_data=empty_md,
-        visibility=VisibilityMatrix(entries=()), personas=empty_personas,
+        app_name="Orphan Test",
+        problem_goal=_empty_problem_goal(),
+        stages=stages,
+        routing=routing,
+        rework_loops=ReworkLoops(loops=()),
+        data_model=empty_dm,
+        master_data=empty_md,
+        visibility=VisibilityMatrix(entries=()),
+        personas=empty_personas,
         test_cases=TestCases(cases=()),
     )
 
@@ -420,24 +484,42 @@ def spec_with_two_routing_points_same_stage() -> AppSpec:
     invisibly on top of each other (major 5), AND is the fixture m10 (round 2) demands:
     apply_revisions on a routing key at a shared stage must revise only the ONE decision point
     that actually has the named option, never raise just because a SIBLING doesn't (M9)."""
-    stages = Stages(stages=(
-        Stage("Start", "Role", "..."),
-        Stage("Middle", "Role", "..."),
-        Stage("End", "Role", "..."),
-    ))
-    routing = Routing(points=(
-        RoutingPoint(at_stage="Middle", field_name="First Choice", options=("A", "B"),
-                     route_per_option=(("A", ("End",)), ("B", ("End",)))),
-        RoutingPoint(at_stage="Middle", field_name="Second Choice", options=("C", "D"),
-                     route_per_option=(("C", ("End",)), ("D", ("Start",)))),
-    ))
+    stages = Stages(
+        stages=(
+            Stage("Start", "Role", "..."),
+            Stage("Middle", "Role", "..."),
+            Stage("End", "Role", "..."),
+        )
+    )
+    routing = Routing(
+        points=(
+            RoutingPoint(
+                at_stage="Middle",
+                field_name="First Choice",
+                options=("A", "B"),
+                route_per_option=(("A", ("End",)), ("B", ("End",))),
+            ),
+            RoutingPoint(
+                at_stage="Middle",
+                field_name="Second Choice",
+                options=("C", "D"),
+                route_per_option=(("C", ("End",)), ("D", ("Start",))),
+            ),
+        )
+    )
     empty_dm = DataModel(fields=(), tables=())
     empty_md = MasterData(lists=())
     empty_personas = Personas(views=())
     return AppSpec(
-        app_name="Two Routing Points Test", problem_goal=_empty_problem_goal(), stages=stages,
-        routing=routing, rework_loops=ReworkLoops(loops=()), data_model=empty_dm,
-        master_data=empty_md, visibility=VisibilityMatrix(entries=()), personas=empty_personas,
+        app_name="Two Routing Points Test",
+        problem_goal=_empty_problem_goal(),
+        stages=stages,
+        routing=routing,
+        rework_loops=ReworkLoops(loops=()),
+        data_model=empty_dm,
+        master_data=empty_md,
+        visibility=VisibilityMatrix(entries=()),
+        personas=empty_personas,
         test_cases=TestCases(cases=()),
     )
 
@@ -450,36 +532,54 @@ def spec_with_tiered_branches() -> AppSpec:
     whose `from_stage` marks the branch's terminal. The merge is "Summary": every branch feeds it
     directly (in-degree 3), and no branch draws a spine edge into a sibling branch. Neutral-domain
     mirror of a 'choose a service level, walk it to the merge' shape."""
-    stages = Stages(stages=(
-        Stage("Intake", "Requester", "Open the issue."),
-        Stage("Prepare", "Requester", "Gather details."),
-        Stage("Triage", "Lead", "Pick a service tier."),
-        Stage("Self Service", "Analyst", "Requester tries it alone."),
-        Stage("Light Work", "Analyst", "Do one light round."),
-        Stage("Light Confirm", "Analyst", "Confirm the light round."),
-        Stage("Full Tier", "Analyst", "Full tier entry."),
-        Stage("Full Work", "Analyst", "Do one full round."),
-        Stage("Full Confirm", "Analyst", "Confirm the full round."),
-        Stage("Summary", "Analyst", "Summarise with the requester."),
-        Stage("Lead Closure", "Lead", "Review and close."),
-    ))
-    routing = Routing(points=(
-        RoutingPoint(at_stage="Triage", field_name="Service Tier",
-                     options=("Self", "Light", "Full"),
-                     route_per_option=(("Self", ("Self Service",)), ("Light", ("Light Work",)),
-                                       ("Full", ("Full Tier",)))),
-    ))
-    rework_loops = ReworkLoops(loops=(
-        Loop(from_stage="Light Confirm", to_stage="Light Work", gate_field="Round Done"),
-        Loop(from_stage="Full Confirm", to_stage="Full Work", gate_field="Round Done"),
-    ))
+    stages = Stages(
+        stages=(
+            Stage("Intake", "Requester", "Open the issue."),
+            Stage("Prepare", "Requester", "Gather details."),
+            Stage("Triage", "Lead", "Pick a service tier."),
+            Stage("Self Service", "Analyst", "Requester tries it alone."),
+            Stage("Light Work", "Analyst", "Do one light round."),
+            Stage("Light Confirm", "Analyst", "Confirm the light round."),
+            Stage("Full Tier", "Analyst", "Full tier entry."),
+            Stage("Full Work", "Analyst", "Do one full round."),
+            Stage("Full Confirm", "Analyst", "Confirm the full round."),
+            Stage("Summary", "Analyst", "Summarise with the requester."),
+            Stage("Lead Closure", "Lead", "Review and close."),
+        )
+    )
+    routing = Routing(
+        points=(
+            RoutingPoint(
+                at_stage="Triage",
+                field_name="Service Tier",
+                options=("Self", "Light", "Full"),
+                route_per_option=(
+                    ("Self", ("Self Service",)),
+                    ("Light", ("Light Work",)),
+                    ("Full", ("Full Tier",)),
+                ),
+            ),
+        )
+    )
+    rework_loops = ReworkLoops(
+        loops=(
+            Loop(from_stage="Light Confirm", to_stage="Light Work", gate_field="Round Done"),
+            Loop(from_stage="Full Confirm", to_stage="Full Work", gate_field="Round Done"),
+        )
+    )
     empty_dm = DataModel(fields=(), tables=())
     empty_md = MasterData(lists=())
     empty_personas = Personas(views=())
     return AppSpec(
-        app_name="Tiered Service", problem_goal=_empty_problem_goal(), stages=stages,
-        routing=routing, rework_loops=rework_loops, data_model=empty_dm, master_data=empty_md,
-        visibility=VisibilityMatrix(entries=()), personas=empty_personas,
+        app_name="Tiered Service",
+        problem_goal=_empty_problem_goal(),
+        stages=stages,
+        routing=routing,
+        rework_loops=rework_loops,
+        data_model=empty_dm,
+        master_data=empty_md,
+        visibility=VisibilityMatrix(entries=()),
+        personas=empty_personas,
         test_cases=TestCases(cases=()),
     )
 
@@ -489,29 +589,45 @@ def spec_with_branch_local_loop() -> AppSpec:
     Review, Fix, Verify] carrying a rework loop BETWEEN two of its OWN stages (Verify -> Fix). Both
     loop endpoints are branch stages, so the dashed backward edge is drawn inside the branch, not
     across the spine -- the shape the Confirmation diagram must render truthfully."""
-    stages = Stages(stages=(
-        Stage("Log", "Intake", "Log the claim."),
-        Stage("Triage", "Adjuster", "Pick the path."),
-        Stage("Quick Close", "Adjuster", "Close a simple claim."),
-        Stage("Deep Review", "Adjuster", "Review a complex claim."),
-        Stage("Fix", "Adjuster", "Correct the claim."),
-        Stage("Verify", "Adjuster", "Verify the correction."),
-        Stage("Close", "Intake", "Close the claim."),
-    ))
-    routing = Routing(points=(
-        RoutingPoint(at_stage="Triage", field_name="Path", options=("Simple", "Complex"),
-                     route_per_option=(("Simple", ("Quick Close",)),
-                                       ("Complex", ("Deep Review", "Fix", "Verify")))),
-    ))
-    rework_loops = ReworkLoops(loops=(
-        Loop(from_stage="Verify", to_stage="Fix", gate_field="Fix Approved"),
-    ))
+    stages = Stages(
+        stages=(
+            Stage("Log", "Intake", "Log the claim."),
+            Stage("Triage", "Adjuster", "Pick the path."),
+            Stage("Quick Close", "Adjuster", "Close a simple claim."),
+            Stage("Deep Review", "Adjuster", "Review a complex claim."),
+            Stage("Fix", "Adjuster", "Correct the claim."),
+            Stage("Verify", "Adjuster", "Verify the correction."),
+            Stage("Close", "Intake", "Close the claim."),
+        )
+    )
+    routing = Routing(
+        points=(
+            RoutingPoint(
+                at_stage="Triage",
+                field_name="Path",
+                options=("Simple", "Complex"),
+                route_per_option=(
+                    ("Simple", ("Quick Close",)),
+                    ("Complex", ("Deep Review", "Fix", "Verify")),
+                ),
+            ),
+        )
+    )
+    rework_loops = ReworkLoops(
+        loops=(Loop(from_stage="Verify", to_stage="Fix", gate_field="Fix Approved"),)
+    )
     empty_dm = DataModel(fields=(), tables=())
     return AppSpec(
-        app_name="Branch Local Loop", problem_goal=_empty_problem_goal(), stages=stages,
-        routing=routing, rework_loops=rework_loops, data_model=empty_dm,
-        master_data=MasterData(lists=()), visibility=VisibilityMatrix(entries=()),
-        personas=Personas(views=()), test_cases=TestCases(cases=()),
+        app_name="Branch Local Loop",
+        problem_goal=_empty_problem_goal(),
+        stages=stages,
+        routing=routing,
+        rework_loops=rework_loops,
+        data_model=empty_dm,
+        master_data=MasterData(lists=()),
+        visibility=VisibilityMatrix(entries=()),
+        personas=Personas(views=()),
+        test_cases=TestCases(cases=()),
     )
 
 
@@ -524,25 +640,39 @@ def spec_with_multistage_branches() -> AppSpec:
     truthful A1 -> A2 -> Wrap and B1 -> Wrap. Branch B stays length-1 specifically so this
     fixture also proves the existing length-1 model (spine-extension via `route_seq[0]` at the
     fork, terminal-by-loop-override elsewhere) is untouched by the new multi-stage handling."""
-    stages = Stages(stages=(
-        Stage("Intake", "Requester", "Open the request."),
-        Stage("Route", "Lead", "Pick a path."),
-        Stage("A1", "Analyst", "First step of branch A."),
-        Stage("A2", "Analyst", "Second step of branch A."),
-        Stage("B1", "Analyst", "Only step of branch B."),
-        Stage("Wrap", "Lead", "Close out, both branches land here."),
-    ))
-    routing = Routing(points=(
-        RoutingPoint(at_stage="Route", field_name="Choice", options=("A", "B"),
-                     route_per_option=(("A", ("A1", "A2")), ("B", ("B1",)))),
-    ))
+    stages = Stages(
+        stages=(
+            Stage("Intake", "Requester", "Open the request."),
+            Stage("Route", "Lead", "Pick a path."),
+            Stage("A1", "Analyst", "First step of branch A."),
+            Stage("A2", "Analyst", "Second step of branch A."),
+            Stage("B1", "Analyst", "Only step of branch B."),
+            Stage("Wrap", "Lead", "Close out, both branches land here."),
+        )
+    )
+    routing = Routing(
+        points=(
+            RoutingPoint(
+                at_stage="Route",
+                field_name="Choice",
+                options=("A", "B"),
+                route_per_option=(("A", ("A1", "A2")), ("B", ("B1",))),
+            ),
+        )
+    )
     empty_dm = DataModel(fields=(), tables=())
     empty_md = MasterData(lists=())
     empty_personas = Personas(views=())
     return AppSpec(
-        app_name="Multistage Branch Test", problem_goal=_empty_problem_goal(), stages=stages,
-        routing=routing, rework_loops=ReworkLoops(loops=()), data_model=empty_dm,
-        master_data=empty_md, visibility=VisibilityMatrix(entries=()), personas=empty_personas,
+        app_name="Multistage Branch Test",
+        problem_goal=_empty_problem_goal(),
+        stages=stages,
+        routing=routing,
+        rework_loops=ReworkLoops(loops=()),
+        data_model=empty_dm,
+        master_data=empty_md,
+        visibility=VisibilityMatrix(entries=()),
+        personas=empty_personas,
         test_cases=TestCases(cases=()),
     )
 
@@ -556,49 +686,75 @@ def spec_with_sequential_splits() -> AppSpec:
     spilling split A's branch across split B's diamond and branch entirely, exactly the kind of
     untruthful edge ADR-0001 rules out. Each split here carries a single option so the fixture
     isolates the cross-split bug from S1's already-covered within-split sibling spill."""
-    stages = Stages(stages=(
-        Stage("Intake", "Requester", "Open the request."),
-        Stage("StemA", "Lead", "First fork."),
-        Stage("A1", "Analyst", "First step of branch A."),
-        Stage("A2", "Analyst", "Second step of branch A."),
-        Stage("StemB", "Lead", "Second fork -- also split A's own rejoin."),
-        Stage("B1", "Analyst", "Only step of branch B."),
-        Stage("End", "Lead", "Close out -- split B's own rejoin."),
-    ))
-    routing = Routing(points=(
-        RoutingPoint(at_stage="StemA", field_name="Choice A", options=("Go",),
-                     route_per_option=(("Go", ("A1", "A2")),)),
-        RoutingPoint(at_stage="StemB", field_name="Choice B", options=("Go",),
-                     route_per_option=(("Go", ("B1",)),)),
-    ))
+    stages = Stages(
+        stages=(
+            Stage("Intake", "Requester", "Open the request."),
+            Stage("StemA", "Lead", "First fork."),
+            Stage("A1", "Analyst", "First step of branch A."),
+            Stage("A2", "Analyst", "Second step of branch A."),
+            Stage("StemB", "Lead", "Second fork -- also split A's own rejoin."),
+            Stage("B1", "Analyst", "Only step of branch B."),
+            Stage("End", "Lead", "Close out -- split B's own rejoin."),
+        )
+    )
+    routing = Routing(
+        points=(
+            RoutingPoint(
+                at_stage="StemA",
+                field_name="Choice A",
+                options=("Go",),
+                route_per_option=(("Go", ("A1", "A2")),),
+            ),
+            RoutingPoint(
+                at_stage="StemB",
+                field_name="Choice B",
+                options=("Go",),
+                route_per_option=(("Go", ("B1",)),),
+            ),
+        )
+    )
     empty_dm = DataModel(fields=(), tables=())
     empty_md = MasterData(lists=())
     empty_personas = Personas(views=())
     return AppSpec(
-        app_name="Sequential Splits Test", problem_goal=_empty_problem_goal(), stages=stages,
-        routing=routing, rework_loops=ReworkLoops(loops=()), data_model=empty_dm,
-        master_data=empty_md, visibility=VisibilityMatrix(entries=()), personas=empty_personas,
+        app_name="Sequential Splits Test",
+        problem_goal=_empty_problem_goal(),
+        stages=stages,
+        routing=routing,
+        rework_loops=ReworkLoops(loops=()),
+        data_model=empty_dm,
+        master_data=empty_md,
+        visibility=VisibilityMatrix(entries=()),
+        personas=empty_personas,
         test_cases=TestCases(cases=()),
     )
 
 
 def spec_with_forward_loop() -> AppSpec:
     """A "loop" whose to_stage comes AFTER its from_stage in the spine -- not a genuine rework
-    loop by kfforge.intake.schema.LoopSpec's own contract. Proves this package says so rather
+    loop by app.application.intake.schema.LoopSpec's own contract. Proves this package says so rather
     than asserting "loops back" for something that does not (minor 10)."""
-    stages = Stages(stages=(
-        Stage("A", "Role", "..."),
-        Stage("B", "Role", "..."),
-        Stage("C", "Role", "..."),
-    ))
+    stages = Stages(
+        stages=(
+            Stage("A", "Role", "..."),
+            Stage("B", "Role", "..."),
+            Stage("C", "Role", "..."),
+        )
+    )
     rework_loops = ReworkLoops(loops=(Loop(from_stage="A", to_stage="C", gate_field="Weird Gate"),))
     empty_dm = DataModel(fields=(), tables=())
     empty_md = MasterData(lists=())
     empty_personas = Personas(views=())
     return AppSpec(
-        app_name="Forward Loop Test", problem_goal=_empty_problem_goal(), stages=stages,
-        routing=Routing(points=()), rework_loops=rework_loops, data_model=empty_dm,
-        master_data=empty_md, visibility=VisibilityMatrix(entries=()), personas=empty_personas,
+        app_name="Forward Loop Test",
+        problem_goal=_empty_problem_goal(),
+        stages=stages,
+        routing=Routing(points=()),
+        rework_loops=rework_loops,
+        data_model=empty_dm,
+        master_data=empty_md,
+        visibility=VisibilityMatrix(entries=()),
+        personas=empty_personas,
         test_cases=TestCases(cases=()),
     )
 
@@ -610,7 +766,7 @@ def spec_with_tricky_text() -> AppSpec:
     tricky = dataclasses.replace(
         base.stages.stages[0],
         name='Intake & "Return" <Urgent> รับเครื่องซ่อม',
-        owner_role='หน้าเคาน์เตอร์ & Support',
+        owner_role="หน้าเคาน์เตอร์ & Support",
     )
     new_stages = (tricky,) + base.stages.stages[1:]
     new_fields = tuple(
@@ -629,6 +785,21 @@ def spec_with_tricky_text() -> AppSpec:
 # --------------------------------------------------------------------------------------------
 
 
+def _child(el: ET.Element, tag: str) -> ET.Element:
+    """`Element.find` is Optional-typed. Every use below requires the child, so say so here once
+    instead of asserting (or not asserting) at each of a dozen call sites."""
+    got = el.find(tag)
+    assert got is not None, f"<{el.tag} id={el.get('id')!r}> has no <{tag}> child"
+    return got
+
+
+def _attr(el: ET.Element, name: str) -> str:
+    """Same for `Element.get`, which returns `str | None`."""
+    got = el.get(name)
+    assert got is not None, f"<{el.tag} id={el.get('id')!r}> has no {name!r} attribute"
+    return got
+
+
 def _assert_valid_mxgraph(xml_str: str) -> ET.Element:
     root = ET.fromstring(xml_str)  # raises ET.ParseError if not well-formed XML
     cells = root.findall(".//mxCell")
@@ -642,8 +813,21 @@ def _assert_valid_mxgraph(xml_str: str) -> ET.Element:
     return root
 
 
-_VOID_ELEMENTS = {"input", "meta", "link", "br", "img", "hr", "source", "col", "area",
-                   "base", "embed", "track", "wbr"}
+_VOID_ELEMENTS = {
+    "input",
+    "meta",
+    "link",
+    "br",
+    "img",
+    "hr",
+    "source",
+    "col",
+    "area",
+    "base",
+    "embed",
+    "track",
+    "wbr",
+}
 
 
 class _BalanceCheckingParser(html.parser.HTMLParser):
@@ -715,7 +899,9 @@ def _field_slice(doc: str, field_name: str) -> str:
     """One field row's own content, up to the next marker of ANY kind -- a field row is the
     smallest unit, so it is bounded by a sibling field, or the card/table that comes after it."""
     return _marker_slice(
-        doc, f"<!-- field:{field_name} -->", ("<!-- field:", "<!-- stage:", "<!-- table:"),
+        doc,
+        f"<!-- field:{field_name} -->",
+        ("<!-- field:", "<!-- stage:", "<!-- table:"),
     )
 
 
@@ -735,15 +921,21 @@ class TestFlowDiagram:
     def test_one_decision_node_per_routing_point(self):
         spec = sample_spec()
         root = ET.fromstring(flow_diagram_xml(spec))
-        diamonds = [c for c in root.findall(".//mxCell")
-                    if c.get("vertex") == "1" and "rhombus" in (c.get("style") or "")]
+        diamonds = [
+            c
+            for c in root.findall(".//mxCell")
+            if c.get("vertex") == "1" and "rhombus" in (c.get("style") or "")
+        ]
         assert len(diamonds) == len(spec.routing.points)
 
     def test_one_dashed_back_edge_per_genuine_backward_loop(self):
         spec = sample_spec()  # its one loop (Quality Check -> Repair) IS a genuine backward loop
         root = ET.fromstring(flow_diagram_xml(spec))
-        dashed_edges = [c for c in root.findall(".//mxCell")
-                         if c.get("edge") == "1" and "dashed=1" in (c.get("style") or "")]
+        dashed_edges = [
+            c
+            for c in root.findall(".//mxCell")
+            if c.get("edge") == "1" and "dashed=1" in (c.get("style") or "")
+        ]
         assert len(dashed_edges) == len(spec.rework_loops.loops)
 
     def test_branch_local_loop_renders_a_dashed_edge_between_its_branch_stages(self):
@@ -755,8 +947,11 @@ class TestFlowDiagram:
         _assert_valid_mxgraph(doc)  # every edge (incl. this loop) resolves to a real vertex
         root = ET.fromstring(doc)
         cells = {c.get("id"): c for c in root.findall(".//mxCell")}
-        dashed = [c for c in cells.values()
-                  if c.get("edge") == "1" and "dashed=1" in (c.get("style") or "")]
+        dashed = [
+            c
+            for c in cells.values()
+            if c.get("edge") == "1" and "dashed=1" in (c.get("style") or "")
+        ]
         assert len(dashed) == 1
         edge = dashed[0]
         endpoints = {cells[edge.get("source")].get("value"), cells[edge.get("target")].get("value")}
@@ -766,8 +961,11 @@ class TestFlowDiagram:
     def test_loop_edge_labeled_with_gate_field(self):
         spec = sample_spec()
         root = ET.fromstring(flow_diagram_xml(spec))
-        dashed_values = [c.get("value") for c in root.findall(".//mxCell")
-                          if c.get("edge") == "1" and "dashed=1" in (c.get("style") or "")]
+        dashed_values = [
+            c.get("value")
+            for c in root.findall(".//mxCell")
+            if c.get("edge") == "1" and "dashed=1" in (c.get("style") or "")
+        ]
         assert any(spec.rework_loops.loops[0].gate_field in (v or "") for v in dashed_values)
 
     def test_stage_box_second_line_is_owner_role(self):
@@ -779,10 +977,15 @@ class TestFlowDiagram:
 
     def test_empty_spec_still_produces_valid_xml(self):
         empty = AppSpec(
-            app_name="Empty", problem_goal=_empty_problem_goal(), stages=Stages(stages=()),
-            routing=Routing(points=()), rework_loops=ReworkLoops(loops=()),
-            data_model=DataModel(fields=(), tables=()), master_data=MasterData(lists=()),
-            visibility=VisibilityMatrix(entries=()), personas=Personas(views=()),
+            app_name="Empty",
+            problem_goal=_empty_problem_goal(),
+            stages=Stages(stages=()),
+            routing=Routing(points=()),
+            rework_loops=ReworkLoops(loops=()),
+            data_model=DataModel(fields=(), tables=()),
+            master_data=MasterData(lists=()),
+            visibility=VisibilityMatrix(entries=()),
+            personas=Personas(views=()),
             test_cases=TestCases(cases=()),
         )
         _assert_valid_mxgraph(flow_diagram_xml(empty))
@@ -799,7 +1002,9 @@ class TestFlowDiagram:
         xml_str = flow_diagram_xml(spec)
         root = _assert_valid_mxgraph(xml_str)
         joined_once = "\n".join(c.get("value") or "" for c in root.findall(".//mxCell"))
-        assert "<Urgent>" not in joined_once  # would mean it survived as a raw, re-interpretable tag
+        assert (
+            "<Urgent>" not in joined_once
+        )  # would mean it survived as a raw, re-interpretable tag
         joined_twice = html.unescape(joined_once)
         assert spec.stages.stages[0].name in joined_twice
         assert spec.stages.stages[0].owner_role in joined_twice
@@ -807,45 +1012,64 @@ class TestFlowDiagram:
     def test_two_routing_points_on_same_stage_do_not_overlap(self):
         spec = spec_with_two_routing_points_same_stage()
         root = _assert_valid_mxgraph(flow_diagram_xml(spec))
-        diamonds = [c for c in root.findall(".//mxCell")
-                    if c.get("vertex") == "1" and "rhombus" in (c.get("style") or "")]
+        diamonds = [
+            c
+            for c in root.findall(".//mxCell")
+            if c.get("vertex") == "1" and "rhombus" in (c.get("style") or "")
+        ]
         assert len(diamonds) == 2
-        coords = {(float(c.find("mxGeometry").get("x")), float(c.find("mxGeometry").get("y")))
-                  for c in diamonds}
-        assert len(coords) == 2, "two routing points at the same stage rendered at identical coordinates"
+        coords = {
+            (float(_attr(_child(c, "mxGeometry"), "x")), float(_attr(_child(c, "mxGeometry"), "y")))
+            for c in diamonds
+        }
+        assert len(coords) == 2, (
+            "two routing points at the same stage rendered at identical coordinates"
+        )
 
     def test_next_stage_box_does_not_overlap_the_decision_diamond(self):
         """Minor 8: the diamond(s) below a routing stage must not overlap the NEXT stage's box."""
-        spec = spec_with_two_routing_points_same_stage()  # worst case: 2 stacked diamonds at "Middle"
+        spec = (
+            spec_with_two_routing_points_same_stage()
+        )  # worst case: 2 stacked diamonds at "Middle"
         root = _assert_valid_mxgraph(flow_diagram_xml(spec))
         diamonds = [c for c in root.findall(".//mxCell") if "rhombus" in (c.get("style") or "")]
         assert len(diamonds) == 2
         diamond_bottoms = [
-            float(c.find("mxGeometry").get("y")) + float(c.find("mxGeometry").get("height"))
+            float(_attr(_child(c, "mxGeometry"), "y"))
+            + float(_attr(_child(c, "mxGeometry"), "height"))
             for c in diamonds
         ]
         end_stage = next(
-            c for c in root.findall(".//mxCell")
+            c
+            for c in root.findall(".//mxCell")
             if c.get("vertex") == "1" and (c.get("value") or "").startswith("End<br>")
         )
-        end_y = float(end_stage.find("mxGeometry").get("y"))
+        end_y = float(_attr(_child(end_stage, "mxGeometry"), "y"))
         assert max(diamond_bottoms) <= end_y, "decision diamond overlaps the next stage box"
 
     def test_orphan_stage_is_flagged_not_fabricated_an_edge(self):
         spec = spec_with_orphan_stage()
         root = _assert_valid_mxgraph(flow_diagram_xml(spec))
-        flagged = [c for c in root.findall(".//mxCell") if "unreachable" in (c.get("value") or "").lower()]
+        flagged = [
+            c for c in root.findall(".//mxCell") if "unreachable" in (c.get("value") or "").lower()
+        ]
         assert len(flagged) == 1, "exactly stage B should be flagged unreachable"
         b_cell = flagged[0]
-        assert (b_cell.get("value") or "").startswith("B "), "the flagged node should really be stage B"
+        assert (b_cell.get("value") or "").startswith("B "), (
+            "the flagged node should really be stage B"
+        )
         b_id = b_cell.get("id")
-        incoming = [c for c in root.findall(".//mxCell") if c.get("edge") == "1" and c.get("target") == b_id]
+        incoming = [
+            c for c in root.findall(".//mxCell") if c.get("edge") == "1" and c.get("target") == b_id
+        ]
         assert not incoming, "orphan stage must not have a fabricated incoming edge"
 
     def test_reachable_stage_is_not_flagged(self):
         spec = spec_with_orphan_stage()
         root = _assert_valid_mxgraph(flow_diagram_xml(spec))
-        c_cell = next(c for c in root.findall(".//mxCell") if (c.get("value") or "").startswith("C<br>"))
+        c_cell = next(
+            c for c in root.findall(".//mxCell") if (c.get("value") or "").startswith("C<br>")
+        )
         assert "unreachable" not in (c_cell.get("value") or "").lower()
 
     def test_forward_loop_is_not_drawn_dashed_and_is_not_mislabeled(self):
@@ -854,7 +1078,8 @@ class TestFlowDiagram:
         assert _loop_direction(idx, spec.rework_loops.loops[0]) == "forward"
         root = _assert_valid_mxgraph(flow_diagram_xml(spec))
         loop_edges = [
-            c for c in root.findall(".//mxCell")
+            c
+            for c in root.findall(".//mxCell")
             if c.get("edge") == "1" and "Weird Gate" in (c.get("value") or "")
         ]
         assert loop_edges
@@ -864,22 +1089,29 @@ class TestFlowDiagram:
     def test_fallback_nodes_for_unresolved_names_do_not_stack(self):
         """Minor 9: multiple unresolved names must not all land on the identical coordinate."""
         stages = Stages(stages=(Stage("Only", "Role", "..."),))
-        rework_loops = ReworkLoops(loops=(
-            Loop(from_stage="Ghost A", to_stage="Ghost B", gate_field="G1"),
-            Loop(from_stage="Ghost C", to_stage="Ghost D", gate_field="G2"),
-        ))
+        rework_loops = ReworkLoops(
+            loops=(
+                Loop(from_stage="Ghost A", to_stage="Ghost B", gate_field="G1"),
+                Loop(from_stage="Ghost C", to_stage="Ghost D", gate_field="G2"),
+            )
+        )
         spec = AppSpec(
-            app_name="Fallback Test", problem_goal=_empty_problem_goal(), stages=stages,
-            routing=Routing(points=()), rework_loops=rework_loops,
-            data_model=DataModel(fields=(), tables=()), master_data=MasterData(lists=()),
-            visibility=VisibilityMatrix(entries=()), personas=Personas(views=()),
+            app_name="Fallback Test",
+            problem_goal=_empty_problem_goal(),
+            stages=stages,
+            routing=Routing(points=()),
+            rework_loops=rework_loops,
+            data_model=DataModel(fields=(), tables=()),
+            master_data=MasterData(lists=()),
+            visibility=VisibilityMatrix(entries=()),
+            personas=Personas(views=()),
             test_cases=TestCases(cases=()),
         )
         root = _assert_valid_mxgraph(flow_diagram_xml(spec))
         ghost_coords = set()
         for name in ("Ghost A", "Ghost B", "Ghost C", "Ghost D"):
             cell = next(c for c in root.findall(".//mxCell") if (c.get("value") or "") == name)
-            geo = cell.find("mxGeometry")
+            geo = _child(cell, "mxGeometry")
             ghost_coords.add((geo.get("x"), geo.get("y")))
         assert len(ghost_coords) == 4, f"fallback nodes stacked: {ghost_coords}"
 
@@ -894,9 +1126,11 @@ class TestBranchRenderPreCheck:
     def _cell_id(root: ET.Element, name: str) -> str:
         # A box's label is either the bare name (a fallback minted by resolve()) or
         # name<br>role -- match the first line, same rule the verifier itself uses.
-        return next(c.get("id") for c in root.findall(".//mxCell")
-                     if c.get("vertex") == "1"
-                     and (c.get("value") or "").split("<br>", 1)[0] == name)
+        return next(
+            _attr(c, "id")
+            for c in root.findall(".//mxCell")
+            if c.get("vertex") == "1" and (c.get("value") or "").split("<br>", 1)[0] == name
+        )
 
     def test_faithful_render_passes(self):
         spec = sample_spec()
@@ -905,12 +1139,17 @@ class TestBranchRenderPreCheck:
     def test_removing_a_fork_option_edge_raises(self):
         spec = sample_spec()
         root = ET.fromstring(flow_diagram_xml(spec))
-        parent = root.find(".//root")
-        dia_id = next(c.get("id") for c in root.findall(".//mxCell")
-                       if "rhombus" in (c.get("style") or ""))
-        victim = next(c for c in root.findall(".//mxCell")
-                       if c.get("edge") == "1" and c.get("source") == dia_id
-                       and (c.get("value") or "") == "Repairable")
+        parent = _child(root, ".//root")
+        dia_id = next(
+            c.get("id") for c in root.findall(".//mxCell") if "rhombus" in (c.get("style") or "")
+        )
+        victim = next(
+            c
+            for c in root.findall(".//mxCell")
+            if c.get("edge") == "1"
+            and c.get("source") == dia_id
+            and (c.get("value") or "") == "Repairable"
+        )
         parent.remove(victim)
         with pytest.raises(ValueError, match="Repairable"):
             verify_flow_diagram_branches(spec, ET.tostring(root, encoding="unicode"))
@@ -918,7 +1157,7 @@ class TestBranchRenderPreCheck:
     def test_removing_the_diamond_raises(self):
         spec = sample_spec()
         root = ET.fromstring(flow_diagram_xml(spec))
-        parent = root.find(".//root")
+        parent = _child(root, ".//root")
         dia = next(c for c in root.findall(".//mxCell") if "rhombus" in (c.get("style") or ""))
         dia_id = dia.get("id")
         parent.remove(dia)
@@ -933,13 +1172,22 @@ class TestBranchRenderPreCheck:
         if the branches were sequential steps."""
         spec = sample_spec()
         root = ET.fromstring(flow_diagram_xml(spec))
-        parent = root.find(".//root")
+        parent = _child(root, ".//root")
         stem_id = self._cell_id(root, "Diagnosis")
         repair_id = self._cell_id(root, "Repair")
-        fake = ET.SubElement(parent, "mxCell", {
-            "id": "tamper1", "value": "", "style": "edgeStyle=orthogonalEdgeStyle;html=1;",
-            "edge": "1", "parent": "1", "source": stem_id, "target": repair_id,
-        })
+        fake = ET.SubElement(
+            parent,
+            "mxCell",
+            {
+                "id": "tamper1",
+                "value": "",
+                "style": "edgeStyle=orthogonalEdgeStyle;html=1;",
+                "edge": "1",
+                "parent": "1",
+                "source": stem_id,
+                "target": repair_id,
+            },
+        )
         ET.SubElement(fake, "mxGeometry", {"relative": "1", "as": "geometry"})
         with pytest.raises(ValueError, match="[Ss]equential"):
             verify_flow_diagram_branches(spec, ET.tostring(root, encoding="unicode"))
@@ -947,8 +1195,11 @@ class TestBranchRenderPreCheck:
     def test_option_edge_to_the_wrong_branch_entry_raises(self):
         spec = sample_spec()
         root = ET.fromstring(flow_diagram_xml(spec))
-        victim = next(c for c in root.findall(".//mxCell")
-                       if c.get("edge") == "1" and (c.get("value") or "") == "Beyond Repair")
+        victim = next(
+            c
+            for c in root.findall(".//mxCell")
+            if c.get("edge") == "1" and (c.get("value") or "") == "Beyond Repair"
+        )
         victim.set("target", self._cell_id(root, "Repair"))  # should go to Closed - Rejected
         with pytest.raises(ValueError, match="Beyond Repair"):
             verify_flow_diagram_branches(spec, ET.tostring(root, encoding="unicode"))
@@ -956,11 +1207,15 @@ class TestBranchRenderPreCheck:
     def test_render_itself_runs_the_pre_check(self, monkeypatch):
         """flow_diagram_xml must call the verifier on its own output -- the gate lives in the
         render path, not only as an opt-in helper."""
-        import kfforge.design.diagram as diagram_mod
+        import app.application.design.diagram as diagram_mod
+
         called: list[str] = []
         real = diagram_mod.verify_flow_diagram_branches
-        monkeypatch.setattr(diagram_mod, "verify_flow_diagram_branches",
-                             lambda spec, xml: called.append("yes") or real(spec, xml))
+        monkeypatch.setattr(
+            diagram_mod,
+            "verify_flow_diagram_branches",
+            lambda spec, xml: called.append("yes") or real(spec, xml),
+        )
         flow_diagram_xml(sample_spec())
         assert called == ["yes"]
 
@@ -984,34 +1239,50 @@ class TestFlowDiagramBranchMerge:
         raise AssertionError(f"no vertex named {name!r}")
 
     def _incoming(self, root, target_id: str) -> set[str]:
-        return {c.get("source") for c in root.findall(".//mxCell")
-                if c.get("edge") == "1" and c.get("target") == target_id}
+        return {
+            c.get("source")
+            for c in root.findall(".//mxCell")
+            if c.get("edge") == "1" and c.get("target") == target_id
+        }
 
     def _edge_pairs(self, root) -> set[tuple[str, str]]:
-        return {(c.get("source"), c.get("target")) for c in root.findall(".//mxCell")
-                if c.get("edge") == "1"}
+        return {
+            (c.get("source"), c.get("target"))
+            for c in root.findall(".//mxCell")
+            if c.get("edge") == "1"
+        }
 
     def _vertex_labels(self, root) -> dict[str, str]:
         # vertex id -> its first line ("Self Service" out of "Self Service<br>Analyst")
-        return {c.get("id"): self._first_line(c.get("value") or "")
-                for c in root.findall(".//mxCell") if c.get("vertex") == "1"}
+        return {
+            c.get("id"): self._first_line(c.get("value") or "")
+            for c in root.findall(".//mxCell")
+            if c.get("vertex") == "1"
+        }
 
     def test_merge_in_degree_equals_branch_count(self):
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_tiered_branches()))
         summary = self._vertex_id(root, "Summary")
         labels = self._vertex_labels(root)
-        sources = {labels[c.get("source")] for c in root.findall(".//mxCell")
-                   if c.get("edge") == "1" and c.get("target") == summary and c.get("source")}
+        sources = {
+            labels[_attr(c, "source")]
+            for c in root.findall(".//mxCell")
+            if c.get("edge") == "1" and c.get("target") == summary and c.get("source")
+        }
         # every branch's terminal feeds the merge: Self Service, Light Confirm, Full Confirm
         assert sources == {"Self Service", "Light Confirm", "Full Confirm"}, sources
 
     def test_no_cross_branch_spine_edge(self):
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_tiered_branches()))
         pairs = self._edge_pairs(root)
-        assert (self._vertex_id(root, "Self Service"), self._vertex_id(root, "Light Work")) \
-            not in pairs, "self tier must not spill into the light tier"
-        assert (self._vertex_id(root, "Light Confirm"), self._vertex_id(root, "Full Tier")) \
-            not in pairs, "light tier must not spill into the full tier"
+        assert (
+            self._vertex_id(root, "Self Service"),
+            self._vertex_id(root, "Light Work"),
+        ) not in pairs, "self tier must not spill into the light tier"
+        assert (
+            self._vertex_id(root, "Light Confirm"),
+            self._vertex_id(root, "Full Tier"),
+        ) not in pairs, "light tier must not spill into the full tier"
 
     def test_each_branch_tail_feeds_the_merge_as_an_edge(self):
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_tiered_branches()))
@@ -1040,8 +1311,11 @@ class TestFlowDiagramMultiStageBranchSequences:
         raise AssertionError(f"no vertex named {name!r}")
 
     def _edge_pairs(self, root) -> set[tuple[str, str]]:
-        return {(c.get("source"), c.get("target")) for c in root.findall(".//mxCell")
-                if c.get("edge") == "1"}
+        return {
+            (c.get("source"), c.get("target"))
+            for c in root.findall(".//mxCell")
+            if c.get("edge") == "1"
+        }
 
     def test_intra_branch_edge_follows_the_sequence_order(self):
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
@@ -1053,13 +1327,17 @@ class TestFlowDiagramMultiStageBranchSequences:
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
         pairs = self._edge_pairs(root)
         a2, wrap = self._vertex_id(root, "A2"), self._vertex_id(root, "Wrap")
-        assert (a2, wrap) in pairs, "A2 (the branch's LAST stage) must be the one that jumps to the merge"
+        assert (a2, wrap) in pairs, (
+            "A2 (the branch's LAST stage) must be the one that jumps to the merge"
+        )
 
     def test_entry_stage_does_not_skip_ahead_to_the_merge(self):
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
         pairs = self._edge_pairs(root)
         a1, wrap = self._vertex_id(root, "A1"), self._vertex_id(root, "Wrap")
-        assert (a1, wrap) not in pairs, "A1 is not the branch terminal -- it must not jump to the merge"
+        assert (a1, wrap) not in pairs, (
+            "A1 is not the branch terminal -- it must not jump to the merge"
+        )
 
     def test_interior_branch_stage_does_not_spill_into_the_sibling_branch(self):
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
@@ -1076,20 +1354,29 @@ class TestFlowDiagramMultiStageBranchSequences:
     def test_fork_edges_land_on_each_branchs_first_stage(self):
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
         spec = spec_with_multistage_branches()
-        diamond = next(c for c in root.findall(".//mxCell")
-                        if c.get("vertex") == "1" and "rhombus" in (c.get("style") or ""))
+        diamond = next(
+            c
+            for c in root.findall(".//mxCell")
+            if c.get("vertex") == "1" and "rhombus" in (c.get("style") or "")
+        )
         a1, b1 = self._vertex_id(root, "A1"), self._vertex_id(root, "B1")
         # the fork edge from the diamond carries the option label ("A"/"B")
-        fork_edges = {(c.get("source"), c.get("target"), c.get("value") or "")
-                      for c in root.findall(".//mxCell") if c.get("edge") == "1"}
+        fork_edges = {
+            (c.get("source"), c.get("target"), c.get("value") or "")
+            for c in root.findall(".//mxCell")
+            if c.get("edge") == "1"
+        }
         assert (diamond.get("id"), a1, "A") in fork_edges
         assert (diamond.get("id"), b1, "B") in fork_edges
         assert spec.routing.points[0].options == ("A", "B")  # sanity: fixture matches assumption
 
     def test_a2_is_not_flagged_unreachable(self):
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_multistage_branches()))
-        a2 = next(c for c in root.findall(".//mxCell")
-                  if c.get("vertex") == "1" and self._first_line(c.get("value") or "") == "A2")
+        a2 = next(
+            c
+            for c in root.findall(".//mxCell")
+            if c.get("vertex") == "1" and self._first_line(c.get("value") or "") == "A2"
+        )
         assert "unreachable" not in (a2.get("value") or "").lower()
 
 
@@ -1109,8 +1396,11 @@ class TestFlowDiagramSequentialSplits:
         raise AssertionError(f"no vertex named {name!r}")
 
     def _edge_pairs(self, root) -> set[tuple[str, str]]:
-        return {(c.get("source"), c.get("target")) for c in root.findall(".//mxCell")
-                if c.get("edge") == "1"}
+        return {
+            (c.get("source"), c.get("target"))
+            for c in root.findall(".//mxCell")
+            if c.get("edge") == "1"
+        }
 
     def test_split_a_terminal_rejoins_at_its_own_merge_stemb(self):
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_sequential_splits()))
@@ -1124,8 +1414,9 @@ class TestFlowDiagramSequentialSplits:
         a2, b1 = self._vertex_id(root, "A2"), self._vertex_id(root, "B1")
         a2, end = self._vertex_id(root, "A2"), self._vertex_id(root, "End")
         assert (a2, b1) not in pairs, "split A's terminal must not spill into split B's own branch"
-        assert (a2, end) not in pairs, \
+        assert (a2, end) not in pairs, (
             "split A's terminal must not jump straight to split B's merge, skipping split B's diamond"
+        )
 
     def test_split_b_terminal_rejoins_at_the_final_stage(self):
         root = _assert_valid_mxgraph(flow_diagram_xml(spec_with_sequential_splits()))
@@ -1145,7 +1436,9 @@ class TestSchemaDiagram:
         values = [c.get("value") or "" for c in root.findall(".//mxCell")]
         required_field = next(f for f in spec.data_model.fields if f.required)
         optional_field = next(f for f in spec.data_model.fields if not f.required)
-        assert any(required_field.name in v and required_field.type in v and "*" in v for v in values)
+        assert any(
+            required_field.name in v and required_field.type in v and "*" in v for v in values
+        )
         assert any(
             optional_field.name in v and optional_field.type in v and v.strip() and "*" not in v
             for v in values
@@ -1173,13 +1466,17 @@ class TestSchemaDiagram:
         spec = sample_spec()
         root = ET.fromstring(schema_diagram_xml(spec))
         lst = spec.master_data.lists[0]
-        note_cells = [c for c in root.findall(".//mxCell") if "shape=note" in (c.get("style") or "")]
+        note_cells = [
+            c for c in root.findall(".//mxCell") if "shape=note" in (c.get("style") or "")
+        ]
         assert any(lst.name in (c.get("value") or "") for c in note_cells)
 
     def test_business_text_with_special_chars_and_thai_survives_two_decodes(self):
         spec = spec_with_tricky_text()
         root = _assert_valid_mxgraph(schema_diagram_xml(spec))
-        joined_twice = html.unescape("\n".join(c.get("value") or "" for c in root.findall(".//mxCell")))
+        joined_twice = html.unescape(
+            "\n".join(c.get("value") or "" for c in root.findall(".//mxCell"))
+        )
         assert spec.stages.stages[0].name in joined_twice
 
 
@@ -1261,7 +1558,7 @@ class TestFormMockups:
         assert 'class="kf-master-data"' in doc
         for lst in spec.master_data.lists:
             list_slice_start = doc.index(f"<!-- list:{lst.name} -->")
-            list_slice = doc[list_slice_start:list_slice_start + 2000]
+            list_slice = doc[list_slice_start : list_slice_start + 2000]
             for value in lst.values:
                 assert value in list_slice
 
@@ -1280,7 +1577,7 @@ class TestFormMockups:
         spec = sample_spec()
         doc = form_mockups_html(spec)
         assert "<textarea" in doc  # Issue Description / Repair Notes
-        assert "<select" in doc    # Equipment Type / Diagnosis Result
+        assert "<select" in doc  # Equipment Type / Diagnosis Result
         assert 'type="checkbox"' in doc  # Rework Needed
 
 
@@ -1323,7 +1620,7 @@ class TestVisibilityAwareRendering:
         assert "disabled" not in row
 
     def test_section_level_entry_governs_every_field_in_it(self):
-        """"Section-level entries count too" -- Customer Name/Equipment Type are governed only by
+        """ "Section-level entries count too" -- Customer Name/Equipment Type are governed only by
         the SECTION-level Editable entry for "Customer Info" (no field-level entry names them),
         and both must render editable."""
         spec = sample_spec()
@@ -1339,11 +1636,14 @@ class TestVisibilityAwareRendering:
         base = sample_spec()
         hiding_entry = VisibilityEntry("Attachments Log", "Quality Check", "Hidden")
         spec = dataclasses.replace(
-            base, visibility=VisibilityMatrix(entries=base.visibility.entries + (hiding_entry,)),
+            base,
+            visibility=VisibilityMatrix(entries=base.visibility.entries + (hiding_entry,)),
         )
         doc = form_mockups_html(spec)
         table_slice = _marker_slice(
-            doc, "<!-- table:Attachments Log -->", ("<!-- stage:", "<!-- table:"),
+            doc,
+            "<!-- table:Attachments Log -->",
+            ("<!-- stage:", "<!-- table:"),
         )
         assert "hidden at this step" in table_slice
         assert "<table>" not in table_slice
@@ -1352,7 +1652,9 @@ class TestVisibilityAwareRendering:
         spec = sample_spec()
         doc = form_mockups_html(spec)
         table_slice = _marker_slice(
-            doc, "<!-- table:Parts Used -->", ("<!-- stage:", "<!-- table:"),
+            doc,
+            "<!-- table:Parts Used -->",
+            ("<!-- stage:", "<!-- table:"),
         )
         assert "<table>" in table_slice
 
@@ -1439,7 +1741,9 @@ class TestFieldTypeStatedInWords:
         base = sample_spec()
         weird_field = Field("Assigned Reviewer", "User", False, "Intake", section="Customer Info")
         new_fields = base.data_model.fields + (weird_field,)
-        spec = dataclasses.replace(base, data_model=dataclasses.replace(base.data_model, fields=new_fields))
+        spec = dataclasses.replace(
+            base, data_model=dataclasses.replace(base.data_model, fields=new_fields)
+        )
         doc = form_mockups_html(spec)
         text_row = _field_slice(doc, "Customer Name")
         weird_row = _field_slice(doc, "Assigned Reviewer")
@@ -1455,7 +1759,7 @@ class TestDeclaredVsDerivedTerminals:
     def test_declared_terminal_states_and_result_values_render_labeled_as_declared(self):
         spec = sample_spec()
         doc = form_mockups_html(spec)
-        terminals_slice = doc[doc.index('class="kf-terminals"'):]
+        terminals_slice = doc[doc.index('class="kf-terminals"') :]
         assert "Declared by the business" in terminals_slice
         for state in spec.problem_goal.terminal_states:
             assert state in terminals_slice
@@ -1465,7 +1769,7 @@ class TestDeclaredVsDerivedTerminals:
     def test_derived_list_is_present_but_labeled_as_derived(self):
         spec = sample_spec()
         doc = form_mockups_html(spec)
-        terminals_slice = doc[doc.index('class="kf-terminals"'):]
+        terminals_slice = doc[doc.index('class="kf-terminals"') :]
         assert "derived from routing/loops" in terminals_slice
 
     def test_declared_and_derived_are_not_the_same_unlabeled_list(self):
@@ -1474,11 +1778,12 @@ class TestDeclaredVsDerivedTerminals:
         heading quietly answering only one of the two questions."""
         base = sample_spec()
         different_goal = dataclasses.replace(
-            base.problem_goal, terminal_states=("Totally Custom End State",),
+            base.problem_goal,
+            terminal_states=("Totally Custom End State",),
         )
         spec = dataclasses.replace(base, problem_goal=different_goal)
         doc = form_mockups_html(spec)
-        terminals_slice = doc[doc.index('class="kf-terminals"'):]
+        terminals_slice = doc[doc.index('class="kf-terminals"') :]
         assert "Totally Custom End State" in terminals_slice  # declared, rendered even though
         # it names something the topology itself never computed
         assert "Quality Check" in terminals_slice  # still present in the DERIVED list below it
@@ -1492,6 +1797,7 @@ class TestSequenceRendering:
         spec = sample_spec()
         doc = form_mockups_html(spec)
         seq = spec.data_model.sequence
+        assert seq is not None
         assert f"{seq.prefix}-{seq.padding}" in doc
 
     def test_prefix_already_carrying_a_dash_does_not_double_wire(self):
@@ -1502,7 +1808,9 @@ class TestSequenceRendering:
 
     def test_no_sequence_means_no_note(self):
         base = sample_spec()
-        spec = dataclasses.replace(base, data_model=dataclasses.replace(base.data_model, sequence=None))
+        spec = dataclasses.replace(
+            base, data_model=dataclasses.replace(base.data_model, sequence=None)
+        )
         doc = form_mockups_html(spec)
         # the CSS rule name itself is always present in the static <style> block regardless of
         # whether anything uses that class -- check for the actual ELEMENT, not the class name.
@@ -1527,7 +1835,7 @@ class TestPersonaPages:
                 assert page.name in doc
 
     def test_widget_renders_a_human_label_not_a_raw_repr(self):
-        """Minor 14: kfforge.intake.schema.WidgetIntent has no `.name` -- it must not fall
+        """Minor 14: app.application.intake.schema.WidgetIntent has no `.name` -- it must not fall
         through to a raw `WidgetIntent(slug=..., config=..., row_fields=...)` repr."""
 
         @dataclasses.dataclass(frozen=True)
@@ -1536,7 +1844,9 @@ class TestPersonaPages:
             config: tuple[tuple[str, str], ...] = ()
             row_fields: tuple[str, ...] = ()
 
-        widget = WidgetIntent(slug="view/table", config=(("flow_type", "process"), ("view_id", "myitems")))
+        widget = WidgetIntent(
+            slug="view/table", config=(("flow_type", "process"), ("view_id", "myitems"))
+        )
         page = Page(name="My Queue", widgets=(widget,))
         view = PersonaView(role="Reviewer", pages=(page,), kpis=(), actions=())
         spec = dataclasses.replace(sample_spec(), personas=Personas(views=(view,)))
@@ -1557,10 +1867,10 @@ class TestDesignBundle:
         spec = sample_spec()
         doc = design_bundle_html(spec)
         assert doc.count("&lt;mxGraphModel") == 2  # flow + schema, escaped inside <pre>
-        assert 'class="kf-card' in doc             # form mockups section
+        assert 'class="kf-card' in doc  # form mockups section
         assert spec.personas.views[0].role in doc  # persona pages section
-        assert 'class="kf-process"' in doc          # process summary
-        assert 'class="kf-master-data"' in doc      # master data
+        assert 'class="kf-process"' in doc  # process summary
+        assert 'class="kf-master-data"' in doc  # master data
 
     def test_raw_xml_inside_pre_reparses(self):
         spec = sample_spec()
@@ -1664,9 +1974,9 @@ class TestDigestChangesWithSpec:
 
     def test_deep_mutation_inside_a_wrapper_also_changes_digest(self):
         spec1 = sample_spec()
-        new_loops = ReworkLoops(loops=(
-            dataclasses.replace(spec1.rework_loops.loops[0], gate_field="Different Gate"),
-        ))
+        new_loops = ReworkLoops(
+            loops=(dataclasses.replace(spec1.rework_loops.loops[0], gate_field="Different Gate"),)
+        )
         spec2 = dataclasses.replace(spec1, rework_loops=new_loops)
         d1 = request_confirmation(spec1).spec_digest
         d2 = request_confirmation(spec2).spec_digest
@@ -1700,14 +2010,17 @@ class TestDigestChangesWithSpec:
 
 
 class TestIsApproved:
-    @pytest.mark.parametrize("decision,expected", [
-        ("approve", True),
-        ("Approve", False),
-        ("approved", False),
-        ("reject", False),
-        ("revise", False),
-        ("", False),
-    ])
+    @pytest.mark.parametrize(
+        "decision,expected",
+        [
+            ("approve", True),
+            ("Approve", False),
+            ("approved", False),
+            ("reject", False),
+            ("revise", False),
+            ("", False),
+        ],
+    )
     def test_only_explicit_approve_is_true(self, decision, expected):
         assert is_approved(sample_spec(), decision) is expected
 
@@ -1762,12 +2075,16 @@ class TestApplyRevisions:
 
     def test_routing_target_revision_changes_where_an_option_routes(self):
         spec = sample_spec()
-        revised = apply_revisions(spec, {"routing-target:Diagnosis:Beyond Repair": "Closed - Escalated"})
+        revised = apply_revisions(
+            spec, {"routing-target:Diagnosis:Beyond Repair": "Closed - Escalated"}
+        )
         rp = revised.routing.points[0]
         mapping = dict(rp.route_per_option)
         assert mapping["Beyond Repair"] == ("Closed - Escalated",)
         assert mapping["Repairable"] == ("Repair",)  # untouched
-        assert dict(spec.routing.points[0].route_per_option)["Beyond Repair"] == ("Closed - Rejected",)
+        assert dict(spec.routing.points[0].route_per_option)["Beyond Repair"] == (
+            "Closed - Rejected",
+        )
 
     def test_routing_option_revision_fixes_a_miscased_literal_preserving_its_target(self):
         spec = sample_spec()
@@ -1782,11 +2099,16 @@ class TestApplyRevisions:
     def test_stage_rename_cascades_into_visibility_and_section_and_test_cases(self):
         """M10: proven necessary against a real AppSpec (cross-tree verification script) -- a
         bare rename that skipped visibility.stage, SectionReq.stage, CaseWalk.expected_path, and
-        StepFill.stage returned a spec kfforge.intake.compile.compile_spec() rejected."""
+        StepFill.stage returned a spec app.application.intake.compile.compile_spec() rejected."""
         spec = sample_spec()
         revised = apply_revisions(spec, {"stage:Repair:rename": "Fix"})
 
-        assert {s.name for s in revised.stages.stages} == {"Intake", "Diagnosis", "Fix", "Quality Check"}
+        assert {s.name for s in revised.stages.stages} == {
+            "Intake",
+            "Diagnosis",
+            "Fix",
+            "Quality Check",
+        }
 
         rp = revised.routing.points[0]
         mapping = dict(rp.route_per_option)
@@ -1817,7 +2139,12 @@ class TestApplyRevisions:
 
         # original spec is untouched (pure)
         assert spec.stages.stages[2].name == "Repair"
-        assert spec.test_cases.cases[0].expected_path == ("Intake", "Diagnosis", "Repair", "Quality Check")
+        assert spec.test_cases.cases[0].expected_path == (
+            "Intake",
+            "Diagnosis",
+            "Repair",
+            "Quality Check",
+        )
 
     def test_stage_rename_cascades_visibility_section_when_it_is_the_implicit_default(self):
         """The OTHER visibility-section shape: "Quality Check" stage's own entry uses the
@@ -1829,19 +2156,27 @@ class TestApplyRevisions:
         """
         spec = sample_spec()
         original = next(
-            e for e in spec.visibility.entries
+            e
+            for e in spec.visibility.entries
             if e.stage == "Quality Check" and e.section == "Quality Check"
         )
         revised = apply_revisions(spec, {"stage:Quality Check:rename": "QA"})
 
         implicit_matches = [
-            e for e in revised.visibility.entries
-            if e.permission == original.permission and e.field == original.field
-            and e.stage == "QA" and e.section == "QA"
+            e
+            for e in revised.visibility.entries
+            if e.permission == original.permission
+            and e.field == original.field
+            and e.stage == "QA"
+            and e.section == "QA"
         ]
-        assert implicit_matches, "the implicit-default-section entry must have BOTH stage and section renamed"
-        assert not any(e.stage == "Quality Check" or e.section == "Quality Check"
-                        for e in revised.visibility.entries)
+        assert implicit_matches, (
+            "the implicit-default-section entry must have BOTH stage and section renamed"
+        )
+        assert not any(
+            e.stage == "Quality Check" or e.section == "Quality Check"
+            for e in revised.visibility.entries
+        )
 
     def test_stage_rename_unknown_name_raises(self):
         spec = sample_spec()
@@ -1859,7 +2194,9 @@ class TestApplyRevisions:
         revised = apply_revisions(
             spec, {"list:Diagnosis Result Options:value:Repairable": "Repairable (confirmed)"}
         )
-        lst = next(lst for lst in revised.master_data.lists if lst.name == "Diagnosis Result Options")
+        lst = next(
+            lst for lst in revised.master_data.lists if lst.name == "Diagnosis Result Options"
+        )
         assert "Repairable (confirmed)" in lst.values
         assert "Repairable" not in lst.values
 
@@ -1874,7 +2211,9 @@ class TestApplyRevisions:
 
         # original untouched (pure)
         assert "Repairable" in spec.master_data.lists[1].values
-        original_diagnosis_fill = next(f for f in spec.test_cases.cases[0].fills if f.stage == "Diagnosis")
+        original_diagnosis_fill = next(
+            f for f in spec.test_cases.cases[0].fills if f.stage == "Diagnosis"
+        )
         assert dict(original_diagnosis_fill.values)["Diagnosis Result"] == "Repairable"
 
     def test_list_value_revision_with_no_backing_field_still_applies(self):
@@ -1933,10 +2272,13 @@ class TestApplyRevisions:
 
     def test_multiple_revisions_in_one_call(self):
         spec = sample_spec()
-        revised = apply_revisions(spec, {
-            "app_name": "Renamed",
-            "stage:Intake:owner_role": "Reception",
-        })
+        revised = apply_revisions(
+            spec,
+            {
+                "app_name": "Renamed",
+                "stage:Intake:owner_role": "Reception",
+            },
+        )
         assert revised.app_name == "Renamed"
         assert revised.stages.stages[0].owner_role == "Reception"
 
@@ -1965,11 +2307,11 @@ class TestApplyRevisions:
 
 
 class TestRealIntakeShapeCompatibility:
-    """kfforge.intake.schema.AppSpec wraps every dimension (Stages.stages, Routing.points,
+    """app.application.intake.schema.AppSpec wraps every dimension (Stages.stages, Routing.points,
     ReworkLoops.loops, VisibilityMatrix.entries, TestCases.cases) and puts kpis/actions on
     PersonaView, never on PageIntent. A first review round ran this package's six public entry
     points against a real AppSpec and found five of six raised. These tests pin that shape
-    explicitly -- never importing kfforge.intake itself, only mirroring its attribute names.
+    explicitly -- never importing app.application.intake itself, only mirroring its attribute names.
     """
 
     def test_the_fixture_really_uses_intake_s_real_nesting(self):
@@ -1981,8 +2323,8 @@ class TestRealIntakeShapeCompatibility:
         assert isinstance(spec.test_cases, TestCases) and spec.test_cases.cases
         assert isinstance(spec.problem_goal, ProblemGoal)
         view = spec.personas.views[0]
-        assert view.kpis and view.actions           # kpis/actions live on the VIEW...
-        assert not hasattr(view.pages[0], "kpis")    # ...never on the page
+        assert view.kpis and view.actions  # kpis/actions live on the VIEW...
+        assert not hasattr(view.pages[0], "kpis")  # ...never on the page
         assert not hasattr(view.pages[0], "actions")
 
     def test_flow_diagram_xml_does_not_raise(self):

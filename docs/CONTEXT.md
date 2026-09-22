@@ -81,7 +81,7 @@ refused or faked at build (ADR-0005).
 _Avoid_: build correctness, identical (those name the build bar)
 
 **Page Coverage Contract**:
-The page rows of `kfforge/coverage.py` — every mockup element in exactly one
+The page rows of `src/app/domain/coverage.py` — every mockup element in exactly one
 bucket (captured-live / buildable / refuses-loudly). Compile consults it; every
 page refusal names its row. Same module and contract test as the workflow rows,
 so the two cannot drift.

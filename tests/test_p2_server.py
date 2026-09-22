@@ -10,6 +10,7 @@ Fully offline — NO live credentials, no network:
      returns a config Err, `.as_tool_result()`, never an unhandled exception) — the offline-safe
      contract every write tool in this module promises.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,24 +24,49 @@ from test_client import (  # tests/ is on sys.path, see conftest.py
     _process_with_branches,
 )
 
-import kfforge.server as srv
-from kfforge.client import Err
+import app.infrastructure.mcp.server as srv
+from app.infrastructure.kissflow.client import Err
 
 FORGE_TOOLS = {
-    "forge_create_process", "forge_member_batch", "forge_apply_fields", "forge_add_table",
-    "forge_build_workflow", "forge_add_goto_gate", "forge_set_branch_conditions",
-    "forge_set_visibility", "forge_set_events",
-    "forge_delete_fields", "forge_rename_fields", "forge_set_required",
-    "forge_set_styles", "forge_publish", "forge_doctor", "forge_create_page", "forge_build_page",
-    "forge_set_navigation", "forge_share_report", "forge_simulate_case", "forge_create_app",
+    "forge_create_process",
+    "forge_member_batch",
+    "forge_apply_fields",
+    "forge_add_table",
+    "forge_build_workflow",
+    "forge_add_goto_gate",
+    "forge_set_branch_conditions",
+    "forge_set_visibility",
+    "forge_set_events",
+    "forge_delete_fields",
+    "forge_rename_fields",
+    "forge_set_required",
+    "forge_set_styles",
+    "forge_publish",
+    "forge_doctor",
+    "forge_create_page",
+    "forge_build_page",
+    "forge_set_navigation",
+    "forge_share_report",
+    "forge_simulate_case",
+    "forge_create_app",
     "forge_delete_flow",
-    "forge_add_role_users", "forge_grant_tier", "forge_create_flow", "forge_publish_app",
-    "forge_dataset_records", "forge_set_role_preference", "forge_sweep",
-    "forge_copilot_ask", "forge_copilot_check", "forge_create_template_app",
+    "forge_add_role_users",
+    "forge_grant_tier",
+    "forge_create_flow",
+    "forge_publish_app",
+    "forge_dataset_records",
+    "forge_set_role_preference",
+    "forge_sweep",
+    "forge_copilot_ask",
+    "forge_copilot_check",
+    "forge_create_template_app",
 }
 
 KF_ENV_VARS = (
-    "KF_DEV_ACCESS_KEY_ID", "KF_DEV_ACCESS_KEY_SECRET", "KF_DEV_ACCOUNT_ID", "KF_DEV_DOMAIN",
+    "KF_DEV_ACCESS_KEY_ID",
+    "KF_DEV_ACCESS_KEY_SECRET",
+    "KF_DEV_ACCOUNT_ID",
+    "KF_DEV_DOMAIN",
     "KF_APP",
 )
 
@@ -91,6 +117,7 @@ def test_dummy_args_cover_every_forge_tool() -> None:
 
 # ---- 1. manifest ------------------------------------------------------------------------------
 
+
 def test_server_exposes_every_forge_tool_by_name() -> None:
     found = {name for name in dir(srv) if name.startswith("forge_")}
     missing = FORGE_TOOLS - found
@@ -98,9 +125,16 @@ def test_server_exposes_every_forge_tool_by_name() -> None:
 
 
 def test_server_still_exposes_the_original_8_kf_tools() -> None:
-    expected = {"kf_list_field_types", "kf_plan_field_change", "kf_get_flow_schema",
-               "kf_apply_field_change", "kf_create_process", "kf_plan_step_visibility",
-               "kf_set_step_visibility", "kf_publish"}
+    expected = {
+        "kf_list_field_types",
+        "kf_plan_field_change",
+        "kf_get_flow_schema",
+        "kf_apply_field_change",
+        "kf_create_process",
+        "kf_plan_step_visibility",
+        "kf_set_step_visibility",
+        "kf_publish",
+    }
     found = {name for name in dir(srv) if name.startswith("kf_")}
     missing = expected - found
     assert not missing, f"original kf_* tools missing from server module: {missing}"
@@ -122,7 +156,7 @@ def test_every_forge_tool_registers_on_the_real_mcp_server_with_a_valid_schema()
         for t in tools:
             if t.name in FORGE_TOOLS:
                 assert t.description, f"{t.name} has no description"
-                assert t.inputSchema, f"{t.name} has no input schema"
+                assert t.input_schema, f"{t.name} has no input schema"
         return {t.name for t in tools}
 
     names = asyncio.run(_run())
@@ -152,12 +186,27 @@ def test_kf_plan_field_change_is_a_real_offline_call() -> None:
 def test_kf_plan_step_visibility_is_a_real_offline_call() -> None:
     draft = {
         "Root": "M1",
-        "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process",
-              "RootProcessDef": "PD1", "Model::ProcessDef": ["PD1"]},
-        "PD1": {"Id": "PD1", "Kind": "ProcessDef", "WorkflowType": "Sequence",
-                "ProcessDef::Activity": ["A1"]},
-        "A1": {"Id": "A1", "Kind": "Activity", "NodeType": "StartEvent", "Name": "Start",
-              "ProcessDef": "PD1"},
+        "M1": {
+            "Id": "M1",
+            "Kind": "Model",
+            "Name": "P",
+            "FlowType": "Process",
+            "RootProcessDef": "PD1",
+            "Model::ProcessDef": ["PD1"],
+        },
+        "PD1": {
+            "Id": "PD1",
+            "Kind": "ProcessDef",
+            "WorkflowType": "Sequence",
+            "ProcessDef::Activity": ["A1"],
+        },
+        "A1": {
+            "Id": "A1",
+            "Kind": "Activity",
+            "NodeType": "StartEvent",
+            "Name": "Start",
+            "ProcessDef": "PD1",
+        },
     }
     out = srv.kf_plan_step_visibility(draft, {})
     assert out == {"sections": {}, "permission_nodes": 0}
@@ -178,17 +227,34 @@ def test_kf_list_field_types_round_trips_through_the_real_mcp_protocol() -> None
     assert "Text" in data
 
 
-@pytest.mark.parametrize("tool_name, args", [
-    # every nested object/array param a client (Cowork) was seen to stringify — all 4 reported-broken
-    # calls (#1/#2/#8), not just `sections`. The VALUE is a JSON STRING, as Cowork sends it.
-    ("forge_apply_fields",
-     {"flow_id": "FAKE", "fields": [], "sections": json.dumps({"Case Info": ["A", "B"]})}),
-    ("forge_create_flow",
-     {"kind": "case", "name": "N", "extra": json.dumps({"item_type": "Board", "prefix": "CS"})}),
-    ("forge_build_page",
-     {"app_id": "A", "page_id": "P", "steps": json.dumps([{"kind": "container", "kwargs": {}}])}),
-    ("forge_build_page", {"app_id": "A", "op": json.dumps({"name": "P"})}),
-])
+@pytest.mark.parametrize(
+    "tool_name, args",
+    [
+        # every nested object/array param a client (Cowork) was seen to stringify — all 4 reported-broken
+        # calls (#1/#2/#8), not just `sections`. The VALUE is a JSON STRING, as Cowork sends it.
+        (
+            "forge_apply_fields",
+            {"flow_id": "FAKE", "fields": [], "sections": json.dumps({"Case Info": ["A", "B"]})},
+        ),
+        (
+            "forge_create_flow",
+            {
+                "kind": "case",
+                "name": "N",
+                "extra": json.dumps({"item_type": "Board", "prefix": "CS"}),
+            },
+        ),
+        (
+            "forge_build_page",
+            {
+                "app_id": "A",
+                "page_id": "P",
+                "steps": json.dumps([{"kind": "container", "kwargs": {}}]),
+            },
+        ),
+        ("forge_build_page", {"app_id": "A", "op": json.dumps({"name": "P"})}),
+    ],
+)
 def test_stringified_structured_arg_is_coerced_not_rejected(tool_name: str, args: dict) -> None:
     """The _CoerceJsonStringArgs middleware must json.loads a stringified object/array arg back so
     Pydantic doesn't reject it with `dict_type`/`list_type` before our own code runs. Proven for
@@ -213,6 +279,7 @@ def test_stringified_structured_arg_is_coerced_not_rejected(tool_name: str, args
 
 # ---- 3. every forge_* tool fails gracefully with no live credentials --------------------------
 
+
 @pytest.fixture()
 def no_kf_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in KF_ENV_VARS:
@@ -224,7 +291,9 @@ def test_forge_tool_fails_gracefully_with_no_credentials(tool_name: str, no_kf_e
     fn = getattr(srv, tool_name)
     got = fn(**DUMMY_ARGS[tool_name])
     assert isinstance(got, dict), f"{tool_name} must return a dict even on failure, got {type(got)}"
-    assert got.get("isError") is True, f"{tool_name} with no credentials must report isError=True: {got}"
+    assert got.get("isError") is True, (
+        f"{tool_name} with no credentials must report isError=True: {got}"
+    )
     assert "config" in str(got).lower() or "KF_" in str(got), (
         f"{tool_name}'s error should be traceable to the missing config, got: {got}"
     )
@@ -234,6 +303,7 @@ def test_forge_tool_fails_gracefully_with_no_credentials(tool_name: str, no_kf_e
 # THE RULE (CLAUDE.md): an HTTP 200 from publish proves nothing by itself. forge_publish reads
 # the flow's OWN metadata record back and only reports success when Status is genuinely "Live" —
 # these two tests pin that logic with a fake client, offline.
+
 
 class _FakeDetailClient:
     """Just enough of KfClient's surface for forge_publish's flow-kind branch."""
@@ -249,14 +319,24 @@ class _FakeDetailClient:
         return {"_id": flow_id, "Status": self._status}
 
 
-def test_forge_publish_reports_isError_false_when_status_reads_back_live(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_forge_publish_reports_isError_false_when_status_reads_back_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake = _FakeDetailClient(status="Live")
     monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_publish(kind="process", flow_id="F1")
-    assert got == {"kind": "process", "id": "F1", "published": True, "status": "Live", "isError": False}
+    assert got == {
+        "kind": "process",
+        "id": "F1",
+        "published": True,
+        "status": "Live",
+        "isError": False,
+    }
 
 
-def test_forge_publish_reports_isError_true_when_status_is_not_live(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_forge_publish_reports_isError_true_when_status_is_not_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A 200 publish response is not proof — if the read-back still shows "Draft" (or anything
     else), this must be isError=True, never a silent false-positive success."""
     fake = _FakeDetailClient(status="Draft")
@@ -266,6 +346,7 @@ def test_forge_publish_reports_isError_true_when_status_is_not_live(monkeypatch:
 
 
 # ---- 5. review F5 — forge_publish's page/application branches had ZERO coverage ---------------
+
 
 class _FakePagePublishClient:
     """Just enough of KfClient's surface for forge_publish's page/application branches."""
@@ -301,7 +382,9 @@ def test_forge_publish_page_kind_happy_path(monkeypatch: pytest.MonkeyPatch) -> 
     assert fake.page_publishes == [("App1", "Page1")]
 
 
-def test_forge_publish_page_kind_propagates_publish_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_forge_publish_page_kind_propagates_publish_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake = _FakePagePublishClient(page_err=Err("http", "boom", 500))
     monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_publish(kind="page", flow_id="Page1", app_id="App1")
@@ -316,7 +399,9 @@ def test_forge_publish_application_kind_happy_path(monkeypatch: pytest.MonkeyPat
     assert fake.app_publishes == ["App1"]
 
 
-def test_forge_publish_application_kind_propagates_publish_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_forge_publish_application_kind_propagates_publish_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake = _FakePagePublishClient(app_err=Err("http", "boom", 500))
     monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_publish(kind="application", flow_id="App1")
@@ -329,10 +414,13 @@ def test_forge_publish_application_kind_propagates_publish_failure(monkeypatch: 
 # parameter at all -- flow_kind="page" only ever "worked" by accident for KF_APP. Mirrors the
 # forge_publish page-kind coverage above, same fake-client shape.
 
+
 class _FakePageDraftClient:
     """Just enough of KfClient's surface for kf_get_flow_schema's page branch."""
 
-    def __init__(self, *, page_draft: dict[str, Any] | None = None, page_err: Err | None = None) -> None:
+    def __init__(
+        self, *, page_draft: dict[str, Any] | None = None, page_err: Err | None = None
+    ) -> None:
         self.page_draft = page_draft
         self.page_err = page_err
         self.page_draft_calls: list[tuple[str, str]] = []
@@ -365,7 +453,9 @@ def test_kf_get_flow_schema_page_kind_routes_through_page_draft_with_the_explici
     )
 
 
-def test_kf_get_flow_schema_page_kind_propagates_a_read_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_kf_get_flow_schema_page_kind_propagates_a_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake = _FakePageDraftClient(page_err=Err("http", "not found", 404))
     monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.kf_get_flow_schema(flow_kind="page", flow_id="Page1", app_id="App_Other")
@@ -384,6 +474,7 @@ def test_kf_get_flow_schema_non_page_kind_is_unchanged(monkeypatch: pytest.Monke
 # ---- 6. review F5 — forge_create_app / forge_share_report had NO tool-level coverage beyond
 # the generic no-credentials path ----------------------------------------------------------------
 
+
 def test_forge_create_app_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeClient(_bare_process_draft())
     monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
@@ -395,7 +486,15 @@ def test_forge_create_app_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_forge_share_report_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeClient(_bare_process_draft())
     monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
-    members = [{"_id": "m1", "Name": "Lead", "Kind": "AppRole", "Role": "Ro_lead", "Permission": ["Member"]}]
+    members = [
+        {
+            "_id": "m1",
+            "Name": "Lead",
+            "Kind": "AppRole",
+            "Role": "Ro_lead",
+            "Permission": ["Member"],
+        }
+    ]
     got = srv.forge_share_report(flow_id="F1", report_id="Rep1", members=members)
     assert got["isError"] is False
     assert got["verified"] is None, "no documented read-back route -- must not fake True"
@@ -404,12 +503,14 @@ def test_forge_share_report_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
 # ---- 7. Node M — forge_set_branch_conditions / forge_add_goto_gate branch_name ----------------
 
+
 def test_forge_set_branch_conditions_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeClient(_process_with_branches())
     fake.list_items["List_Sample01"] = ["Alpha", "Beta"]
     monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_set_branch_conditions(
-        flow_id="F1", field_name="Track", branch_literals={"Branch A": "Alpha", "Branch B": "Beta"})
+        flow_id="F1", field_name="Track", branch_literals={"Branch A": "Alpha", "Branch B": "Beta"}
+    )
     assert got["isError"] is False
     assert got["verified"] == ["Branch A", "Branch B"] and got["missing"] == []
 
@@ -421,24 +522,35 @@ def test_forge_set_branch_conditions_rejects_bad_literal_before_any_write(
     fake.list_items["List_Sample01"] = ["Alpha", "Beta"]
     monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
     got = srv.forge_set_branch_conditions(
-        flow_id="F1", field_name="Track", branch_literals={"Branch A": "Not Real"})
+        flow_id="F1", field_name="Track", branch_literals={"Branch A": "Not Real"}
+    )
     assert got["isError"] is True
     assert fake.puts == 0
 
 
-def test_forge_add_goto_gate_branch_name_scopes_into_that_branch(monkeypatch: pytest.MonkeyPatch) -> None:
-    from kfforge.graph import apply_changes as _apply_changes
-    from kfforge.types import FieldSpec, FieldType
+def test_forge_add_goto_gate_branch_name_scopes_into_that_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.domain.graph import apply_changes as _apply_changes
+    from app.domain.types import FieldSpec, FieldType
 
-    draft = _apply_changes(_process_with_branches(), [FieldSpec(name="Done Flag", type=FieldType.BOOLEAN)])
-    branch_a_pd_id = next(v["Id"] for v in draft.values()
-                          if isinstance(v, dict) and v.get("Kind") == "ProcessDef"
-                          and v.get("Name") == "Branch A")
+    draft = _apply_changes(
+        _process_with_branches(), [FieldSpec(name="Done Flag", type=FieldType.BOOLEAN)]
+    )
+    branch_a_pd_id = next(
+        v["Id"]
+        for v in draft.values()
+        if isinstance(v, dict) and v.get("Kind") == "ProcessDef" and v.get("Name") == "Branch A"
+    )
     fake = FakeClient(draft)
     monkeypatch.setattr(srv, "_client", lambda *a, **k: fake)
 
-    got = srv.forge_add_goto_gate(flow_id="F1", target_activity_name="Shared Step",
-                                  field_name="Done Flag", branch_name="Branch A")
+    got = srv.forge_add_goto_gate(
+        flow_id="F1",
+        target_activity_name="Shared Step",
+        field_name="Done Flag",
+        branch_name="Branch A",
+    )
     assert got["isError"] is False and got["branch_name"] == "Branch A"
     assert got["goto_activity_id"] in fake.draft[branch_a_pd_id]["ProcessDef::Activity"]
 
@@ -448,17 +560,24 @@ def test_forge_add_goto_gate_branch_name_scopes_into_that_branch(monkeypatch: py
 # `trigger` slot to `str | None` so a caller can say "derive it", and a schema that rejects `null`
 # at the Pydantic boundary would never reach the derivation at all.
 
-@pytest.mark.parametrize("tool_name, args", [
-    ("forge_set_events", {"flow_id": "FAKE", "events": {"Route": [[None, "kf.x();"]]}}),
-    ("forge_set_events", {"flow_id": "FAKE", "events": {"Route": [["onClick", "kf.x();"]]}}),
-    ("forge_set_events", {"flow_id": "FAKE",
-                          "events": json.dumps({"Route": [[None, "kf.x();"]]})}),
-    ("forge_delete_fields", {"flow_id": "FAKE", "fields": ["a"], "tables": ["t"]}),
-    ("forge_rename_fields", {"flow_id": "FAKE", "renames": {"old": "new"}}),
-    ("forge_set_required", {"flow_id": "FAKE", "required": ["a"]}),
-])
-def test_bundle_b_arg_shapes_survive_the_real_protocol(tool_name: str, args: dict,
-                                                       no_kf_env: None) -> None:
+
+@pytest.mark.parametrize(
+    "tool_name, args",
+    [
+        ("forge_set_events", {"flow_id": "FAKE", "events": {"Route": [[None, "kf.x();"]]}}),
+        ("forge_set_events", {"flow_id": "FAKE", "events": {"Route": [["onClick", "kf.x();"]]}}),
+        (
+            "forge_set_events",
+            {"flow_id": "FAKE", "events": json.dumps({"Route": [[None, "kf.x();"]]})},
+        ),
+        ("forge_delete_fields", {"flow_id": "FAKE", "fields": ["a"], "tables": ["t"]}),
+        ("forge_rename_fields", {"flow_id": "FAKE", "renames": {"old": "new"}}),
+        ("forge_set_required", {"flow_id": "FAKE", "required": ["a"]}),
+    ],
+)
+def test_bundle_b_arg_shapes_survive_the_real_protocol(
+    tool_name: str, args: dict, no_kf_env: None
+) -> None:
     """Reaching our own graceful config path (`missing env var`) is the proof: the argument was
     accepted by the schema and by our own signature, and only the absent credentials stopped it.
     `raise_on_error=False` — see test_stringified_structured_arg_is_coerced_not_rejected."""

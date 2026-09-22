@@ -54,6 +54,29 @@ stages:
     ENVIRONMENT: prod
     IMAGE_TAG: "dev-$CI_COMMIT_SHORT_SHA"
 
+# Runs on every branch, not just main: the architecture contracts and the 2270-test suite are
+# only useful if they gate the change that breaks them, not the merge after it.
+lint:
+  stage: quality-gate
+  image: python:3.13-slim
+  before_script:
+    - pip install uv
+    - uv sync --frozen
+  script:
+    - uv run ruff format --check .
+    - uv run ruff check .
+    - uv run lint-imports          # Clean Architecture layer contracts
+    - uv run ty check .
+
+test:
+  stage: quality-gate
+  image: python:3.13-slim
+  before_script:
+    - pip install uv
+    - uv sync --frozen
+  script:
+    - uv run pytest --cov=src/app --cov-report=term-missing
+
 sonar-scan-dev:
   extends: .sonar-scanner
   stage: quality-gate

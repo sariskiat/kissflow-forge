@@ -22,7 +22,7 @@ you don't already know the cause. Always `"Permission": ["Editable"]`. 
 ⚠️ **Listing flows in an app (`GET /flow/2/{acct}/{type}?...`) MUST carry
 `_application_id`, or it silently returns the WHOLE ACCOUNT's flows of that
 type, not just the target app's** (confirmed live: 0 flows with the filter on
-an empty app vs. 19 without it, same account, same moment). `kfforge.client. KfClient.list_flows` already does this correctly
+an empty app vs. 19 without it, same account, same moment). `app.infrastructure.kissflow.client. KfClient.list_flows` already does this correctly
 (`?_application_id={app_id}&page_size=100`) — this note exists so nobody ever
 hand-rolls the URL without it and silently starts reading (or, worse, later
 writing against an id sourced from) a DIFFERENT app's flow.
@@ -129,7 +129,7 @@ exceptions.
   never proven) instead of being resent — a resend re-fans the notification
   out to every member again. Pass `force_regrant_groups=True` to override
   when granting a genuinely different group to a role that already carries
-  one. See `apply_add_role_users` in `kfforge/client.py` and the
+  one. See `apply_add_role_users` in `src/app/infrastructure/kissflow/client.py` and the
   `test_group_regrant_*` cases in `tests/test_client.py`.
 - **Flow REPORTS have the same member surface as flows.** A report with an
 empty member list renders as "you don't have access to this component"

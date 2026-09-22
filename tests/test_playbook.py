@@ -1,11 +1,14 @@
-"""Offline unit tests for kfforge.playbook.load_playbook (forge_playbook — the vendored brain)."""
+"""Offline unit tests for app.infrastructure.playbook.load_playbook (forge_playbook — the vendored brain)."""
+
 from __future__ import annotations
 
-from kfforge.playbook import PLAYBOOK_PATH, load_playbook
+from app.infrastructure.playbook import PLAYBOOK_PATH, load_playbook
 
 
 def test_vendored_playbook_file_ships_with_the_repo() -> None:
-    assert PLAYBOOK_PATH.is_file(), "the builder skill must be vendored in the repo, not only in ~/.claude"
+    assert PLAYBOOK_PATH.is_file(), (
+        "the builder skill must be vendored in the repo, not only in ~/.claude"
+    )
 
 
 def test_load_playbook_returns_the_full_brain() -> None:

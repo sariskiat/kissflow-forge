@@ -1,15 +1,16 @@
-"""Unit tests for kfforge.pages_live — the page/app-draft live orchestration layer (Node G).
+"""Unit tests for app.infrastructure.kissflow.pages_live — the page/app-draft live orchestration layer (Node G).
 
 NO network: a FakeClient(KfClient) intercepts every page/app HTTP method, same pattern as
 tests/test_client.py's own FakeClient for flow drafts.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
-from kfforge.client import Err, KfClient, KfConfig
-from kfforge.pages import new_page_graph, set_styles
-from kfforge.pages_live import (
+from app.domain.pages import new_page_graph, set_styles
+from app.infrastructure.kissflow.client import Err, KfClient, KfConfig
+from app.infrastructure.kissflow.pages_live import (
     NavigationReport,
     PageBuildReport,
     PageBuildStep,
@@ -22,22 +23,38 @@ from kfforge.pages_live import (
 )
 
 _DESIGN = {
-    "kind": "container", "name": "page shell",
+    "kind": "container",
+    "name": "page shell",
     "style": [["Container.Background", "#FCFAF2"], ["Container.Flex.Direction", "column"]],
     "children": [
-        {"kind": "container", "name": "hero",
-         "style": [["Container.Background", "#2E6B3B"]],
-         "children": [
-             {"kind": "widget", "name": "hero title",
-              "style": [["Label.Color", "token:Color.White"]],
-              "widget": {"slug": "general/label", "config": [["title", "Submit your case"]]}},
-         ]},
-        {"kind": "container", "name": "card", "style": [["Container.Background", "#FFFFFF"]],
-         "children": [
-             {"kind": "widget", "name": "form",
-              "widget": {"slug": "view/form",
-                         "config": [["flow_type", "process"], ["flow_id", "Flow_abc"]]}},
-         ]},
+        {
+            "kind": "container",
+            "name": "hero",
+            "style": [["Container.Background", "#2E6B3B"]],
+            "children": [
+                {
+                    "kind": "widget",
+                    "name": "hero title",
+                    "style": [["Label.Color", "token:Color.White"]],
+                    "widget": {"slug": "general/label", "config": [["title", "Submit your case"]]},
+                },
+            ],
+        },
+        {
+            "kind": "container",
+            "name": "card",
+            "style": [["Container.Background", "#FFFFFF"]],
+            "children": [
+                {
+                    "kind": "widget",
+                    "name": "form",
+                    "widget": {
+                        "slug": "view/form",
+                        "config": [["flow_type", "process"], ["flow_id", "Flow_abc"]],
+                    },
+                },
+            ],
+        },
     ],
 }
 
@@ -49,25 +66,40 @@ def _seed_app_draft() -> dict:
         "Root": "Model_Sample01",
         "_meta_version": "v1",
         "Model_Sample01": {
-            "Id": "Model_Sample01", "Kind": "Application", "FlowType": "Application",
-            "Name": "Sample Application", "DefaultPage": "Page_Sample01",
+            "Id": "Model_Sample01",
+            "Kind": "Application",
+            "FlowType": "Application",
+            "Name": "Sample Application",
+            "DefaultPage": "Page_Sample01",
             "Application::Navigation": ["Navigation_Sample01"],
         },
         "Navigation_Sample01": {
-            "Id": "Navigation_Sample01", "Kind": "Navigation", "Name": "Requester Navigation",
-            "Application": "Model_Sample01", "Navigation::Menu": ["Menu_Sample01"],
+            "Id": "Navigation_Sample01",
+            "Kind": "Navigation",
+            "Name": "Requester Navigation",
+            "Application": "Model_Sample01",
+            "Navigation::Menu": ["Menu_Sample01"],
         },
         "Menu_Sample01": {
-            "Id": "Menu_Sample01", "Kind": "Menu", "Name": "Overview",
-            "Navigation": "Navigation_Sample01", "Menu::FieldMapping": ["FieldMapping_Sample01"],
+            "Id": "Menu_Sample01",
+            "Kind": "Menu",
+            "Name": "Overview",
+            "Navigation": "Navigation_Sample01",
+            "Menu::FieldMapping": ["FieldMapping_Sample01"],
         },
         "FieldMapping_Sample01": {
-            "Id": "FieldMapping_Sample01", "Kind": "FieldMapping", "Name": "Page",
-            "Menu": "Menu_Sample01", "FieldMapping::Property": ["Property_Sample01"],
+            "Id": "FieldMapping_Sample01",
+            "Kind": "FieldMapping",
+            "Name": "Page",
+            "Menu": "Menu_Sample01",
+            "FieldMapping::Property": ["Property_Sample01"],
         },
         "Property_Sample01": {
-            "Id": "Property_Sample01", "Kind": "Property", "Type": "Page",
-            "Value": "Page_Sample01", "FieldMapping": "FieldMapping_Sample01",
+            "Id": "Property_Sample01",
+            "Kind": "Property",
+            "Type": "Page",
+            "Value": "Page_Sample01",
+            "FieldMapping": "FieldMapping_Sample01",
         },
     }
 
@@ -75,8 +107,12 @@ def _seed_app_draft() -> dict:
 class FakePageClient(KfClient):
     """KfClient with the page/app HTTP verbs intercepted."""
 
-    def __init__(self, *, pages: dict[str, dict[str, Any]] | None = None,
-                app_draft: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        pages: dict[str, dict[str, Any]] | None = None,
+        app_draft: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(DEV)
         self.pages: dict[str, dict[str, Any]] = pages if pages is not None else {}
         self.page_drafts: dict[str, dict[str, Any]] = {}
@@ -136,6 +172,7 @@ class FakePageClient(KfClient):
 
 # ---- create_page_flow --------------------------------------------------------------------------
 
+
 def test_create_page_flow_verifies_via_list_route() -> None:
     c = FakePageClient()
     rep = create_page_flow(c, "App1", "Sample Page")
@@ -158,13 +195,20 @@ def test_create_page_flow_reports_unverified_when_list_route_disagrees() -> None
 
 # ---- apply_page_build ---------------------------------------------------------------------------
 
+
 def test_apply_page_build_container_then_widget() -> None:
     c = FakePageClient()
     page_id = c.create_page("App1", "Sample Page")
     steps = [
         PageBuildStep("container", {"parent_id": "Container001", "name": "Banner"}),
-        PageBuildStep("widget", {"container_id": "Container001", "widget": "general/label",
-                                 "config": {"title": "Hello"}}),
+        PageBuildStep(
+            "widget",
+            {
+                "container_id": "Container001",
+                "widget": "general/label",
+                "config": {"title": "Hello"},
+            },
+        ),
     ]
     rep = apply_page_build(c, "App1", page_id, steps)
     assert isinstance(rep, PageBuildReport)
@@ -195,8 +239,15 @@ def test_apply_build_page_op_builds_design_into_body() -> None:
     """The governed executor consumes a compiled build_page op whose args carry a `design`, building
     the beautiful-page tree into the Body and read-back verifying it."""
     c = FakePageClient()
-    op = {"name": "Submit Case", "widgets": (), "kpis": (), "actions": (),
-          "popups": (), "on_click": (), "design": _DESIGN}
+    op = {
+        "name": "Submit Case",
+        "widgets": (),
+        "kpis": (),
+        "actions": (),
+        "popups": (),
+        "on_click": (),
+        "design": _DESIGN,
+    }
     rep = apply_build_page_op(c, "App1", op)
     result = rep.as_tool_result()
     assert result["isError"] is False, result
@@ -211,14 +262,22 @@ def test_apply_page_build_bind_repairs_an_already_built_widget() -> None:
     c = FakePageClient()
     page_id = c.create_page("App1", "Sample Page")
     steps = [
-        PageBuildStep("widget", {"container_id": "Container001", "widget": "view/form",
-                                 "config": {"flow_type": "Process", "flow_id": "Flow_placeholder"}}),
+        PageBuildStep(
+            "widget",
+            {
+                "container_id": "Container001",
+                "widget": "view/form",
+                "config": {"flow_type": "Process", "flow_id": "Flow_placeholder"},
+            },
+        ),
     ]
     rep = apply_page_build(c, "App1", page_id, steps)
     assert isinstance(rep, PageBuildReport) and rep.missing == ()
-    host = next(v["Id"] for v in c.page_drafts[page_id].values()
-               if isinstance(v, dict) and v.get("Kind") == "Container"
-               and v.get("Container::Component"))
+    host = next(
+        v["Id"]
+        for v in c.page_drafts[page_id].values()
+        if isinstance(v, dict) and v.get("Kind") == "Container" and v.get("Container::Component")
+    )
 
     steps2 = [PageBuildStep("bind", {"host": host, "config": {"flow_id": "Flow_rebind99"}})]
     rep2 = apply_page_build(c, "App1", page_id, steps2)
@@ -241,23 +300,32 @@ def test_apply_page_build_popup_widget_then_event_wires_open_popup() -> None:
     page_id = c.create_page("App1", "Sample Page")
     steps = [
         PageBuildStep("popup", {"name": "Detail Popup"}),
-        PageBuildStep("widget", {"container_id": "Container001", "widget": "general/button",
-                                 "config": {}}),
+        PageBuildStep(
+            "widget", {"container_id": "Container001", "widget": "general/button", "config": {}}
+        ),
     ]
     rep = apply_page_build(c, "App1", page_id, steps)
     assert isinstance(rep, PageBuildReport)
     assert rep.missing == ()
 
     draft = c.get_page_draft("App1", page_id)
-    popup_id = next(nid for nid, node in draft.items()
-                    if isinstance(node, dict) and node.get("Kind") == "Popup")
-    button_comp = next(nid for nid, node in draft.items()
-                       if isinstance(node, dict) and node.get("Kind") == "Component"
-                       and node.get("Script", {}).get("web") == "general/button")
+    popup_id = next(
+        nid for nid, node in draft.items() if isinstance(node, dict) and node.get("Kind") == "Popup"
+    )
+    button_comp = next(
+        nid
+        for nid, node in draft.items()
+        if isinstance(node, dict)
+        and node.get("Kind") == "Component"
+        and node.get("Script", {}).get("web") == "general/button"
+    )
     button_container = draft[button_comp]["Container"]
 
-    steps2 = [PageBuildStep("event", {"container_id": button_container, "type": "OpenPopup",
-                                      "popup_id": popup_id})]
+    steps2 = [
+        PageBuildStep(
+            "event", {"container_id": button_container, "type": "OpenPopup", "popup_id": popup_id}
+        )
+    ]
     rep2 = apply_page_build(c, "App1", page_id, steps2)
     assert isinstance(rep2, PageBuildReport)
     assert len(rep2.applied) == 1
@@ -270,11 +338,15 @@ def test_apply_page_build_popup_widget_then_event_wires_open_popup() -> None:
 def test_apply_page_build_detects_an_event_mapping_silently_dropped_by_the_write() -> None:
     """Same silent-discard class as the widget/style cases: the PUT succeeds but the EventMapping
     node itself never actually lands on the read-back."""
+
     class DroppingEvent(FakePageClient):
         def put_page_draft(self, app_id, page_id, new, expect_version):  # type: ignore[override]
             self.page_puts += 1
-            trimmed = {k: v for k, v in new.items() if not (isinstance(v, dict)
-                      and v.get("Kind") == "EventMapping")}  # the EventMapping silently vanishes
+            trimmed = {
+                k: v
+                for k, v in new.items()
+                if not (isinstance(v, dict) and v.get("Kind") == "EventMapping")
+            }  # the EventMapping silently vanishes
             trimmed["_meta_version"] = "v2"
             self.page_drafts[page_id] = trimmed
             return trimmed
@@ -285,11 +357,15 @@ def test_apply_page_build_detects_an_event_mapping_silently_dropped_by_the_write
     rep = apply_page_build(c, "App1", page_id, steps)
     assert isinstance(rep, PageBuildReport) and rep.missing == ()
     draft = c.get_page_draft("App1", page_id)
-    popup_id = next(nid for nid, node in draft.items()
-                    if isinstance(node, dict) and node.get("Kind") == "Popup")
+    popup_id = next(
+        nid for nid, node in draft.items() if isinstance(node, dict) and node.get("Kind") == "Popup"
+    )
 
-    steps2 = [PageBuildStep("event", {"container_id": "Container001", "type": "OpenPopup",
-                                      "popup_id": popup_id})]
+    steps2 = [
+        PageBuildStep(
+            "event", {"container_id": "Container001", "type": "OpenPopup", "popup_id": popup_id}
+        )
+    ]
     rep2 = apply_page_build(c, "App1", page_id, steps2, publish=True)
     assert isinstance(rep2, PageBuildReport)
     assert rep2.verified == ()
@@ -305,12 +381,19 @@ def test_apply_page_build_detects_an_event_mapping_property_silently_dropped_by_
     (EventMapping::Property). A write that keeps the empty shell but drops that Property must
     NOT read as verified — same "shell vs substance" trap the widget branch's own check
     already guards against (see pages_live.py's own comment on the "event" step check)."""
+
     class DroppingEventProperty(FakePageClient):
         def put_page_draft(self, app_id, page_id, new, expect_version):  # type: ignore[override]
             self.page_puts += 1
-            trimmed = {k: v for k, v in new.items() if not (isinstance(v, dict)
-                      and v.get("Kind") == "Property"
-                      and v.get("EventMapping") is not None)}  # only the payload vanishes
+            trimmed = {
+                k: v
+                for k, v in new.items()
+                if not (
+                    isinstance(v, dict)
+                    and v.get("Kind") == "Property"
+                    and v.get("EventMapping") is not None
+                )
+            }  # only the payload vanishes
             trimmed["_meta_version"] = "v2"
             self.page_drafts[page_id] = trimmed
             return trimmed
@@ -321,11 +404,15 @@ def test_apply_page_build_detects_an_event_mapping_property_silently_dropped_by_
     rep = apply_page_build(c, "App1", page_id, steps)
     assert isinstance(rep, PageBuildReport) and rep.missing == ()
     draft = c.get_page_draft("App1", page_id)
-    popup_id = next(nid for nid, node in draft.items()
-                    if isinstance(node, dict) and node.get("Kind") == "Popup")
+    popup_id = next(
+        nid for nid, node in draft.items() if isinstance(node, dict) and node.get("Kind") == "Popup"
+    )
 
-    steps2 = [PageBuildStep("event", {"container_id": "Container001", "type": "OpenPopup",
-                                      "popup_id": popup_id})]
+    steps2 = [
+        PageBuildStep(
+            "event", {"container_id": "Container001", "type": "OpenPopup", "popup_id": popup_id}
+        )
+    ]
     rep2 = apply_page_build(c, "App1", page_id, steps2, publish=True)
     assert isinstance(rep2, PageBuildReport)
     assert rep2.verified == (), "the EventMapping shell surviving alone must not read as verified"
@@ -350,19 +437,31 @@ def test_apply_page_build_detects_a_widget_silently_dropped_by_the_write() -> No
     """Node G review F1: a PUT that 200s while a widget never actually lands on the read-back
     must NOT read as success. Simulates exactly that — put_page_draft "succeeds" (200) but the
     stored draft silently drops one node, mirroring test_client.py's own Dropping() pattern."""
+
     class DroppingWidget(FakePageClient):
         def put_page_draft(self, app_id, page_id, new, expect_version):  # type: ignore[override]
             self.page_puts += 1
-            trimmed = {k: v for k, v in new.items() if not (isinstance(v, dict)
-                      and v.get("Kind") == "Component")}  # the widget's Component silently vanishes
+            trimmed = {
+                k: v
+                for k, v in new.items()
+                if not (isinstance(v, dict) and v.get("Kind") == "Component")
+            }  # the widget's Component silently vanishes
             trimmed["_meta_version"] = "v2"
             self.page_drafts[page_id] = trimmed
             return trimmed
 
     c = DroppingWidget()
     page_id = c.create_page("App1", "Sample Page")
-    steps = [PageBuildStep("widget", {"container_id": "Container001", "widget": "general/label",
-                                      "config": {"title": "Hello"}})]
+    steps = [
+        PageBuildStep(
+            "widget",
+            {
+                "container_id": "Container001",
+                "widget": "general/label",
+                "config": {"title": "Hello"},
+            },
+        )
+    ]
     rep = apply_page_build(c, "App1", page_id, steps, publish=True)
     assert isinstance(rep, PageBuildReport)
     assert rep.verified == ()
@@ -375,6 +474,7 @@ def test_apply_page_build_detects_a_widget_silently_dropped_by_the_write() -> No
 def test_apply_page_build_detects_a_style_value_that_never_landed() -> None:
     """Same silent-discard class, for a style step: the PUT succeeds but the Style.Value never
     actually reflects the requested prop."""
+
     class DroppingStyle(FakePageClient):
         def put_page_draft(self, app_id, page_id, new, expect_version):  # type: ignore[override]
             self.page_puts += 1
@@ -391,7 +491,9 @@ def test_apply_page_build_detects_a_style_value_that_never_landed() -> None:
     c = DroppingStyle()
     page_id = c.create_page("App1", "Sample Page")
     # "Body Container" is the virgin page's own root container Name (shapes/page_virgin.json)
-    steps = [PageBuildStep("style", {"rules": {"Body Container": {"Container.Background": "#fff"}}})]
+    steps = [
+        PageBuildStep("style", {"rules": {"Body Container": {"Container.Background": "#fff"}}})
+    ]
     rep = apply_page_build(c, "App1", page_id, steps)
     assert isinstance(rep, PageBuildReport)
     assert rep.verified == ()
@@ -401,21 +503,38 @@ def test_apply_page_build_detects_a_style_value_that_never_landed() -> None:
 
 def test_style_props_landed_resolutions_and_matching() -> None:
     g = new_page_graph("Page 1")
-    g = set_styles(g, rules={
-        "Body Container": {
-            "Container.Background": "#ffffff",
-            "Container.Color": {"ref": "Color.White"},
-        }
-    })
+    g = set_styles(
+        g,
+        rules={
+            "Body Container": {
+                "Container.Background": "#ffffff",
+                "Container.Color": {"ref": "Color.White"},
+            }
+        },
+    )
 
-    assert _style_props_landed(g, "Container001", {
-        "Container.Background": "#ffffff",
-        "Container.Color": {"ref": "Color.White"},
-    }) is True
-    assert _style_props_landed(g, "Body Container", {
-        "Container.Background": "#ffffff",
-        "Container.Color": {"ref": "Color.White"},
-    }) is True
+    assert (
+        _style_props_landed(
+            g,
+            "Container001",
+            {
+                "Container.Background": "#ffffff",
+                "Container.Color": {"ref": "Color.White"},
+            },
+        )
+        is True
+    )
+    assert (
+        _style_props_landed(
+            g,
+            "Body Container",
+            {
+                "Container.Background": "#ffffff",
+                "Container.Color": {"ref": "Color.White"},
+            },
+        )
+        is True
+    )
 
     assert _style_props_landed(g, "Container001", {"Container.Padding": None}) is True
     assert _style_props_landed(g, "Container001", {"Container.Background": None}) is False
@@ -423,33 +542,58 @@ def test_style_props_landed_resolutions_and_matching() -> None:
     assert _style_props_landed(g, "Container001", {"Container.Background": "#000000"}) is False
     assert _style_props_landed(g, "Container001", {"Container.Padding": "10px"}) is False
 
-    assert _style_props_landed(g, "Container001", {"Container.Color": {"ref": "Color.Black"}}) is False
+    assert (
+        _style_props_landed(g, "Container001", {"Container.Color": {"ref": "Color.Black"}}) is False
+    )
     assert _style_props_landed(g, "Container001", {"Container.Color": "#ffffff"}) is False
 
-    assert _style_props_landed(g, "NonExistentContainer", {"Container.Background": "#ffffff"}) is False
+    assert (
+        _style_props_landed(g, "NonExistentContainer", {"Container.Background": "#ffffff"}) is False
+    )
 
     ambiguous = dict(g)
     ambiguous["Container002"] = {
-        "Id": "Container002", "Kind": "Container", "Name": "Body Container",
+        "Id": "Container002",
+        "Kind": "Container",
+        "Name": "Body Container",
         "Container::Style": ["Style001"],
     }
-    assert _style_props_landed(ambiguous, "Body Container", {"Container.Background": "#ffffff"}) is False
+    assert (
+        _style_props_landed(ambiguous, "Body Container", {"Container.Background": "#ffffff"})
+        is False
+    )
 
     no_style = dict(g)
     no_style["Container_NoStyle"] = {
-        "Id": "Container_NoStyle", "Kind": "Container", "Name": "No Style Container",
+        "Id": "Container_NoStyle",
+        "Kind": "Container",
+        "Name": "No Style Container",
     }
-    assert _style_props_landed(no_style, "Container_NoStyle", {"Container.Background": "#ffffff"}) is False
+    assert (
+        _style_props_landed(no_style, "Container_NoStyle", {"Container.Background": "#ffffff"})
+        is False
+    )
 
     broken_style = dict(g)
     broken_style["Container_Broken"] = {
-        "Id": "Container_Broken", "Kind": "Container", "Name": "Broken",
+        "Id": "Container_Broken",
+        "Kind": "Container",
+        "Name": "Broken",
         "Container::Style": ["Style_Broken"],
     }
-    assert _style_props_landed(broken_style, "Container_Broken", {"Container.Background": "#ffffff"}) is False
+    assert (
+        _style_props_landed(broken_style, "Container_Broken", {"Container.Background": "#ffffff"})
+        is False
+    )
     broken_style["Style_Broken"] = {"Id": "Style_Broken", "Kind": "Style", "Value": None}
-    assert _style_props_landed(broken_style, "Container_Broken", {"Container.Background": "#ffffff"}) is False
-    assert _style_props_landed(broken_style, "Container_Broken", {"Container.Background": None}) is True
+    assert (
+        _style_props_landed(broken_style, "Container_Broken", {"Container.Background": "#ffffff"})
+        is False
+    )
+    assert (
+        _style_props_landed(broken_style, "Container_Broken", {"Container.Background": None})
+        is True
+    )
 
     assert _style_props_landed(g, "Container001", {}) is True
 
@@ -457,6 +601,7 @@ def test_style_props_landed_resolutions_and_matching() -> None:
 def test_apply_page_build_detects_a_bind_value_that_never_landed() -> None:
     """Same silent-discard class, for a bind step: the PUT succeeds but the rebound Property.Value
     never actually reflects the requested config."""
+
     class DroppingBind(FakePageClient):
         def put_page_draft(self, app_id, page_id, new, expect_version):  # type: ignore[override]
             self.page_puts += 1
@@ -472,13 +617,23 @@ def test_apply_page_build_detects_a_bind_value_that_never_landed() -> None:
 
     c = DroppingBind()
     page_id = c.create_page("App1", "Sample Page")
-    steps = [PageBuildStep("widget", {"container_id": "Container001", "widget": "view/form",
-                                      "config": {"flow_type": "Process", "flow_id": "Flow_x"}})]
+    steps = [
+        PageBuildStep(
+            "widget",
+            {
+                "container_id": "Container001",
+                "widget": "view/form",
+                "config": {"flow_type": "Process", "flow_id": "Flow_x"},
+            },
+        )
+    ]
     rep = apply_page_build(c, "App1", page_id, steps)
     assert isinstance(rep, PageBuildReport) and rep.missing == ()
-    host = next(v["Id"] for v in c.page_drafts[page_id].values()
-               if isinstance(v, dict) and v.get("Kind") == "Container"
-               and v.get("Container::Component"))
+    host = next(
+        v["Id"]
+        for v in c.page_drafts[page_id].values()
+        if isinstance(v, dict) and v.get("Kind") == "Container" and v.get("Container::Component")
+    )
 
     steps2 = [PageBuildStep("bind", {"host": host, "config": {"flow_id": "Flow_rebind99"}})]
     rep2 = apply_page_build(c, "App1", page_id, steps2)
@@ -493,8 +648,11 @@ def test_apply_page_build_view_table_needs_full_binding_or_raises_offline() -> N
     rejected offline, before any write."""
     c = FakePageClient()
     page_id = c.create_page("App1", "Sample Page")
-    steps = [PageBuildStep("widget", {"container_id": "Container001", "widget": "view/table",
-                                      "config": {}})]
+    steps = [
+        PageBuildStep(
+            "widget", {"container_id": "Container001", "widget": "view/table", "config": {}}
+        )
+    ]
     got = apply_page_build(c, "App1", page_id, steps)
     assert isinstance(got, Err) and got.kind == "verify"
     assert c.page_puts == 0
@@ -511,6 +669,7 @@ def test_apply_page_build_publishes_when_asked() -> None:
 
 # ---- apply_navigation ---------------------------------------------------------------------------
 
+
 def test_apply_navigation_adds_menu_and_verifies() -> None:
     c = FakePageClient()
     rep = apply_navigation(c, "App1", "Page_New", "Sample Tab", unify=False)
@@ -523,8 +682,11 @@ def test_apply_navigation_adds_menu_and_verifies() -> None:
 def test_apply_navigation_unifies_every_navigation_when_asked() -> None:
     app = _seed_app_draft()
     app["Navigation_Sample02"] = {
-        "Id": "Navigation_Sample02", "Kind": "Navigation", "Name": "Admin Navigation",
-        "Application": "Model_Sample01", "Navigation::Menu": ["Menu_Sample01"],
+        "Id": "Navigation_Sample02",
+        "Kind": "Navigation",
+        "Name": "Admin Navigation",
+        "Application": "Model_Sample01",
+        "Navigation::Menu": ["Menu_Sample01"],
     }
     app["Model_Sample01"]["Application::Navigation"].append("Navigation_Sample02")
     c = FakePageClient(app_draft=app)
@@ -537,8 +699,9 @@ def test_apply_navigation_unifies_every_navigation_when_asked() -> None:
 
 
 def test_apply_navigation_no_navigation_node_rejected_before_any_write() -> None:
-    c = FakePageClient(app_draft={"Root": "M1", "_meta_version": "v1",
-                                  "M1": {"Id": "M1", "Kind": "Application"}})
+    c = FakePageClient(
+        app_draft={"Root": "M1", "_meta_version": "v1", "M1": {"Id": "M1", "Kind": "Application"}}
+    )
     got = apply_navigation(c, "App1", "Page_New", "Sample Tab")
     assert isinstance(got, Err) and got.kind == "verify"
     assert c.app_puts == 0
@@ -546,17 +709,29 @@ def test_apply_navigation_no_navigation_node_rejected_before_any_write() -> None
 
 # ---- apply_build_page_op (#41): the governed executor -------------------------------------------
 
+
 def _op(name: str = "Ops Home", **over: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "name": name,
         "widgets": ({"slug": "general/label", "config": {"title": "Welcome"}, "row_fields": ()},),
         "kpis": ("Open cases",),
         "actions": ("New Case",),
-        "popups": ({"name": "New Case Form",
-                    "widgets": ({"slug": "general/label", "config": {"title": "Fill me"},
-                                 "row_fields": ()},)},),
-        "on_click": ({"action": "New Case", "kind": "OpenPopup",
-                      "target_popup": "New Case Form", "script": None},),
+        "popups": (
+            {
+                "name": "New Case Form",
+                "widgets": (
+                    {"slug": "general/label", "config": {"title": "Fill me"}, "row_fields": ()},
+                ),
+            },
+        ),
+        "on_click": (
+            {
+                "action": "New Case",
+                "kind": "OpenPopup",
+                "target_popup": "New Case Form",
+                "script": None,
+            },
+        ),
     }
     base.update(over)
     return base
@@ -565,34 +740,46 @@ def _op(name: str = "Ops Home", **over: Any) -> dict[str, Any]:
 def test_apply_build_page_op_builds_popup_and_onclick_wiring() -> None:
     """#41 acceptance: the compiled op's popup subtree lands AND the button's EventMapping
     OpenPopup Property targets that popup's real id — proven off the read-back, not the ack."""
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(c, "App1", _op())
     assert isinstance(rep, BuildPageOpReport)
     assert rep.page_created is True
     assert rep.missing == () and rep.refused == ()
-    assert set(rep.built) == {"widget:general/label", "popup:New Case Form",
-                              "popup:New Case Form/widget:general/label",
-                              "action:New Case", "on_click:New Case"}
+    assert set(rep.built) == {
+        "widget:general/label",
+        "popup:New Case Form",
+        "popup:New Case Form/widget:general/label",
+        "action:New Case",
+        "on_click:New Case",
+    }
     assert set(rep.verified) == set(rep.built)
-    assert rep.skipped and "Known Exclusion" in rep.skipped[0]      # the KPI, named, never faked
+    assert rep.skipped and "Known Exclusion" in rep.skipped[0]  # the KPI, named, never faked
 
     # read the draft back and prove the OpenPopup Property's Value IS the popup's id
     assert rep.page_id is not None
     draft = c.page_drafts[rep.page_id]
-    popup_id = next(k for k, v in draft.items()
-                    if isinstance(v, dict) and v.get("Kind") == "Popup"
-                    and v.get("Name") == "New Case Form")
-    props = [v for v in draft.values() if isinstance(v, dict) and v.get("Kind") == "Property"
-             and v.get("Value") == popup_id and v.get("EventMapping")]
+    popup_id = next(
+        k
+        for k, v in draft.items()
+        if isinstance(v, dict) and v.get("Kind") == "Popup" and v.get("Name") == "New Case Form"
+    )
+    props = [
+        v
+        for v in draft.values()
+        if isinstance(v, dict)
+        and v.get("Kind") == "Property"
+        and v.get("Value") == popup_id
+        and v.get("EventMapping")
+    ]
     assert props, "OpenPopup Property must target the popup id minted in this same run"
 
 
 def test_apply_build_page_op_refuses_dangling_popup_target() -> None:
     """D6: an OpenPopup wired at a popup the op never declares is REFUSED (named), not shipped
     as a dead button."""
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(c, "App1", _op(popups=()))
@@ -603,19 +790,21 @@ def test_apply_build_page_op_refuses_dangling_popup_target() -> None:
 
 
 def test_apply_build_page_op_reuses_existing_page_by_name() -> None:
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     first = apply_build_page_op(c, "App1", _op())
     assert isinstance(first, BuildPageOpReport)
-    rep = apply_build_page_op(c, "App1", _op(widgets=(), popups=(), actions=(), on_click=(), kpis=()))
+    rep = apply_build_page_op(
+        c, "App1", _op(widgets=(), popups=(), actions=(), on_click=(), kpis=())
+    )
     assert isinstance(rep, BuildPageOpReport)
     assert rep.page_created is False and rep.page_id == first.page_id
 
 
 def test_apply_build_page_op_no_name() -> None:
-    from kfforge.client import Err
-    from kfforge.pages_live import apply_build_page_op
+    from app.infrastructure.kissflow.client import Err
+    from app.infrastructure.kissflow.pages_live import apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(c, "App1", {})
@@ -625,8 +814,8 @@ def test_apply_build_page_op_no_name() -> None:
 
 
 def test_apply_build_page_op_list_pages_err() -> None:
-    from kfforge.client import Err
-    from kfforge.pages_live import apply_build_page_op
+    from app.infrastructure.kissflow.client import Err
+    from app.infrastructure.kissflow.pages_live import apply_build_page_op
 
     c = FakePageClient()
     c.list_pages = lambda app_id: Err("http", "list failed")  # type: ignore[assignment]
@@ -636,8 +825,8 @@ def test_apply_build_page_op_list_pages_err() -> None:
 
 
 def test_apply_build_page_op_create_page_err() -> None:
-    from kfforge.client import Err
-    from kfforge.pages_live import apply_build_page_op
+    from app.infrastructure.kissflow.client import Err
+    from app.infrastructure.kissflow.pages_live import apply_build_page_op
 
     c = FakePageClient()
     c.create_page = lambda app_id, name: Err("http", "create failed")  # type: ignore[assignment]
@@ -647,8 +836,8 @@ def test_apply_build_page_op_create_page_err() -> None:
 
 
 def test_apply_build_page_op_get_page_draft_err() -> None:
-    from kfforge.client import Err
-    from kfforge.pages_live import apply_build_page_op
+    from app.infrastructure.kissflow.client import Err
+    from app.infrastructure.kissflow.pages_live import apply_build_page_op
 
     c = FakePageClient()
     c.get_page_draft = lambda app_id, page_id: Err("http", "draft get failed")  # type: ignore[assignment]
@@ -658,8 +847,8 @@ def test_apply_build_page_op_get_page_draft_err() -> None:
 
 
 def test_apply_build_page_op_no_body_container() -> None:
-    from kfforge.client import Err
-    from kfforge.pages_live import apply_build_page_op
+    from app.infrastructure.kissflow.client import Err
+    from app.infrastructure.kissflow.pages_live import apply_build_page_op
 
     c = FakePageClient()
     pid = c.create_page("App1", "PageNoBody")
@@ -671,7 +860,7 @@ def test_apply_build_page_op_no_body_container() -> None:
 
 
 def test_apply_build_page_op_malformed_design_refused() -> None:
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(c, "App1", _op(design={"bad": "tree"}))
@@ -680,7 +869,7 @@ def test_apply_build_page_op_malformed_design_refused() -> None:
 
 
 def test_apply_build_page_op_widget_error_refused() -> None:
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(
@@ -691,7 +880,7 @@ def test_apply_build_page_op_widget_error_refused() -> None:
 
 
 def test_apply_build_page_op_jsaction_and_action_error() -> None:
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(
@@ -709,7 +898,7 @@ def test_apply_build_page_op_jsaction_and_action_error() -> None:
 
 
 def test_apply_build_page_op_action_event_mapping_fails() -> None:
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(
@@ -725,8 +914,8 @@ def test_apply_build_page_op_action_event_mapping_fails() -> None:
 
 
 def test_apply_build_page_op_put_page_draft_err() -> None:
-    from kfforge.client import Err
-    from kfforge.pages_live import apply_build_page_op
+    from app.infrastructure.kissflow.client import Err
+    from app.infrastructure.kissflow.pages_live import apply_build_page_op
 
     c = FakePageClient()
 
@@ -740,8 +929,8 @@ def test_apply_build_page_op_put_page_draft_err() -> None:
 
 
 def test_apply_build_page_op_readback_draft_err() -> None:
-    from kfforge.client import Err
-    from kfforge.pages_live import apply_build_page_op
+    from app.infrastructure.kissflow.client import Err
+    from app.infrastructure.kissflow.pages_live import apply_build_page_op
 
     c = FakePageClient()
     orig_get = c.get_page_draft
@@ -759,8 +948,8 @@ def test_apply_build_page_op_readback_draft_err() -> None:
 
 
 def test_apply_build_page_op_publish_success_and_error() -> None:
-    from kfforge.client import Err
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.client import Err
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(c, "App1", _op(), publish=True)
@@ -776,7 +965,7 @@ def test_apply_build_page_op_publish_success_and_error() -> None:
 
 
 def test_apply_build_page_op_publish_skipped_when_refused() -> None:
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(c, "App1", _op(popups=()), publish=True)
@@ -786,7 +975,7 @@ def test_apply_build_page_op_publish_skipped_when_refused() -> None:
 
 
 def test_apply_build_page_op_missing_readback_items() -> None:
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     orig_get = c.get_page_draft
@@ -812,7 +1001,7 @@ def test_apply_build_page_op_missing_readback_items() -> None:
 
 
 def test_apply_build_page_op_undeclared_action_in_wiring() -> None:
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(
@@ -835,7 +1024,7 @@ def test_apply_build_page_op_undeclared_action_in_wiring() -> None:
 
 
 def test_apply_build_page_op_plain_action_without_onclick() -> None:
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     rep = apply_build_page_op(c, "App1", _op(actions=("PlainButton",), on_click=()))
@@ -845,7 +1034,11 @@ def test_apply_build_page_op_plain_action_without_onclick() -> None:
 
 
 def test_apply_build_page_op_action_widget_error_refused() -> None:
-    from kfforge.pages_live import _build_single_action, _find_node_id, _PageOpState
+    from app.infrastructure.kissflow.pages_live import (
+        _build_single_action,
+        _find_node_id,
+        _PageOpState,
+    )
 
     assert _find_node_id({}, "Component", "Container", "unknown") is None
 
@@ -855,11 +1048,16 @@ def test_apply_build_page_op_action_widget_error_refused() -> None:
 
 
 def test_apply_build_page_op_list_pages_non_dict_and_nomatch() -> None:
-    from kfforge.pages_live import BuildPageOpReport, apply_build_page_op
+    from app.infrastructure.kissflow.pages_live import BuildPageOpReport, apply_build_page_op
 
     c = FakePageClient()
     # list_pages returns list with non-dict elements and non-matching names
-    c.list_pages = lambda app_id: [None, "invalid", {"Name": "Other"}, {"_id": "p1", "Name": "Existing"}]  # type: ignore[assignment]
+    c.list_pages = lambda app_id: [
+        None,
+        "invalid",
+        {"Name": "Other"},
+        {"_id": "p1", "Name": "Existing"},
+    ]  # type: ignore[assignment]
     c.page_drafts["p1"] = new_page_graph("Existing")
     c.page_drafts["p1"]["_meta_version"] = "v1"
     rep = apply_build_page_op(c, "App1", _op(name="Existing"))
@@ -868,3 +1066,26 @@ def test_apply_build_page_op_list_pages_non_dict_and_nomatch() -> None:
     assert rep.page_created is False
 
 
+def test_a_popup_with_widgets_but_no_container_is_named_not_passed_down() -> None:
+    """`_build_popup_widgets` takes `container_id: str | None` because its call site defaults to
+    `[None]` when a popup came back with no `Popup::Container`. Two different situations hide
+    there, and they must not be conflated:
+
+      * no container AND no widgets -> nothing to do, return quietly
+      * no container BUT widgets to place -> unbuildable; say so, rather than handing None to
+        add_widget and failing several frames away with an unrelated message
+
+    Before the `str | None` annotation the second case was invisible to the type checker and
+    untested here.
+    """
+    import pytest
+
+    from app.infrastructure.kissflow.pages_live import _build_popup_widgets
+
+    # nothing to place: a missing container is not an error
+    _build_popup_widgets(None, "Detail", None, None)  # ty: ignore[invalid-argument-type]
+    _build_popup_widgets(None, "Detail", None, ())  # ty: ignore[invalid-argument-type]
+
+    # something to place, nowhere to put it: refuse, and name the popup
+    with pytest.raises(ValueError, match="Detail.*no Popup::Container"):
+        _build_popup_widgets(None, "Detail", None, [{"slug": "view/form"}])  # ty: ignore[invalid-argument-type]

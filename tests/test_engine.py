@@ -1,15 +1,16 @@
-"""Unit spec for the offline dry-run planner. RED until kfforge.engine exists.
+"""Unit spec for the offline dry-run planner. RED until app.application.engine exists.
 
 Pure + offline: plan_change describes what apply WOULD do, without writing or calling Kissflow.
 """
+
 import json
 import pathlib
 
 import pytest
 
-from kfforge.engine import plan_change
-from kfforge.graph import apply_changes
-from kfforge.types import FieldSpec, FieldType
+from app.application.engine import plan_change
+from app.domain.graph import apply_changes
+from app.domain.types import FieldSpec, FieldType
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "form_draft.json"
 MODEL_ID = "TestForm_x001"
@@ -49,4 +50,5 @@ def test_plan_empty_is_noop():
 
 def test_plan_rejects_bad_type():
     with pytest.raises((ValueError, TypeError, KeyError)):
-        plan_change(_load(), [FieldSpec(name="Bad", type="Frobnicate")])
+        # deliberately not a FieldType — the raise is the assertion.
+        plan_change(_load(), [FieldSpec(name="Bad", type="Frobnicate")])  # ty: ignore[invalid-argument-type]

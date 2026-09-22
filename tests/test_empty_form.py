@@ -3,11 +3,12 @@ apply_changes must build Model->Row->Section->Row->Column->Field from bare, not 
 
 Fixture is the REAL draft captured from a throwaway dev form (structure only, no data).
 """
+
 import json
 import pathlib
 
-from kfforge.graph import apply_changes, field_names
-from kfforge.types import FieldSpec, FieldType
+from app.domain.graph import apply_changes, field_names
+from app.domain.types import FieldSpec, FieldType
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "empty_form_draft.json"
 MODEL = "zz_spike_form_A00"

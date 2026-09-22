@@ -1,4 +1,5 @@
 """P0 acceptance: blindness, severed umbilical, explicit app, server boots."""
+
 from __future__ import annotations
 
 import pathlib
@@ -11,7 +12,9 @@ TEXT_EXT = {".py", ".json", ".md", ".robot", ".toml", ".txt", ".yml", ".yaml", "
 # tokens AND close the dash/space/possessive + app-abbreviation gaps the case-sensitive
 # ones missed -- a green scan now really means blind. Tokens built by concatenation so
 # this file's own source stays grep-clean.
-FORBIDDEN = re.compile("|".join(["cli" + "nic", "ai" + "case", "cP" + "5", "คลิ" + "นิก"]), re.IGNORECASE)
+FORBIDDEN = re.compile(
+    "|".join(["cli" + "nic", "ai" + "case", "cP" + "5", "คลิ" + "นิก"]), re.IGNORECASE
+)
 
 
 def _repo_text_files():
@@ -28,8 +31,11 @@ def test_blindness_no_real_app_tokens():
 
 
 def test_no_kfmcp_references():
-    hits = [str(p) for p in _repo_text_files()
-            if p.suffix == ".py" and ("kf" + "mcp") in p.read_text(errors="ignore")]
+    hits = [
+        str(p)
+        for p in _repo_text_files()
+        if p.suffix == ".py" and ("kf" + "mcp") in p.read_text(errors="ignore")
+    ]
     assert hits == [], f"umbilical to old repo not severed: {hits}"
 
 
@@ -37,8 +43,9 @@ def test_client_requires_explicit_app(monkeypatch):
     """App is no longer required at config load — it can be chosen per call (app_id) or at
     runtime (forge_use_app). But an app IS still required to actually build: the guard moved to
     the _client() chokepoint, which fails loud (require_app=True) when no app is resolvable."""
-    import kfforge.server as srv
-    from kfforge.client import Err, KfConfig
+    import app.infrastructure.mcp.server as srv
+    from app.infrastructure.kissflow.client import Err, KfConfig
+
     monkeypatch.setenv("KF_DEV_ACCESS_KEY_ID", "k")
     monkeypatch.setenv("KF_DEV_ACCESS_KEY_SECRET", "s")
     monkeypatch.setenv("KF_DEV_ACCOUNT_ID", "a")
@@ -66,15 +73,24 @@ def test_image_declares_forwarded_allow_ips():
     proves the mechanism; this assertion proves it is switched on in the artefact that ships, so
     the two cannot drift apart. A run-time value still overrides an image default."""
     dockerfile = (ROOT / "Dockerfile").read_text()
-    assert re.search(r"^ENV\b.*\bFORWARDED_ALLOW_IPS=\*", dockerfile, re.MULTILINE), \
+    assert re.search(r"^ENV\b.*\bFORWARDED_ALLOW_IPS=\*", dockerfile, re.MULTILINE), (
         "Dockerfile ENV line must declare FORWARDED_ALLOW_IPS=*"
+    )
 
 
 def test_server_exposes_original_8_tools():
-    import kfforge.server as srv
-    expected = {"kf_list_field_types", "kf_plan_field_change", "kf_get_flow_schema",
-                "kf_apply_field_change", "kf_create_process", "kf_plan_step_visibility",
-                "kf_set_step_visibility", "kf_publish"}
+    import app.infrastructure.mcp.server as srv
+
+    expected = {
+        "kf_list_field_types",
+        "kf_plan_field_change",
+        "kf_get_flow_schema",
+        "kf_apply_field_change",
+        "kf_create_process",
+        "kf_plan_step_visibility",
+        "kf_set_step_visibility",
+        "kf_publish",
+    }
     found = {name for name in dir(srv) if name.startswith("kf_")}
     missing = expected - found
     assert not missing, f"tools missing from server module: {missing}"

@@ -34,7 +34,7 @@ def _force_ids(template: dict[str, dict]) -> dict[str, str]:
 
 
 def _transplanted() -> tuple[dict, dict[str, str]]:
-    from kfforge.graph import transplant_template
+    from app.domain.graph import transplant_template
 
     idmap = _force_ids(_template())
     out = transplant_template(
@@ -57,7 +57,7 @@ def _leaf_strings(value: Any):
 
 
 def test_input_not_mutated() -> None:
-    from kfforge.graph import transplant_template
+    from app.domain.graph import transplant_template
 
     draft = _bare_process()
     before = copy.deepcopy(draft)
@@ -70,7 +70,9 @@ def test_no_source_id_survives_anywhere() -> None:
     template = _template()
     survivors = set(out) & set(template)
     assert not survivors, f"source ids survived as node keys: {survivors}"
-    leaked = {tok for v in out.values() for s in _leaf_strings(v) for tok in _SAMPLE_TOKEN.findall(s)}
+    leaked = {
+        tok for v in out.values() for s in _leaf_strings(v) for tok in _SAMPLE_TOKEN.findall(s)
+    }
     assert not leaked, f"source id tokens leaked inside node values: {leaked}"
 
 
@@ -104,12 +106,17 @@ def test_assignee_resource_repointed_at_dev_app_role() -> None:
     resources = [v for v in out.values() if isinstance(v, dict) and v.get("Kind") == "Resource"]
     assert resources, "no Resource node in output"
     for res in resources:
-        assert res["ValueType"] == "AppRole", f"Resource {res['Id']} not re-pointed: {res['ValueType']}"
+        assert res["ValueType"] == "AppRole", (
+            f"Resource {res['Id']} not re-pointed: {res['ValueType']}"
+        )
         assert res["Value"] == ROLE_ID
     active = [
-        v for v in out.values()
-        if isinstance(v, dict) and v.get("Kind") == "Activity"
-        and v.get("NodeType") == "UserTask" and not v.get("IsSuspended")
+        v
+        for v in out.values()
+        if isinstance(v, dict)
+        and v.get("Kind") == "Activity"
+        and v.get("NodeType") == "UserTask"
+        and not v.get("IsSuspended")
     ]
     for act in active:
         res_ids = act.get("Activity::Resource") or []
@@ -229,7 +236,7 @@ def test_deterministic_given_id_mapping_source_and_fresh_ids_otherwise() -> None
     out_b, _ = _transplanted()
     assert out_a == out_b, "same id-mapping source must produce the identical graph"
 
-    from kfforge.graph import transplant_template
+    from app.domain.graph import transplant_template
 
     r1 = transplant_template(_bare_process(), app_role=(ROLE_ID, ROLE_NAME))
     r2 = transplant_template(_bare_process(), app_role=(ROLE_ID, ROLE_NAME))
@@ -297,7 +304,7 @@ def test_raises_on_non_bare_draft() -> None:
     # refuses a draft that already carries a workflow, loudly.
     import pytest
 
-    from kfforge.graph import transplant_template
+    from app.domain.graph import transplant_template
 
     draft = _bare_process()
     draft["M1"]["RootProcessDef"] = "PD_existing"
@@ -310,18 +317,21 @@ def test_transplant_introduces_no_new_doctor_problems() -> None:
     # never-editable sections — production quirks kept verbatim on purpose).
     # The transplant contract (boss-confirmed reading of ticket #12): no NEW
     # doctor problems beyond the capture's own, and the assignee problem gone.
-    from kfforge.verify import doctor
+    from app.application.verify import doctor
 
     raw: dict[str, Any] = dict(_template())
     raw["Root"] = "Model_Sample01"
     baseline = set(doctor(raw).problems)
-    assert any("assignee" in p for p in baseline), "capture baseline lost its known assignee problem"
+    assert any("assignee" in p for p in baseline), (
+        "capture baseline lost its known assignee problem"
+    )
 
     out, _ = _transplanted()
     out_problems = set(doctor(out).problems)
     assert not any("assignee" in p for p in out_problems), (
         "re-pointing the Resource at the dev AppRole must clear the assignee problem"
     )
+
     # Problems cite node ids, and the transplant remaps every id — compare by
     # id-normalized problem CLASS (multiset), not by exact string, or the same
     # capture quirk counts as "new" purely because its id was minted fresh.
@@ -331,4 +341,6 @@ def test_transplant_introduces_no_new_doctor_problems() -> None:
     base_classes = Counter(_cls(p) for p in baseline)
     out_classes = Counter(_cls(p) for p in out_problems)
     new_problems = out_classes - base_classes
-    assert not new_problems, f"transplant introduced NEW doctor problem classes: {dict(new_problems)}"
+    assert not new_problems, (
+        f"transplant introduced NEW doctor problem classes: {dict(new_problems)}"
+    )

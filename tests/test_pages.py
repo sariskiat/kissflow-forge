@@ -1,13 +1,14 @@
-"""Unit spec for kfforge.pages: the page-graph builder driven by the shapes/ catalog.
+"""Unit spec for app.domain.pages: the page-graph builder driven by the shapes/ catalog.
 
 Pure + offline: no network, no Kissflow calls, no real-app content (neutral names only, checked
 repo-wide by test_p0_scaffold.py's blindness test).
 """
+
 from __future__ import annotations
 
 import pytest
 
-from kfforge.pages import (
+from app.domain.pages import (
     WIDGET_REQUIRED_CONFIG,
     WIDGET_SLUGS,
     _instantiate,
@@ -32,32 +33,59 @@ def _container_depth(page: dict, cid: str = "Container001", d: int = 0) -> int:
 
 
 _BEAUTIFUL_DESIGN = {
-    "kind": "container", "name": "page shell",
-    "style": [["Container.Background", "#FCFAF2"], ["Container.Flex.Direction", "column"],
-              ["Container.Row.Gap", "16px"]],
+    "kind": "container",
+    "name": "page shell",
+    "style": [
+        ["Container.Background", "#FCFAF2"],
+        ["Container.Flex.Direction", "column"],
+        ["Container.Row.Gap", "16px"],
+    ],
     "children": [
-        {"kind": "container", "name": "hero",
-         "style": [["Container.Background", "#2E6B3B"], ["Container.Padding.Top", "32px"]],
-         "children": [
-             {"kind": "container", "name": "hero header",
-              "style": [["Container.Flex.Direction", "row"], ["Container.Row.Gap", "10px"]],
-              "children": [
-                  {"kind": "widget", "name": "hero title",
-                   "style": [["Label.Color", "token:Color.White"],
-                             ["Label.Font.Weight", "token:Font.Weight.SemiBold"]],
-                   "widget": {"slug": "general/label",
-                              "config": [["title", "Submit your AI use case"]]}},
-              ]},
-         ]},
-        {"kind": "container", "name": "card",
-         "style": [["Container.Background", "#FFFFFF"],
-                   ["Container.Border.Top.Left.Radius", "14px"],
-                   ["Container.Padding.Top", "24px"]],
-         "children": [
-             {"kind": "widget", "name": "form",
-              "widget": {"slug": "view/form",
-                         "config": [["flow_type", "process"], ["flow_id", "Flow_abc"]]}},
-         ]},
+        {
+            "kind": "container",
+            "name": "hero",
+            "style": [["Container.Background", "#2E6B3B"], ["Container.Padding.Top", "32px"]],
+            "children": [
+                {
+                    "kind": "container",
+                    "name": "hero header",
+                    "style": [["Container.Flex.Direction", "row"], ["Container.Row.Gap", "10px"]],
+                    "children": [
+                        {
+                            "kind": "widget",
+                            "name": "hero title",
+                            "style": [
+                                ["Label.Color", "token:Color.White"],
+                                ["Label.Font.Weight", "token:Font.Weight.SemiBold"],
+                            ],
+                            "widget": {
+                                "slug": "general/label",
+                                "config": [["title", "Submit your AI use case"]],
+                            },
+                        },
+                    ],
+                },
+            ],
+        },
+        {
+            "kind": "container",
+            "name": "card",
+            "style": [
+                ["Container.Background", "#FFFFFF"],
+                ["Container.Border.Top.Left.Radius", "14px"],
+                ["Container.Padding.Top", "24px"],
+            ],
+            "children": [
+                {
+                    "kind": "widget",
+                    "name": "form",
+                    "widget": {
+                        "slug": "view/form",
+                        "config": [["flow_type", "process"], ["flow_id", "Flow_abc"]],
+                    },
+                },
+            ],
+        },
     ],
 }
 
@@ -65,6 +93,7 @@ _BEAUTIFUL_DESIGN = {
 # ---------------------------------------------------------------------------------------------
 # build_design: the beautiful-page tree (page.design.md)
 # ---------------------------------------------------------------------------------------------
+
 
 def test_build_design_produces_nested_styled_tree() -> None:
     page = new_page_graph("Submit AI Use Case")
@@ -85,8 +114,11 @@ def test_build_design_style_nodes_carry_real_token_and_hex_values() -> None:
     page = new_page_graph("Submit AI Use Case")
     page, _ = build_design(page, parent_id="Container001", design=_BEAUTIFUL_DESIGN)
 
-    styles = [v.get("Value", {}) for v in page.values()
-              if isinstance(v, dict) and v.get("Kind") == "Style"]
+    styles = [
+        v.get("Value", {})
+        for v in page.values()
+        if isinstance(v, dict) and v.get("Kind") == "Style"
+    ]
     # hex colour lands as {"value": "#hex"} (page.design.md: raw hex is a valid page colour form)
     assert any(val.get("Container.Background") == {"value": "#FCFAF2"} for val in styles)
     assert any(val.get("Container.Background") == {"value": "#2E6B3B"} for val in styles)
@@ -102,8 +134,11 @@ def test_build_design_flow_type_is_canonicalized() -> None:
     the difference between a rendered widget and 'Unable to display component' (page.design.md)."""
     page = new_page_graph("Submit AI Use Case")
     page, _ = build_design(page, parent_id="Container001", design=_BEAUTIFUL_DESIGN)
-    flow_types = [v.get("Value") for v in page.values()
-                  if isinstance(v, dict) and v.get("Kind") == "Property" and v.get("Value") == "Process"]
+    flow_types = [
+        v.get("Value")
+        for v in page.values()
+        if isinstance(v, dict) and v.get("Kind") == "Property" and v.get("Value") == "Process"
+    ]
     assert flow_types, "flow_type must be stored canonicalized as 'Process'"
 
 
@@ -152,6 +187,7 @@ def _assert_backrefs_resolve(draft: dict) -> None:
 # new_page_graph
 # ---------------------------------------------------------------------------------------------
 
+
 def test_new_page_graph_has_exactly_the_virgin_kinds() -> None:
     page = new_page_graph("Sample Page")
     kinds = sorted(v["Kind"] for v in page.values() if isinstance(v, dict))
@@ -174,6 +210,7 @@ def test_new_page_graph_is_pure_and_ids_are_fresh_each_call() -> None:
 # ---------------------------------------------------------------------------------------------
 # add_container
 # ---------------------------------------------------------------------------------------------
+
 
 def test_add_container_wires_parent_and_layout() -> None:
     page = new_page_graph("Sample Page")
@@ -204,15 +241,21 @@ def test_add_container_does_not_mutate_input() -> None:
 # add_widget: one representative per binding family, plus the repeater trap
 # ---------------------------------------------------------------------------------------------
 
+
 def test_add_widget_general_label_binds_text() -> None:
     page = new_page_graph("Sample Page")
     page, host = add_widget(
         page, container_id="Container001", widget="general/label", config={"title": "Hello there"}
     )
-    comp = next(v for v in page.values() if isinstance(v, dict) and v.get("Kind") == "Component"
-                and v.get("Container") == host)
+    comp = next(
+        v
+        for v in page.values()
+        if isinstance(v, dict) and v.get("Kind") == "Component" and v.get("Container") == host
+    )
     assert comp["Script"]["web"] == "general/label"
-    fm = next(page[fid] for fid in page[host]["Container::FieldMapping"] if page[fid]["Name"] == "title")
+    fm = next(
+        page[fid] for fid in page[host]["Container::FieldMapping"] if page[fid]["Name"] == "title"
+    )
     prop = page[fm["FieldMapping::Property"][0]]
     assert prop["Value"] == "Hello there"
     _assert_backrefs_resolve(page)
@@ -224,11 +267,15 @@ def test_add_widget_view_table_binds_flow_view_trio() -> None:
     back at itself would pass even if the config-write mechanism were deleted entirely."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="view/table",
+        page,
+        container_id="Container001",
+        widget="view/table",
         config={"flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "allitems"},
     )
-    fm_index = {page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]]["Value"]
-                for fid in page[host]["Container::FieldMapping"]}
+    fm_index = {
+        page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]]["Value"]
+        for fid in page[host]["Container::FieldMapping"]
+    }
     # Subset, not ==: view/table now also carries the display-config slots showform/steps/caption
     # (ticket #21); the load-bearing binding trio is what this test guards.
     assert fm_index["flow_type"] == "Process"
@@ -244,11 +291,15 @@ def test_add_widget_report_chart_binds_flow_report_trio() -> None:
     below must differ from the shape default it binds."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="report/chart",
+        page,
+        container_id="Container001",
+        widget="report/chart",
         config={"flow_id": "Flow_abc123", "flow_type": "Form", "report_id": "Report_r1"},
     )
-    fm_index = {page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]]["Value"]
-                for fid in page[host]["Container::FieldMapping"]}
+    fm_index = {
+        page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]]["Value"]
+        for fid in page[host]["Container::FieldMapping"]
+    }
     assert fm_index["flow_id"] == "Flow_abc123"
     assert fm_index["flow_type"] == "Form"
     assert fm_index["report_id"] == "Report_r1"
@@ -265,14 +316,20 @@ def test_add_widget_report_chart_binds_flow_report_trio() -> None:
 # eval case's literal ids.
 # ---------------------------------------------------------------------------------------------
 
+
 def _host_component(page: dict, host: str) -> dict:
-    return next(v for v in page.values() if isinstance(v, dict) and v.get("Kind") == "Component"
-               and v.get("Container") == host)
+    return next(
+        v
+        for v in page.values()
+        if isinstance(v, dict) and v.get("Kind") == "Component" and v.get("Container") == host
+    )
 
 
 def _fm_values(page: dict, host: str) -> dict:
-    return {page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]].get("Value")
-            for fid in page[host]["Container::FieldMapping"]}
+    return {
+        page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]].get("Value")
+        for fid in page[host]["Container::FieldMapping"]
+    }
 
 
 def test_add_widget_view_form_reaches_live_binding_view_id_null() -> None:
@@ -282,16 +339,24 @@ def test_add_widget_view_form_reaches_live_binding_view_id_null() -> None:
     ALSO mirror into Component.Data (double-encoded live)."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="view/form",
+        page,
+        container_id="Container001",
+        widget="view/form",
         config={"flow_type": "Process", "flow_id": "Flow_abc123"},
     )
     assert _fm_values(page, host) == {
-        "flow_type": "Process", "flow_id": "Flow_abc123",
-        "view_id": None, "instance_id": None, "activity_instance_id": None,
+        "flow_type": "Process",
+        "flow_id": "Flow_abc123",
+        "view_id": None,
+        "instance_id": None,
+        "activity_instance_id": None,
     }
     assert _host_component(page, host)["Data"] == {
-        "manifest_id": "Form", "category": "view", "visualization_type": "form",
-        "flow_type": "Process", "flow_id": "Flow_abc123",
+        "manifest_id": "Form",
+        "category": "view",
+        "visualization_type": "form",
+        "flow_type": "Process",
+        "flow_id": "Flow_abc123",
     }
     _assert_backrefs_resolve(page)
 
@@ -301,8 +366,9 @@ def test_add_widget_view_form_still_requires_flow_id() -> None:
     to the shape's own placeholder id and must raise before any node is written."""
     page = new_page_graph("Sample Page")
     with pytest.raises(ValueError, match="flow_id"):
-        add_widget(page, container_id="Container001", widget="view/form",
-                   config={"flow_type": "Process"})
+        add_widget(
+            page, container_id="Container001", widget="view/form", config={"flow_type": "Process"}
+        )
 
 
 def test_add_widget_flow_type_case_is_canonicalized() -> None:
@@ -312,7 +378,9 @@ def test_add_widget_flow_type_case_is_canonicalized() -> None:
     mirror must carry the canonical 'Process'."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="view/form",
+        page,
+        container_id="Container001",
+        widget="view/form",
         config={"flow_type": "process", "flow_id": "Flow_abc123"},  # lowercase in -> canonical out
     )
     assert _fm_values(page, host)["flow_type"] == "Process"
@@ -323,8 +391,12 @@ def test_add_widget_flow_type_unknown_fails_loud() -> None:
     """An unknown flow_type is refused before any write, not passed through to render broken."""
     page = new_page_graph("Sample Page")
     with pytest.raises(ValueError, match="flow_type"):
-        add_widget(page, container_id="Container001", widget="view/form",
-                   config={"flow_type": "workflow", "flow_id": "Flow_abc123"})
+        add_widget(
+            page,
+            container_id="Container001",
+            widget="view/form",
+            config={"flow_type": "workflow", "flow_id": "Flow_abc123"},
+        )
 
 
 def test_add_widget_view_form_no_view_id_expresses_a_submit_form() -> None:
@@ -334,7 +406,9 @@ def test_add_widget_view_form_no_view_id_expresses_a_submit_form() -> None:
     asserts specifically on flow_id landing and view_id's own FieldMapping carrying no Value."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="view/form",
+        page,
+        container_id="Container001",
+        widget="view/form",
         config={"flow_type": "Process", "flow_id": "Flow_abc123"},
     )
     values = _fm_values(page, host)
@@ -348,17 +422,33 @@ def test_add_widget_view_table_reaches_live_binding_and_mirrors_data() -> None:
     here differs from the shape default ("") so a silent no-op cannot make the assertion pass."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="view/table",
-        config={"flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "myitems",
-                "showform": True, "steps": "all", "caption": "Neutral Caption"},
+        page,
+        container_id="Container001",
+        widget="view/table",
+        config={
+            "flow_type": "Process",
+            "flow_id": "Flow_abc123",
+            "view_id": "myitems",
+            "showform": True,
+            "steps": "all",
+            "caption": "Neutral Caption",
+        },
     )
     assert _fm_values(page, host) == {
-        "flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "myitems",
-        "showform": True, "steps": "all", "caption": "Neutral Caption",
+        "flow_type": "Process",
+        "flow_id": "Flow_abc123",
+        "view_id": "myitems",
+        "showform": True,
+        "steps": "all",
+        "caption": "Neutral Caption",
     }
     assert _host_component(page, host)["Data"] == {
-        "manifest_id": "Table", "category": "view", "visualization_type": "table",
-        "flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "myitems",
+        "manifest_id": "Table",
+        "category": "view",
+        "visualization_type": "table",
+        "flow_type": "Process",
+        "flow_id": "Flow_abc123",
+        "view_id": "myitems",
     }
     _assert_backrefs_resolve(page)
 
@@ -368,8 +458,12 @@ def test_add_widget_view_table_still_requires_view_id() -> None:
     example shipping null). Building view/table without it must still raise."""
     page = new_page_graph("Sample Page")
     with pytest.raises(ValueError, match="view_id"):
-        add_widget(page, container_id="Container001", widget="view/table",
-                   config={"flow_type": "Process", "flow_id": "Flow_abc123"})
+        add_widget(
+            page,
+            container_id="Container001",
+            widget="view/table",
+            config={"flow_type": "Process", "flow_id": "Flow_abc123"},
+        )
 
 
 def test_add_widget_report_chart_reaches_live_binding_with_filterparam() -> None:
@@ -378,9 +472,15 @@ def test_add_widget_report_chart_reaches_live_binding_with_filterparam() -> None
     trio also mirrors into Component.Data."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="report/chart",
-        config={"flow_type": "Process", "flow_id": "Flow_abc123", "report_id": "Report_r1",
-                "showHeader": False},
+        page,
+        container_id="Container001",
+        widget="report/chart",
+        config={
+            "flow_type": "Process",
+            "flow_id": "Flow_abc123",
+            "report_id": "Report_r1",
+            "showHeader": False,
+        },
     )
     host_fms = {page[fid]["Name"]: page[fid] for fid in page[host]["Container::FieldMapping"]}
     fp_prop = page[host_fms["filterParameters"]["FieldMapping::Property"][0]]
@@ -392,9 +492,13 @@ def test_add_widget_report_chart_reaches_live_binding_with_filterparam() -> None
     assert fm["report_id"] == "Report_r1"
     assert fm["showHeader"] is False
     assert _host_component(page, host)["Data"] == {
-        "manifest_id": "ChartReport", "category": "report", "report_type": "ChartReport",
-        "visualization_type": "chart", "flow_type": "Process",
-        "flow_id": "Flow_abc123", "report_id": "Report_r1",
+        "manifest_id": "ChartReport",
+        "category": "report",
+        "report_type": "ChartReport",
+        "visualization_type": "chart",
+        "flow_type": "Process",
+        "flow_id": "Flow_abc123",
+        "report_id": "Report_r1",
     }
     _assert_backrefs_resolve(page)
 
@@ -404,9 +508,15 @@ def test_add_widget_report_chart_show_header_routes_when_overridden() -> None:
     routed FieldMapping, not a static default read back at itself."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="report/chart",
-        config={"flow_type": "Process", "flow_id": "Flow_abc123", "report_id": "Report_r1",
-                "showHeader": True},
+        page,
+        container_id="Container001",
+        widget="report/chart",
+        config={
+            "flow_type": "Process",
+            "flow_id": "Flow_abc123",
+            "report_id": "Report_r1",
+            "showHeader": True,
+        },
     )
     assert _fm_values(page, host)["showHeader"] is True
 
@@ -417,17 +527,24 @@ def test_add_widget_metrics_binds_stepmetrics_and_mirrors_component_data() -> No
     can only pass if add_widget's config actually got written, not merely left alone."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="metrics",
+        page,
+        container_id="Container001",
+        widget="metrics",
         config={"flow_type": "Form", "flow_id": "Flow_abc123", "metrics_type": "stepmetrics2"},
     )
-    comp = next(v for v in page.values() if isinstance(v, dict) and v.get("Kind") == "Component"
-                and v.get("Container") == host)
+    comp = next(
+        v
+        for v in page.values()
+        if isinstance(v, dict) and v.get("Kind") == "Component" and v.get("Container") == host
+    )
     assert comp["Script"]["web"] == "metrics"
     # "write both" (widget_metrics.json note): the FieldMapping/Property AND the mirrored Data key.
     assert comp["Data"]["flow_id"] == "Flow_abc123"
     assert comp["Data"]["flow_type"] == "Form"
-    fm_index = {page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]]["Value"]
-                for fid in page[host]["Container::FieldMapping"]}
+    fm_index = {
+        page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]]["Value"]
+        for fid in page[host]["Container::FieldMapping"]
+    }
     assert fm_index["metrics_type"] == "stepmetrics2"
     assert fm_index["flow_type"] == "Form"
     assert fm_index["flow_id"] == "Flow_abc123"
@@ -442,22 +559,33 @@ def test_add_widget_masterdetail_binds_flow_view_trio_and_mirrors_component_data
     that silently no-ops cannot make these assertions pass by accident."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="general/masterdetail",
+        page,
+        container_id="Container001",
+        widget="general/masterdetail",
         config={
-            "flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "assigned",
-            "titleField": "fld_title_x", "subTitleField": "fld_subtitle_y", "sortField": "fld_sort_z",
+            "flow_type": "Process",
+            "flow_id": "Flow_abc123",
+            "view_id": "assigned",
+            "titleField": "fld_title_x",
+            "subTitleField": "fld_subtitle_y",
+            "sortField": "fld_sort_z",
         },
     )
-    fm_index = {page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]].get("Value")
-                for fid in page[host]["Container::FieldMapping"]}
+    fm_index = {
+        page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]].get("Value")
+        for fid in page[host]["Container::FieldMapping"]
+    }
     assert fm_index["flow_type"] == "Process"
     assert fm_index["flow_id"] == "Flow_abc123"
     assert fm_index["view_id"] == "assigned"
     assert fm_index["titleField"] == "fld_title_x"
     assert fm_index["subTitleField"] == "fld_subtitle_y"
     assert fm_index["sortField"] == "fld_sort_z"
-    comp = next(v for v in page.values() if isinstance(v, dict) and v.get("Kind") == "Component"
-                and v.get("Container") == host)
+    comp = next(
+        v
+        for v in page.values()
+        if isinstance(v, dict) and v.get("Kind") == "Component" and v.get("Container") == host
+    )
     # widget_general_masterdetail.json's Data mirrors flow_id/view_id/flow_type (NOT the
     # titleField/subTitleField/sortField family -- those live only as FieldMapping/Property).
     assert comp["Data"]["flow_id"] == "Flow_abc123"
@@ -477,14 +605,20 @@ def test_add_widget_repeater_registers_variable_refs_the_known_trap() -> None:
     add_widget actually wrote the caller's config."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="repeater",
+        page,
+        container_id="Container001",
+        widget="repeater",
         config={
-            "flow_type": "Form", "flow_id": "Flow_xyz789", "view_id": "mytasks",
+            "flow_type": "Form",
+            "flow_id": "Flow_xyz789",
+            "view_id": "mytasks",
             "row_fields": ["case_id", "status"],
         },
     )
-    fm_index = {page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]].get("Value")
-                for fid in page[host]["Container::FieldMapping"]}
+    fm_index = {
+        page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]].get("Value")
+        for fid in page[host]["Container::FieldMapping"]
+    }
     assert fm_index["flow_type"] == "Form"
     assert fm_index["flow_id"] == "Flow_xyz789"
     assert fm_index["view_id"] == "mytasks"
@@ -514,21 +648,30 @@ def test_add_widget_repeater_row_fields_reach_selected_fields_both_sites() -> No
     (Process/Flow_Sample01/admin), same non-tautology discipline as the other binding tests."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="repeater",
+        page,
+        container_id="Container001",
+        widget="repeater",
         config={
-            "flow_type": "Form", "flow_id": "Flow_xyz789", "view_id": "mytasks",
+            "flow_type": "Form",
+            "flow_id": "Flow_xyz789",
+            "view_id": "mytasks",
             "row_fields": ["case_id", "status"],
         },
     )
-    fm_index = {page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]].get("Value")
-                for fid in page[host]["Container::FieldMapping"]}
+    fm_index = {
+        page[fid]["Name"]: page[page[fid]["FieldMapping::Property"][0]].get("Value")
+        for fid in page[host]["Container::FieldMapping"]
+    }
     assert fm_index["selectedFields"] == ["case_id", "status"]
     assert fm_index["flow_type"] == "Form"
     assert fm_index["flow_id"] == "Flow_xyz789"
     assert fm_index["view_id"] == "mytasks"
 
-    comp = next(v for v in page.values() if isinstance(v, dict) and v.get("Kind") == "Component"
-                and v.get("Container") == host)
+    comp = next(
+        v
+        for v in page.values()
+        if isinstance(v, dict) and v.get("Kind") == "Component" and v.get("Container") == host
+    )
     assert comp["Data"]["selectedFields"] == ["case_id", "status"]
     _assert_backrefs_resolve(page)
 
@@ -540,7 +683,9 @@ def test_add_widget_repeater_without_row_fields_raises_naming_it() -> None:
     page = new_page_graph("Sample Page")
     with pytest.raises(ValueError) as exc:
         add_widget(
-            page, container_id="Container001", widget="repeater",
+            page,
+            container_id="Container001",
+            widget="repeater",
             config={"flow_type": "Process", "flow_id": "Flow_Sample01", "view_id": "admin"},
         )
     assert "row_fields" in str(exc.value)
@@ -549,14 +694,19 @@ def test_add_widget_repeater_without_row_fields_raises_naming_it() -> None:
 def test_add_widget_row_fields_only_valid_for_repeater() -> None:
     page = new_page_graph("Sample Page")
     with pytest.raises(ValueError):
-        add_widget(page, container_id="Container001", widget="general/label",
-                   config={"title": "x", "row_fields": ["case_id"]})
+        add_widget(
+            page,
+            container_id="Container001",
+            widget="general/label",
+            config={"title": "x", "row_fields": ["case_id"]},
+        )
 
 
 # ---------------------------------------------------------------------------------------------
 # add_widget: required config keys per binding class (config={} must raise, never silently ship a
 # placeholder flow/report id -- one widget per WIDGET_REQUIRED_CONFIG class, naming what's missing)
 # ---------------------------------------------------------------------------------------------
+
 
 def test_add_widget_view_table_missing_config_raises_naming_keys() -> None:
     page = new_page_graph("Sample Page")
@@ -577,7 +727,9 @@ def test_add_widget_report_chart_missing_config_raises_naming_keys() -> None:
     assert "flow_type" in msg and "flow_id" in msg and "report_id" in msg
 
 
-def test_add_widget_leak_error_names_config_keys_not_the_internal_external_kwarg(monkeypatch) -> None:
+def test_add_widget_leak_error_names_config_keys_not_the_internal_external_kwarg(
+    monkeypatch,
+) -> None:
     """Every widget's Sample-shaped FieldMapping default is fully covered by WIDGET_REQUIRED_CONFIG
     today, so this path is not reachable through a normal call -- it is a defense-in-depth guard for
     a FUTURE maintenance slip (a new widget, or a required-config entry that misses one of a shape's
@@ -590,7 +742,9 @@ def test_add_widget_leak_error_names_config_keys_not_the_internal_external_kwarg
     page = new_page_graph("Sample Page")
     with pytest.raises(ValueError) as exc:
         add_widget(
-            page, container_id="Container001", widget="report/chart",
+            page,
+            container_id="Container001",
+            widget="report/chart",
             config={"report_id": "Report_r1"},
         )
     msg = str(exc.value)
@@ -647,19 +801,36 @@ def test_widget_required_config_covers_exactly_the_15_binding_widgets() -> None:
 # add_widget: name= disambiguates two same-kind widgets (set_styles no longer collides on them)
 # ---------------------------------------------------------------------------------------------
 
+
 def test_add_widget_name_sets_container_and_component_name() -> None:
     page = new_page_graph("Sample Page")
-    page, host_a = add_widget(page, container_id="Container001", widget="general/label",
-                              config={"title": "a"}, name="Label A")
-    page, host_b = add_widget(page, container_id="Container001", widget="general/label",
-                              config={"title": "b"}, name="Label B")
+    page, host_a = add_widget(
+        page,
+        container_id="Container001",
+        widget="general/label",
+        config={"title": "a"},
+        name="Label A",
+    )
+    page, host_b = add_widget(
+        page,
+        container_id="Container001",
+        widget="general/label",
+        config={"title": "b"},
+        name="Label B",
+    )
     assert page[host_a]["Name"] == "Label A"
     assert page[host_b]["Name"] == "Label B"
 
-    comp_a = next(v for v in page.values() if isinstance(v, dict) and v.get("Kind") == "Component"
-                  and v.get("Container") == host_a)
-    comp_b = next(v for v in page.values() if isinstance(v, dict) and v.get("Kind") == "Component"
-                  and v.get("Container") == host_b)
+    comp_a = next(
+        v
+        for v in page.values()
+        if isinstance(v, dict) and v.get("Kind") == "Component" and v.get("Container") == host_a
+    )
+    comp_b = next(
+        v
+        for v in page.values()
+        if isinstance(v, dict) and v.get("Kind") == "Component" and v.get("Container") == host_b
+    )
     assert comp_a["Name"] == "Label A"
     assert comp_b["Name"] == "Label B"
 
@@ -681,15 +852,21 @@ def test_add_widget_unknown_widget_raises_listing_known_widgets() -> None:
 def test_add_widget_bad_config_key_raises_listing_valid_keys() -> None:
     page = new_page_graph("Sample Page")
     with pytest.raises(ValueError) as exc:
-        add_widget(page, container_id="Container001", widget="general/label",
-                   config={"not_a_real_slot": "x"})
+        add_widget(
+            page,
+            container_id="Container001",
+            widget="general/label",
+            config={"not_a_real_slot": "x"},
+        )
     assert "title" in str(exc.value)
 
 
 def test_add_widget_unknown_container_raises() -> None:
     page = new_page_graph("Sample Page")
     with pytest.raises(ValueError):
-        add_widget(page, container_id="Container_nope", widget="general/label", config={"title": "x"})
+        add_widget(
+            page, container_id="Container_nope", widget="general/label", config={"title": "x"}
+        )
 
 
 def test_add_widget_registers_every_of_the_28_slugs_as_loadable() -> None:
@@ -705,15 +882,19 @@ def test_add_widget_registers_every_of_the_28_slugs_as_loadable() -> None:
 # set_styles
 # ---------------------------------------------------------------------------------------------
 
+
 def test_set_styles_hex_and_ref_forms_both_persist() -> None:
     page = new_page_graph("Sample Page")
     page, _ = add_container(page, parent_id="Container001", name="Banner")
     page, _ = add_container(page, parent_id="Container001", name="Accent")
 
-    page = set_styles(page, rules={
-        "Banner": {"Container.Background": {"value": "#112233"}, "Container.Row.Gap": "8px"},
-        "Accent": {"Container.Background": {"ref": "Color.Primary.100"}},
-    })
+    page = set_styles(
+        page,
+        rules={
+            "Banner": {"Container.Background": {"value": "#112233"}, "Container.Row.Gap": "8px"},
+            "Accent": {"Container.Background": {"ref": "Color.Primary.100"}},
+        },
+    )
 
     by_name = {v["Name"]: k for k, v in _kind(page, "Container").items() if v.get("Name")}
     banner_style = page[page[by_name["Banner"]]["Container::Style"][0]]["Value"]
@@ -745,16 +926,29 @@ def test_set_styles_by_id_survives_duplicate_names() -> None:
     styleable by addressing each Container by its unique id -- the id add_widget already returns --
     with no rename and no collision. The name path still raises on that same ambiguity (test below)."""
     page = new_page_graph("Sample Page")
-    page, host_a = add_widget(page, container_id="Container001", widget="general/label", config={"title": "a"})
-    page, host_b = add_widget(page, container_id="Container001", widget="general/label", config={"title": "b"})
-    assert page[host_a]["Name"] == page[host_b]["Name"]  # both left at the shape's shared default Name
+    page, host_a = add_widget(
+        page, container_id="Container001", widget="general/label", config={"title": "a"}
+    )
+    page, host_b = add_widget(
+        page, container_id="Container001", widget="general/label", config={"title": "b"}
+    )
+    assert (
+        page[host_a]["Name"] == page[host_b]["Name"]
+    )  # both left at the shape's shared default Name
 
-    page = set_styles(page, rules={
-        host_a: {"Container.Background": {"value": "#112233"}},
-        host_b: {"Container.Background": {"ref": "Color.Primary.100"}},
-    })
-    assert page[page[host_a]["Container::Style"][0]]["Value"]["Container.Background"] == {"value": "#112233"}
-    assert page[page[host_b]["Container::Style"][0]]["Value"]["Container.Background"] == {"ref": "Color.Primary.100"}
+    page = set_styles(
+        page,
+        rules={
+            host_a: {"Container.Background": {"value": "#112233"}},
+            host_b: {"Container.Background": {"ref": "Color.Primary.100"}},
+        },
+    )
+    assert page[page[host_a]["Container::Style"][0]]["Value"]["Container.Background"] == {
+        "value": "#112233"
+    }
+    assert page[page[host_b]["Container::Style"][0]]["Value"]["Container.Background"] == {
+        "ref": "Color.Primary.100"
+    }
     _assert_backrefs_resolve(page)
 
 
@@ -769,8 +963,12 @@ def test_set_styles_ambiguous_name_raises_listing_matches() -> None:
     raise rather than silently style only the first match (name= on add_widget is the escape
     hatch, see test_add_widget_name_sets_container_and_component_name)."""
     page = new_page_graph("Sample Page")
-    page, host_a = add_widget(page, container_id="Container001", widget="general/label", config={"title": "a"})
-    page, host_b = add_widget(page, container_id="Container001", widget="general/label", config={"title": "b"})
+    page, host_a = add_widget(
+        page, container_id="Container001", widget="general/label", config={"title": "a"}
+    )
+    page, host_b = add_widget(
+        page, container_id="Container001", widget="general/label", config={"title": "b"}
+    )
     with pytest.raises(ValueError) as exc:
         set_styles(page, rules={"Label": {"Container.Background": {"value": "#112233"}}})
     msg = str(exc.value)
@@ -780,6 +978,7 @@ def test_set_styles_ambiguous_name_raises_listing_matches() -> None:
 # ---------------------------------------------------------------------------------------------
 # add_popup
 # ---------------------------------------------------------------------------------------------
+
 
 def test_add_popup_tree_complete() -> None:
     page = new_page_graph("Sample Page")
@@ -809,8 +1008,12 @@ def test_add_popup_content_can_be_added_via_add_widget() -> None:
     page = new_page_graph("Sample Page")
     page, popup_id = add_popup(page, name="Detail Popup")
     root_container_id = page[popup_id]["Popup::Container"][0]
-    page, host = add_widget(page, container_id=root_container_id, widget="general/label",
-                            config={"title": "Inside the popup"})
+    page, host = add_widget(
+        page,
+        container_id=root_container_id,
+        widget="general/label",
+        config={"title": "Inside the popup"},
+    )
     assert host in page[root_container_id]["Container::Container"]
     _assert_backrefs_resolve(page)
 
@@ -819,11 +1022,13 @@ def test_add_popup_content_can_be_added_via_add_widget() -> None:
 # add_event_mapping (#22: without this, a built popup/button has no way to ever open/fire)
 # ---------------------------------------------------------------------------------------------
 
+
 def test_add_event_mapping_open_popup_tree_complete() -> None:
     page = new_page_graph("Sample Page")
     page, popup_id = add_popup(page, name="Detail Popup")
-    page, button_host = add_widget(page, container_id="Container001", widget="general/button",
-                                   config={})
+    page, button_host = add_widget(
+        page, container_id="Container001", widget="general/button", config={}
+    )
 
     page, em_id = add_event_mapping(
         page, container_id=button_host, type="OpenPopup", popup_id=popup_id
@@ -881,7 +1086,7 @@ def test_add_event_mapping_custom_name_overrides_default() -> None:
 def test_add_event_mapping_unknown_type_raises() -> None:
     page = new_page_graph("Sample Page")
     with pytest.raises(ValueError, match="unknown event mapping type"):
-        add_event_mapping(page, container_id="Container001", type="OnHover")  # type: ignore[arg-type]
+        add_event_mapping(page, container_id="Container001", type="OnHover")  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
 
 def test_add_event_mapping_open_popup_requires_popup_id() -> None:
@@ -900,16 +1105,18 @@ def test_add_event_mapping_script_on_open_popup_raises() -> None:
     page = new_page_graph("Sample Page")
     page, popup_id = add_popup(page, name="Detail Popup")
     with pytest.raises(ValueError, match="only valid for type='JSAction'"):
-        add_event_mapping(page, container_id="Container001", type="OpenPopup",
-                          popup_id=popup_id, script="void 0;")
+        add_event_mapping(
+            page, container_id="Container001", type="OpenPopup", popup_id=popup_id, script="void 0;"
+        )
 
 
 def test_add_event_mapping_popup_id_on_js_action_raises() -> None:
     page = new_page_graph("Sample Page")
     page, popup_id = add_popup(page, name="Detail Popup")
     with pytest.raises(ValueError, match="only valid for type='OpenPopup'"):
-        add_event_mapping(page, container_id="Container001", type="JSAction",
-                          script="void 0;", popup_id=popup_id)
+        add_event_mapping(
+            page, container_id="Container001", type="JSAction", script="void 0;", popup_id=popup_id
+        )
 
 
 def test_add_event_mapping_unknown_container_raises() -> None:
@@ -921,8 +1128,9 @@ def test_add_event_mapping_unknown_container_raises() -> None:
 def test_add_event_mapping_unknown_popup_raises() -> None:
     page = new_page_graph("Sample Page")
     with pytest.raises(ValueError, match="no Popup node"):
-        add_event_mapping(page, container_id="Container001", type="OpenPopup",
-                          popup_id="Popup_nope")
+        add_event_mapping(
+            page, container_id="Container001", type="OpenPopup", popup_id="Popup_nope"
+        )
 
 
 def test_add_event_mapping_does_not_mutate_input() -> None:
@@ -939,17 +1147,21 @@ def test_add_event_mapping_does_not_mutate_input() -> None:
 # fix a live one left unbound, e.g. a view/form submit widget with no flow_id wired).
 # ---------------------------------------------------------------------------------------------
 
+
 def test_bind_widget_sets_flow_id_on_a_form_built_unbound() -> None:
     """Simulates the real live gap: a view/form widget whose flow_id Property.Value was left
     unset (as if the binding never landed) renders bound to nothing. bind_widget repairs it in
     place, by container id."""
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="view/form",
+        page,
+        container_id="Container001",
+        widget="view/form",
         config={"flow_type": "Process", "flow_id": "Flow_placeholder"},
     )
-    flow_id_fid = next(fid for fid in page[host]["Container::FieldMapping"]
-                       if page[fid]["Name"] == "flow_id")
+    flow_id_fid = next(
+        fid for fid in page[host]["Container::FieldMapping"] if page[fid]["Name"] == "flow_id"
+    )
     prop_id = page[flow_id_fid]["FieldMapping::Property"][0]
     del page[prop_id]["Value"]  # simulate: never actually wired
 
@@ -961,7 +1173,10 @@ def test_bind_widget_sets_flow_id_on_a_form_built_unbound() -> None:
 def test_bind_widget_addresses_host_by_name() -> None:
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="view/form", name="Submit Form",
+        page,
+        container_id="Container001",
+        widget="view/form",
+        name="Submit Form",
         config={"flow_type": "Process", "flow_id": "Flow_abc123"},
     )
     page = bind_widget(page, host="Submit Form", config={"flow_id": "Flow_rebind99"})
@@ -971,7 +1186,9 @@ def test_bind_widget_addresses_host_by_name() -> None:
 def test_bind_widget_mirrors_into_component_data_when_key_present() -> None:
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="view/table",
+        page,
+        container_id="Container001",
+        widget="view/table",
         config={"flow_type": "Process", "flow_id": "Flow_abc123", "view_id": "myitems"},
     )
     page = bind_widget(page, host=host, config={"flow_id": "Flow_rebind99"})
@@ -982,7 +1199,9 @@ def test_bind_widget_mirrors_into_component_data_when_key_present() -> None:
 def test_bind_widget_unknown_key_raises_listing_valid_keys() -> None:
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="view/form",
+        page,
+        container_id="Container001",
+        widget="view/form",
         config={"flow_type": "Process", "flow_id": "Flow_abc123"},
     )
     with pytest.raises(ValueError, match="no slot"):
@@ -998,7 +1217,9 @@ def test_bind_widget_unknown_host_raises() -> None:
 def test_bind_widget_does_not_mutate_input() -> None:
     page = new_page_graph("Sample Page")
     page, host = add_widget(
-        page, container_id="Container001", widget="view/form",
+        page,
+        container_id="Container001",
+        widget="view/form",
         config={"flow_type": "Process", "flow_id": "Flow_abc123"},
     )
     before = _fm_values(page, host)
@@ -1012,6 +1233,7 @@ def test_bind_widget_does_not_mutate_input() -> None:
 # to another node (the popup this click should open), not free-form content, so a caller who
 # forgets to pass it via `external` must get a loud raise, never a silently wrong Popup id.
 # ---------------------------------------------------------------------------------------------
+
 
 def test_instantiate_leak_scan_catches_a_placeholder_hiding_in_value() -> None:
     shape = load_shape("event_mapping")
@@ -1039,6 +1261,7 @@ def test_instantiate_leak_scan_passes_once_the_value_ref_is_covered_by_external(
 # load_shape / page_summary
 # ---------------------------------------------------------------------------------------------
 
+
 def test_load_shape_unknown_name_raises_valueerror_not_file_not_found() -> None:
     with pytest.raises(ValueError) as exc:
         load_shape("does_not_exist")
@@ -1047,8 +1270,9 @@ def test_load_shape_unknown_name_raises_valueerror_not_file_not_found() -> None:
 
 def test_page_summary_counts_and_lists_widgets() -> None:
     page = new_page_graph("Sample Page")
-    page, _ = add_widget(page, container_id="Container001", widget="general/label",
-                         config={"title": "x"})
+    page, _ = add_widget(
+        page, container_id="Container001", widget="general/label", config={"title": "x"}
+    )
     page, _ = add_widget(page, container_id="Container001", widget="general/button", config={})
 
     summary = page_summary(page)
@@ -1061,16 +1285,30 @@ def test_page_summary_counts_and_lists_widgets() -> None:
 # kitchen sink: compose everything, sweep for dangling back-refs at the end
 # ---------------------------------------------------------------------------------------------
 
+
 def test_kitchen_sink_backrefs_resolve_after_a_full_composition() -> None:
     page = new_page_graph("Sample Page")
-    page, banner = add_container(page, parent_id="Container001", name="Banner",
-                                 layout={"Container.Row.Gap": "16px"})
+    page, banner = add_container(
+        page, parent_id="Container001", name="Banner", layout={"Container.Row.Gap": "16px"}
+    )
     page, _ = add_widget(page, container_id=banner, widget="general/label", config={"title": "Hi"})
-    page, _ = add_widget(page, container_id="Container001", widget="view/table",
-                         config={"flow_type": "Form", "flow_id": "Flow_Sample01", "view_id": "myitems"})
-    page, _ = add_widget(page, container_id="Container001", widget="repeater",
-                         config={"flow_type": "Process", "flow_id": "Flow_Sample01",
-                                 "view_id": "admin", "row_fields": ["case_id"]})
+    page, _ = add_widget(
+        page,
+        container_id="Container001",
+        widget="view/table",
+        config={"flow_type": "Form", "flow_id": "Flow_Sample01", "view_id": "myitems"},
+    )
+    page, _ = add_widget(
+        page,
+        container_id="Container001",
+        widget="repeater",
+        config={
+            "flow_type": "Process",
+            "flow_id": "Flow_Sample01",
+            "view_id": "admin",
+            "row_fields": ["case_id"],
+        },
+    )
     page, popup_id = add_popup(page, name="Detail Popup")
     root_container_id = page[popup_id]["Popup::Container"][0]
     page, _ = add_widget(page, container_id=root_container_id, widget="general/button", config={})
@@ -1084,13 +1322,15 @@ def test_kitchen_sink_backrefs_resolve_after_a_full_composition() -> None:
 def test_widget_required_config_covers_every_sample_shaped_binding_default() -> None:
     """Durable guard: any Sample-shaped FieldMapping default in a widget shape MUST be a
     required config key, or a new shape silently reopens the placeholder-binding hole."""
-    from kfforge.pages import _SAMPLE_LEAK_RE, _raw_fm_values
+    from app.domain.pages import _SAMPLE_LEAK_RE, _raw_fm_values
 
     for slug in WIDGET_SLUGS:
         shape = load_shape(WIDGET_SLUGS[slug])
-        sample_keys = {k for k, v in _raw_fm_values(shape["template"]).items()
-                       if _SAMPLE_LEAK_RE.match(v)}
+        sample_keys = {
+            k for k, v in _raw_fm_values(shape["template"]).items() if _SAMPLE_LEAK_RE.match(v)
+        }
         required = set(WIDGET_REQUIRED_CONFIG.get(slug, ()))
         assert sample_keys <= required, (
             f"{slug}: Sample-shaped defaults {sorted(sample_keys - required)} "
-            f"not covered by WIDGET_REQUIRED_CONFIG")
+            f"not covered by WIDGET_REQUIRED_CONFIG"
+        )

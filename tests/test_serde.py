@@ -1,4 +1,4 @@
-"""Spec for kfforge.intake.serde -- the exact dict <-> AppSpec round-trip a stateless MCP tool
+"""Spec for app.application.intake.serde -- the exact dict <-> AppSpec round-trip a stateless MCP tool
 surface needs (the server holds no session state, so a spec must survive leaving Python entirely
 and coming back as plain JSON on the very next call).
 
@@ -7,6 +7,7 @@ fixtures (imported directly, the same pattern tests/test_p2_server.py already us
 `FakeClient` out of tests/test_client.py) rather than re-building an 11-dimension fixture a second
 time. No real-app vocabulary anywhere in this file (CLAUDE.md BLINDNESS).
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -18,9 +19,9 @@ from test_intake import (  # tests/ is on sys.path, see conftest.py
     _linear_spec,
 )
 
-from kfforge.intake.schema import AppSpec, DataModel, EventTrigger, FieldReq, ProblemGoal
-from kfforge.intake.serde import spec_from_dict, spec_to_dict, to_wire
-from kfforge.types import FieldType, Visibility
+from app.application.intake.schema import AppSpec, DataModel, EventTrigger, FieldReq, ProblemGoal
+from app.application.intake.serde import spec_from_dict, spec_to_dict, to_wire
+from app.domain.types import FieldType, Visibility
 
 # ---- round trip: the load-bearing proof ---------------------------------------------------
 
@@ -61,10 +62,13 @@ def test_a_route_option_carrying_a_multi_stage_sequence_round_trips() -> None:
     and the compile pipeline both lean on."""
     base = _full_spec()
     pt = base.routing.points[0]
-    seq_pt = dataclasses.replace(pt, route_per_option=(
-        ("Yes", ("Repair", "Quality Check")),  # a two-stage branch
-        ("No", ("Return to Customer",)),        # a one-element sequence == the old single-stage route
-    ))
+    seq_pt = dataclasses.replace(
+        pt,
+        route_per_option=(
+            ("Yes", ("Repair", "Quality Check")),  # a two-stage branch
+            ("No", ("Return to Customer",)),  # a one-element sequence == the old single-stage route
+        ),
+    )
     spec = dataclasses.replace(base, routing=dataclasses.replace(base.routing, points=(seq_pt,)))
     got = spec_from_dict(spec_to_dict(spec))
     assert got == spec
@@ -92,8 +96,10 @@ def test_enums_survive_the_round_trip_as_real_enum_members() -> None:
         spec,
         data_model=dataclasses.replace(
             spec.data_model,
-            computed=tuple(dataclasses.replace(c, trigger=EventTrigger.ON_SELECT)
-                           for c in spec.data_model.computed),
+            computed=tuple(
+                dataclasses.replace(c, trigger=EventTrigger.ON_SELECT)
+                for c in spec.data_model.computed
+            ),
         ),
     )
     got2 = spec_from_dict(spec_to_dict(explicit))
@@ -232,7 +238,7 @@ def test_wrong_shape_for_a_tuple_field_raises() -> None:
 
 def test_top_level_input_must_be_an_object() -> None:
     with pytest.raises(ValueError, match="expected an object"):
-        spec_from_dict(["not", "a", "dict"])  # type: ignore[arg-type]
+        spec_from_dict(["not", "a", "dict"])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
 
 # ---- a spec built with a raw string standing in for an enum still serializes cleanly --------
@@ -242,7 +248,7 @@ def test_top_level_input_must_be_an_object() -> None:
 
 
 def test_to_wire_handles_a_raw_string_standing_in_for_an_enum() -> None:
-    bad_field = FieldReq("Bad", "Text", True, "Stage1")  # type: ignore[arg-type]
+    bad_field = FieldReq("Bad", "Text", True, "Stage1")  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     dm = DataModel(fields=(bad_field,), tables=(), computed=())
     wire = to_wire(dm)
     assert wire["fields"][0]["type"] == "Text"  # a plain str stays a plain str, no crash
@@ -252,7 +258,7 @@ def test_to_wire_handles_a_raw_string_standing_in_for_an_enum() -> None:
 
 
 def test_to_wire_serializes_an_arbitrary_dataclass_generically() -> None:
-    """kfforge.server relies on `to_wire` for BuildPlan/Op/ConfirmationRequest/Question too --
+    """app.infrastructure.mcp.server relies on `to_wire` for BuildPlan/Op/ConfirmationRequest/Question too --
     proven here with an ad hoc dataclass so this test does not depend on those modules at all."""
 
     @dataclasses.dataclass(frozen=True)
@@ -274,7 +280,8 @@ def test_to_wire_serializes_an_arbitrary_dataclass_generically() -> None:
 
 def test_to_wire_coerces_dict_keys_to_str_and_recurses_into_dict_values() -> None:
     assert to_wire({"a": (1, 2), "b": {"nested": ("x",)}}) == {
-        "a": [1, 2], "b": {"nested": ["x"]},
+        "a": [1, 2],
+        "b": {"nested": ["x"]},
     }
 
 
@@ -290,7 +297,7 @@ def test_minimal_spec_with_every_optional_defaulted_round_trips() -> None:
     """Every field that carries a dataclass default (`confirmed_none`, `max_rounds`, `list_name`,
     `section`, `options`, `sections`, `sequence`, `approved`, ...) left at its default -- proves
     the round trip does not depend on a caller always supplying every optional explicitly."""
-    from kfforge.intake.schema import (
+    from app.application.intake.schema import (
         DataModel,
         MasterData,
         Personas,
@@ -305,8 +312,13 @@ def test_minimal_spec_with_every_optional_defaulted_round_trips() -> None:
 
     spec = AppSpec(
         app_name="Minimal",
-        problem_goal=ProblemGoal(pain="p", goal="g", done_definition="d",
-                                 terminal_states=("Done",), result_values=("Ok",)),
+        problem_goal=ProblemGoal(
+            pain="p",
+            goal="g",
+            done_definition="d",
+            terminal_states=("Done",),
+            result_values=("Ok",),
+        ),
         roles=Roles(roles=()),
         stages=Stages(stages=()),
         routing=Routing(points=()),
@@ -328,13 +340,13 @@ def test_field_types_cache_returns_a_read_only_mapping() -> None:
     poison every later one. Pinned because a plain-dict regression is otherwise invisible."""
     import types as _types
 
-    from kfforge.intake.schema import AppSpec
-    from kfforge.intake.serde import _field_types
+    from app.application.intake.schema import AppSpec
+    from app.application.intake.serde import _field_types
 
     got = _field_types(AppSpec)
     assert isinstance(got, _types.MappingProxyType)
     with pytest.raises(TypeError):
-        got["injected"] = str            # type: ignore[index]
+        got["injected"] = str  # type: ignore[index]
 
 
 def test_page_behavior_popup_and_open_popup_action_round_trips() -> None:
@@ -342,7 +354,7 @@ def test_page_behavior_popup_and_open_popup_action_round_trips() -> None:
     unchanged. Behavior is the schema half of ADR-0005; serde is reflection-driven, so this must
     pass with ZERO serde code change (the two-arm OnClickAction is a discriminant + optional
     payloads, never an `A | B` union serde can't reflect)."""
-    from kfforge.intake.schema import (
+    from app.application.intake.schema import (
         ClickActionKind,
         OnClickAction,
         PageIntent,
@@ -358,12 +370,15 @@ def test_page_behavior_popup_and_open_popup_action_round_trips() -> None:
         popups=(PopupIntent(name="Detail", widgets=(WidgetIntent("general/label"),)),),
         on_click=(
             OnClickAction("Show detail", ClickActionKind.OPEN_POPUP, target_popup="Detail"),
-            OnClickAction("Notify", ClickActionKind.JS_ACTION, script="await kf.client.showInfo('x');"),
+            OnClickAction(
+                "Notify", ClickActionKind.JS_ACTION, script="await kf.client.showInfo('x');"
+            ),
         ),
     )
-    view = PersonaView(role=base.roles.roles[0].name, pages=(page,), kpis=(), actions=("Show detail",))
-    spec = dataclasses.replace(
-        base, personas=dataclasses.replace(base.personas, views=(view,)))
+    view = PersonaView(
+        role=base.roles.roles[0].name, pages=(page,), kpis=(), actions=("Show detail",)
+    )
+    spec = dataclasses.replace(base, personas=dataclasses.replace(base.personas, views=(view,)))
 
     got = spec_from_dict(spec_to_dict(spec))
     assert got == spec
@@ -380,34 +395,54 @@ def test_page_design_tree_round_trips() -> None:
     Serde is reflection-driven, so a recursive dataclass (`children: tuple[DesignNode, ...]`) plus a
     `WidgetIntent | None` union round-trips with ZERO serde code change — this proves it, and that
     the `token:`-prefixed style-string convention is preserved byte-for-byte."""
-    from kfforge.intake.schema import DesignNode, PageIntent, PersonaView, WidgetIntent
+    from app.application.intake.schema import DesignNode, PageIntent, PersonaView, WidgetIntent
 
     base = _full_spec()
     design = DesignNode(
-        kind="container", name="page shell",
-        style=(("Container.Background", "#FCFAF2"), ("Container.Row.Gap", "16px"),
-               ("Container.Flex.Direction", "column")),
+        kind="container",
+        name="page shell",
+        style=(
+            ("Container.Background", "#FCFAF2"),
+            ("Container.Row.Gap", "16px"),
+            ("Container.Flex.Direction", "column"),
+        ),
         children=(
             DesignNode(
-                kind="container", name="hero",
+                kind="container",
+                name="hero",
                 style=(("Container.Background", "#2E6B3B"), ("Container.Padding.Top", "32px")),
                 children=(
-                    DesignNode(kind="widget", name="hero title",
-                               style=(("Label.Color", "token:Color.White"),
-                                      ("Label.Font.Weight", "token:Font.Weight.SemiBold")),
-                               widget=WidgetIntent("general/label",
-                                                   config=(("title", "Submit your case"),))),
-                )),
+                    DesignNode(
+                        kind="widget",
+                        name="hero title",
+                        style=(
+                            ("Label.Color", "token:Color.White"),
+                            ("Label.Font.Weight", "token:Font.Weight.SemiBold"),
+                        ),
+                        widget=WidgetIntent(
+                            "general/label", config=(("title", "Submit your case"),)
+                        ),
+                    ),
+                ),
+            ),
             DesignNode(
-                kind="container", name="card",
-                style=(("Container.Background", "#FFFFFF"),
-                       ("Container.Border.Top.Left.Radius", "14px")),
+                kind="container",
+                name="card",
+                style=(
+                    ("Container.Background", "#FFFFFF"),
+                    ("Container.Border.Top.Left.Radius", "14px"),
+                ),
                 children=(
-                    DesignNode(kind="widget", name="form",
-                               widget=WidgetIntent("view/form",
-                                                   config=(("flow_type", "Process"),
-                                                           ("flow_id", "RepairJobs")))),
-                )),
+                    DesignNode(
+                        kind="widget",
+                        name="form",
+                        widget=WidgetIntent(
+                            "view/form",
+                            config=(("flow_type", "Process"), ("flow_id", "RepairJobs")),
+                        ),
+                    ),
+                ),
+            ),
         ),
     )
     page = PageIntent(name="Submit", widgets=(), design=design)
@@ -419,7 +454,9 @@ def test_page_design_tree_round_trips() -> None:
     rt_design = got.personas.views[0].pages[0].design
     assert rt_design is not None
     assert rt_design.children[0].children[0].style[0] == ("Label.Color", "token:Color.White")
-    assert rt_design.children[1].children[0].widget.slug == "view/form"
+    rt_widget = rt_design.children[1].children[0].widget
+    assert rt_widget is not None
+    assert rt_widget.slug == "view/form"
     # a design-less page still round-trips with design=None (backward compatibility)
     assert _full_spec().personas.views[0].pages[0].design is None
 
@@ -428,8 +465,8 @@ def test_page_behavior_spec_compiles_and_is_now_governed() -> None:
     """#39 gave the vocabulary; #40 T2 governs it — a spec carrying popups + on-click wiring now
     compiles the behavior INTO the build_page op (no longer ignored), provided the wiring is legal
     (the on-click action is one the owning role declares, its OpenPopup targets a real popup)."""
-    from kfforge.intake.compile import compile_spec
-    from kfforge.intake.schema import (
+    from app.application.intake.compile import compile_spec
+    from app.application.intake.schema import (
         ClickActionKind,
         OnClickAction,
         PopupIntent,
@@ -441,19 +478,22 @@ def test_page_behavior_spec_compiles_and_is_now_governed() -> None:
     page = dataclasses.replace(
         v0.pages[0],
         popups=(PopupIntent(name="Detail", widgets=(WidgetIntent("general/label"),)),),
-        on_click=(OnClickAction("reassign job", ClickActionKind.OPEN_POPUP, target_popup="Detail"),),
+        on_click=(
+            OnClickAction("reassign job", ClickActionKind.OPEN_POPUP, target_popup="Detail"),
+        ),
     )
     view = dataclasses.replace(v0, pages=(page,) + v0.pages[1:])
     spec = dataclasses.replace(
-        base, personas=dataclasses.replace(base.personas, views=(view,) + base.personas.views[1:]))
+        base, personas=dataclasses.replace(base.personas, views=(view,) + base.personas.views[1:])
+    )
     plan = compile_spec(spec)
-    build = next(op for op in plan.ops
-                 if op.kind == "build_page" and op.args["name"] == page.name)
-    assert build.args["popups"] == ({"name": "Detail",
-                                     "widgets": ({"slug": "general/label", "config": {},
-                                                  "row_fields": ()},)},)
-    assert build.args["on_click"] == ({"action": "reassign job", "kind": "OpenPopup",
-                                       "target_popup": "Detail", "script": None},)
+    build = next(op for op in plan.ops if op.kind == "build_page" and op.args["name"] == page.name)
+    assert build.args["popups"] == (
+        {"name": "Detail", "widgets": ({"slug": "general/label", "config": {}, "row_fields": ()},)},
+    )
+    assert build.args["on_click"] == (
+        {"action": "reassign job", "kind": "OpenPopup", "target_popup": "Detail", "script": None},
+    )
 
 
 def test_visibility_entry_role_claim_round_trips() -> None:
@@ -462,7 +502,8 @@ def test_visibility_entry_role_claim_round_trips() -> None:
     vm = full.visibility
     claimed = dataclasses.replace(vm.entries[0], role="Finance")
     spec = dataclasses.replace(
-        full, visibility=dataclasses.replace(vm, entries=(claimed,) + vm.entries[1:]))
+        full, visibility=dataclasses.replace(vm, entries=(claimed,) + vm.entries[1:])
+    )
     got = spec_from_dict(spec_to_dict(spec))
     assert got == spec
     assert got.visibility.entries[0].role == "Finance"

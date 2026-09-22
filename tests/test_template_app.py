@@ -6,13 +6,14 @@ Order under test is the proven build order (CLAUDE.md > Build order): create app
 create process flow -> members FIRST -> write transplanted graph (assignees ride in it) ->
 publish process -> publish app -> doctor read-back -> URL.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 from test_client import FakeClient
 
-from kfforge.client import Err, create_template_app
+from app.infrastructure.kissflow.client import Err, create_template_app
 
 APP_NAME = "Sample Template App"
 
@@ -36,7 +37,7 @@ class _TemplateAppClient(FakeClient):
         self.calls: list[str] = []
         self.create_application_err: Err | None = None
         self.put_draft_err: Err | None = None
-        self.drop_put: bool = False          # PUT 200s but persists nothing (silent-discard trap)
+        self.drop_put: bool = False  # PUT 200s but persists nothing (silent-discard trap)
         self.drop_member_batch: bool = False  # POST 200s but the roster read-back stays empty
         self.app_draft_err: Err | None = None
         self.detail_status: str = "Live"
@@ -51,6 +52,7 @@ class _TemplateAppClient(FakeClient):
 
     def scoped_to_app(self, app_id: str):  # type: ignore[override]
         from dataclasses import replace
+
         self.calls.append(f"scoped_to_app:{app_id}")
         self._cfg = replace(self._cfg, app_id=app_id)
         return self
@@ -140,10 +142,11 @@ def test_role_is_scoped_to_the_created_app_not_the_session_default() -> None:
 
 
 def test_scoped_to_app_mints_a_new_client_with_the_same_identity() -> None:
-    from kfforge.client import KfClient, KfConfig
+    from app.infrastructure.kissflow.client import KfClient, KfConfig
 
-    cfg = KfConfig(key_id="k", key_secret="s", account="A",
-                   domain="dev-x.example.com", app_id="App")
+    cfg = KfConfig(
+        key_id="k", key_secret="s", account="A", domain="dev-x.example.com", app_id="App"
+    )
     assert isinstance(cfg, KfConfig)
     c = KfClient(cfg)
     scoped = c.scoped_to_app("Other")
@@ -169,7 +172,8 @@ def test_transplanted_graph_lands_with_assignee_on_the_created_role() -> None:
     got = _run(c)
     assert not isinstance(got, Err)
     resources = [
-        v for v in c.draft.values()
+        v
+        for v in c.draft.values()
         if isinstance(v, dict) and v.get("Kind") == "Resource" and v.get("ValueType") == "AppRole"
     ]
     assert resources, "the transplanted graph must carry the workflow's Resource assignee node"
@@ -260,10 +264,9 @@ def test_app_publish_readback_failure_cleans_up() -> None:
 
 
 def test_doctor_err_fails_the_run_and_cleans_up(monkeypatch) -> None:
-    import kfforge.client as kfclient
+    import app.infrastructure.kissflow.client as kfclient
 
-    monkeypatch.setattr(kfclient, "run_doctor",
-                        lambda *a, **k: Err("http", "doctor read failed"))
+    monkeypatch.setattr(kfclient, "run_doctor", lambda *a, **k: Err("http", "doctor read failed"))
     c = _TemplateAppClient()
     got = _run(c)
     assert isinstance(got, Err)

@@ -11,12 +11,13 @@ a fully synthetic two-split flow with no target-domain names, so the repo Blindn
 green. Imported by bare module name: pytest's prepend import mode puts tests/ on sys.path, the same
 path test_coverage itself uses to import test_intake's `_full_spec`.
 """
+
 from __future__ import annotations
 
-from kfforge import server as srv
-from kfforge.intake.serde import spec_to_dict
-
 from test_coverage import _two_split_spec
+
+from app.application.intake.serde import spec_to_dict
+from app.infrastructure.mcp import server as srv
 
 
 def _reader_output_wire() -> dict:
@@ -36,7 +37,9 @@ def test_reader_multi_split_output_compiles_through_the_update_approve_plan_surf
 
     updated = srv.forge_update_spec(spec=None, patch=reader_wire)
     assert updated["isError"] is False, updated
-    assert updated["blocking_gaps"] == [], f"reader output still has gaps: {updated['blocking_gaps']}"
+    assert updated["blocking_gaps"] == [], (
+        f"reader output still has gaps: {updated['blocking_gaps']}"
+    )
     spec_wire = updated["spec"]
     assert spec_wire["approved"] is False  # an update is unapproved by construction
 
@@ -48,7 +51,9 @@ def test_reader_multi_split_output_compiles_through_the_update_approve_plan_surf
     assert plan["isError"] is False, plan
     assert plan["summary"]["build_workflow"] == 1
     workflow = next(op for op in plan["ops"] if op["kind"] == "build_workflow")
-    assert len(workflow["args"]["parallels"]) == 2, "two sequential splits must survive as 2 gateways"
+    assert len(workflow["args"]["parallels"]) == 2, (
+        "two sequential splits must survive as 2 gateways"
+    )
 
 
 def test_reader_emitting_a_spec_is_not_approval() -> None:

@@ -17,15 +17,16 @@ Ordered, dependent tests sharing the `ctx` module fixture, same pattern as test_
 
 Run with: pytest --run-live tests/test_live_branching.py -q  (skipped by default — see conftest.py)
 """
+
 from __future__ import annotations
 
 import os
 from typing import Any
 
+import live_helpers
 import pytest
 
-import kfforge.server as srv
-import live_helpers
+import app.infrastructure.mcp.server as srv
 
 pytestmark = pytest.mark.live
 
@@ -142,7 +143,9 @@ def test_06_add_sample_per_branch_goto_gate(ctx: dict[str, Any]) -> None:
     if not ctx["flow_id"]:
         pytest.skip("no flow to gate — step 01 failed")
     result = srv.forge_add_goto_gate(
-        flow_id=ctx["flow_id"], target_activity_name="Handle Beta", field_name="Done Flag",
+        flow_id=ctx["flow_id"],
+        target_activity_name="Handle Beta",
+        field_name="Done Flag",
         branch_name="Tier Beta",
     )
     assert not result.get("isError"), f"add per-branch goto gate: {result}"

@@ -1,6 +1,6 @@
 """Live acceptance (ported from the old tests/robot/forge_lifecycle.robot, Node G): ONE full
 build-through-teardown lifecycle of a process, against the LIVE dev tenant (KF_APP only — see
-kfforge/server.py forge_* tools). BLIND: every name below is neutral/synthetic ("Sample ..."), no
+src/app/server.py forge_* tools). BLIND: every name below is neutral/synthetic ("Sample ..."), no
 real-app tokens.
 
 Ordered, dependent tests sharing the `ctx` module fixture — a lifecycle is inherently sequential,
@@ -11,15 +11,16 @@ failed — the same guarantee the old Suite Teardown gave.
 
 Run with: pytest --run-live tests/test_live_lifecycle.py -q  (skipped by default — see conftest.py)
 """
+
 from __future__ import annotations
 
 import os
 from typing import Any
 
+import live_helpers
 import pytest
 
-import kfforge.server as srv
-import live_helpers
+import app.infrastructure.mcp.server as srv
 
 pytestmark = pytest.mark.live
 
@@ -137,7 +138,7 @@ def test_05_build_sample_workflow(ctx: dict[str, Any]) -> None:
     result = srv.forge_build_workflow(flow_id=ctx["flow_id"], steps=steps, roles=roles)
     assert not result.get("isError"), f"build workflow: {result}"
     assert not result["missing_steps"]
-    # `assigned` is an ECHO of the input steps (kfforge/client.py apply_workflow computes it from
+    # `assigned` is an ECHO of the input steps (src/app/client.py apply_workflow computes it from
     # what was requested, never reads the draft back) -- it can never be wrong as long as a role
     # was passed, so it proves nothing on its own. The real proof is the live read-back below.
     assigned_role_ids = live_helpers.resolve_assigned_role_ids(ctx["flow_id"])
@@ -201,7 +202,7 @@ def test_09_set_sample_field_event(ctx: dict[str, Any]) -> None:
     field_ids = live_helpers.resolve_field_ids(ctx["flow_id"])
     id_ref_code = field_ids["Reference Code"]
     script = f"(async () => {{ kf.form.setFieldValue('{id_ref_code}', 'x'); }})();"
-    events = {"Reference Code": [["onChange", script]]}
+    events: dict[str, list[list[str | None]]] = {"Reference Code": [["onChange", script]]}
     result = srv.forge_set_events(flow_id=ctx["flow_id"], events=events)
     assert not result.get("isError"), f"set field event: {result}"
     assert not result["missing"]
@@ -249,16 +250,21 @@ def test_12_create_and_build_sample_page(ctx: dict[str, Any]) -> None:
         {
             "kind": "widget",
             "kwargs": {
-                "container_id": "Container001", "widget": "general/label",
-                "name": "Overview Label", "config": {"title": "Sample Intake Overview"},
+                "container_id": "Container001",
+                "widget": "general/label",
+                "name": "Overview Label",
+                "config": {"title": "Sample Intake Overview"},
             },
         },
         {
             "kind": "widget",
             "kwargs": {
-                "container_id": "Container001", "widget": "view/table",
+                "container_id": "Container001",
+                "widget": "view/table",
                 "config": {
-                    "flow_type": "process", "flow_id": ctx["flow_id"], "view_id": "myitems",
+                    "flow_type": "process",
+                    "flow_id": ctx["flow_id"],
+                    "view_id": "myitems",
                 },
             },
         },
@@ -303,7 +309,8 @@ def test_14_simulate_a_sample_case_end_to_end(ctx: dict[str, Any]) -> None:
         {
             "name": "Start",
             "values": {
-                field_ids["Reference Code"]: "REF-0001", field_ids["Priority"]: "Normal",
+                field_ids["Reference Code"]: "REF-0001",
+                field_ids["Priority"]: "Normal",
             },
         },
         {"name": "Intake Review", "values": {}},
@@ -333,4 +340,6 @@ def test_14_simulate_a_sample_case_end_to_end(ctx: dict[str, Any]) -> None:
     # the live status read below.
 
     status = live_helpers.get_item_status(ctx["flow_id"], result["iid"])
-    assert status == "Completed", f"item did not reach Completed after every step advanced -- {result}"
+    assert status == "Completed", (
+        f"item did not reach Completed after every step advanced -- {result}"
+    )

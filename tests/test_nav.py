@@ -1,17 +1,18 @@
-"""Unit spec for kfforge.nav: navigation normalize + orphan sweep over an app-level draft.
+"""Unit spec for app.domain.nav: navigation normalize + orphan sweep over an app-level draft.
 
 Pure + offline: no network, no Kissflow calls, no real-app content. The app draft here is a small
 HAND-BUILT fixture (like tests/fixtures/*.json) rather than something built by nav.py itself --
 nav.py adds menus into an EXISTING Application/Navigation graph, it does not create one from
 scratch, so a realistic pre-existing draft is the correct starting point for these tests.
 """
+
 from __future__ import annotations
 
 import copy
 
 import pytest
 
-from kfforge.nav import add_page_menu, list_navigation, point_all_navs_at, sweep_orphans
+from app.domain.nav import add_page_menu, list_navigation, point_all_navs_at, sweep_orphans
 
 
 def _seed_app_draft() -> dict:
@@ -20,41 +21,68 @@ def _seed_app_draft() -> dict:
     return {
         "Root": "Model_Sample01",
         "Model_Sample01": {
-            "Id": "Model_Sample01", "Kind": "Application", "FlowType": "Application",
-            "Name": "Sample Application", "DefaultPage": "Page_Sample01",
+            "Id": "Model_Sample01",
+            "Kind": "Application",
+            "FlowType": "Application",
+            "Name": "Sample Application",
+            "DefaultPage": "Page_Sample01",
             "Application::Navigation": ["Navigation_Sample01", "Navigation_Sample02"],
         },
         "Navigation_Sample01": {
-            "Id": "Navigation_Sample01", "Kind": "Navigation", "Name": "Requester Navigation",
-            "Application": "Model_Sample01", "Navigation::Menu": ["Menu_Sample01"],
+            "Id": "Navigation_Sample01",
+            "Kind": "Navigation",
+            "Name": "Requester Navigation",
+            "Application": "Model_Sample01",
+            "Navigation::Menu": ["Menu_Sample01"],
         },
         "Navigation_Sample02": {
-            "Id": "Navigation_Sample02", "Kind": "Navigation", "Name": "Admin Navigation",
-            "Application": "Model_Sample01", "Navigation::Menu": ["Menu_Sample02"],
+            "Id": "Navigation_Sample02",
+            "Kind": "Navigation",
+            "Name": "Admin Navigation",
+            "Application": "Model_Sample01",
+            "Navigation::Menu": ["Menu_Sample02"],
         },
         "Menu_Sample01": {
-            "Id": "Menu_Sample01", "Kind": "Menu", "Name": "Overview",
-            "Navigation": "Navigation_Sample01", "Menu::FieldMapping": ["FieldMapping_Sample01"],
+            "Id": "Menu_Sample01",
+            "Kind": "Menu",
+            "Name": "Overview",
+            "Navigation": "Navigation_Sample01",
+            "Menu::FieldMapping": ["FieldMapping_Sample01"],
         },
         "FieldMapping_Sample01": {
-            "Id": "FieldMapping_Sample01", "Kind": "FieldMapping", "Name": "Page",
-            "Menu": "Menu_Sample01", "FieldMapping::Property": ["Property_Sample01"],
+            "Id": "FieldMapping_Sample01",
+            "Kind": "FieldMapping",
+            "Name": "Page",
+            "Menu": "Menu_Sample01",
+            "FieldMapping::Property": ["Property_Sample01"],
         },
         "Property_Sample01": {
-            "Id": "Property_Sample01", "Kind": "Property", "Type": "Page",
-            "Value": "Page_Sample01", "FieldMapping": "FieldMapping_Sample01",
+            "Id": "Property_Sample01",
+            "Kind": "Property",
+            "Type": "Page",
+            "Value": "Page_Sample01",
+            "FieldMapping": "FieldMapping_Sample01",
         },
         "Menu_Sample02": {
-            "Id": "Menu_Sample02", "Kind": "Menu", "Name": "Admin Overview",
-            "Navigation": "Navigation_Sample02", "Menu::FieldMapping": ["FieldMapping_Sample02"],
+            "Id": "Menu_Sample02",
+            "Kind": "Menu",
+            "Name": "Admin Overview",
+            "Navigation": "Navigation_Sample02",
+            "Menu::FieldMapping": ["FieldMapping_Sample02"],
         },
         "FieldMapping_Sample02": {
-            "Id": "FieldMapping_Sample02", "Kind": "FieldMapping", "Name": "Page",
-            "Menu": "Menu_Sample02", "FieldMapping::Property": ["Property_Sample02"],
+            "Id": "FieldMapping_Sample02",
+            "Kind": "FieldMapping",
+            "Name": "Page",
+            "Menu": "Menu_Sample02",
+            "FieldMapping::Property": ["Property_Sample02"],
         },
         "Property_Sample02": {
-            "Id": "Property_Sample02", "Kind": "Property", "Type": "Page",
-            "Value": "Page_Sample01", "FieldMapping": "FieldMapping_Sample02",
+            "Id": "Property_Sample02",
+            "Kind": "Property",
+            "Type": "Page",
+            "Value": "Page_Sample01",
+            "FieldMapping": "FieldMapping_Sample02",
         },
     }
 
@@ -77,6 +105,7 @@ def _assert_backrefs_resolve(draft: dict) -> None:
 # list_navigation
 # ---------------------------------------------------------------------------------------------
 
+
 def test_list_navigation_maps_nav_to_menus() -> None:
     app = _seed_app_draft()
     assert list_navigation(app) == {
@@ -88,6 +117,7 @@ def test_list_navigation_maps_nav_to_menus() -> None:
 # ---------------------------------------------------------------------------------------------
 # point_all_navs_at
 # ---------------------------------------------------------------------------------------------
+
 
 def test_point_all_navs_at_unifies_every_navigation() -> None:
     app = _seed_app_draft()
@@ -146,20 +176,30 @@ def test_point_all_navs_at_rejects_a_non_menu_id() -> None:
 # sweep_orphans
 # ---------------------------------------------------------------------------------------------
 
+
 def test_sweep_orphans_removes_exactly_the_seeded_orphan() -> None:
     app = _seed_app_draft()
     # seed an orphan Menu chain that no Navigation points at
     app["Menu_Orphan"] = {
-        "Id": "Menu_Orphan", "Kind": "Menu", "Name": "Stray",
-        "Navigation": "Navigation_Sample01", "Menu::FieldMapping": ["FieldMapping_Orphan"],
+        "Id": "Menu_Orphan",
+        "Kind": "Menu",
+        "Name": "Stray",
+        "Navigation": "Navigation_Sample01",
+        "Menu::FieldMapping": ["FieldMapping_Orphan"],
     }
     app["FieldMapping_Orphan"] = {
-        "Id": "FieldMapping_Orphan", "Kind": "FieldMapping", "Name": "Page",
-        "Menu": "Menu_Orphan", "FieldMapping::Property": ["Property_Orphan"],
+        "Id": "FieldMapping_Orphan",
+        "Kind": "FieldMapping",
+        "Name": "Page",
+        "Menu": "Menu_Orphan",
+        "FieldMapping::Property": ["Property_Orphan"],
     }
     app["Property_Orphan"] = {
-        "Id": "Property_Orphan", "Kind": "Property", "Type": "Page",
-        "Value": "Page_Sample01", "FieldMapping": "FieldMapping_Orphan",
+        "Id": "Property_Orphan",
+        "Kind": "Property",
+        "Type": "Page",
+        "Value": "Page_Sample01",
+        "FieldMapping": "FieldMapping_Orphan",
     }
 
     new, dropped = sweep_orphans(app)
@@ -168,8 +208,14 @@ def test_sweep_orphans_removes_exactly_the_seeded_orphan() -> None:
     for nid in dropped:
         assert nid not in new
     # the reachable chain is untouched
-    for nid in ("Menu_Sample01", "FieldMapping_Sample01", "Property_Sample01",
-                "Menu_Sample02", "FieldMapping_Sample02", "Property_Sample02"):
+    for nid in (
+        "Menu_Sample01",
+        "FieldMapping_Sample01",
+        "Property_Sample01",
+        "Menu_Sample02",
+        "FieldMapping_Sample02",
+        "Property_Sample02",
+    ):
         assert nid in new
     _assert_backrefs_resolve(new)
 
@@ -183,7 +229,12 @@ def test_sweep_orphans_is_a_no_op_when_nothing_is_orphaned() -> None:
 
 def test_sweep_orphans_does_not_mutate_input() -> None:
     app = _seed_app_draft()
-    app["Menu_Orphan"] = {"Id": "Menu_Orphan", "Kind": "Menu", "Name": "Stray", "Menu::FieldMapping": []}
+    app["Menu_Orphan"] = {
+        "Id": "Menu_Orphan",
+        "Kind": "Menu",
+        "Name": "Stray",
+        "Menu::FieldMapping": [],
+    }
     before = copy.deepcopy(app)
     sweep_orphans(app)
     assert app == before
@@ -193,9 +244,12 @@ def test_sweep_orphans_does_not_mutate_input() -> None:
 # add_page_menu
 # ---------------------------------------------------------------------------------------------
 
+
 def test_add_page_menu_wires_full_chain_and_backref() -> None:
     app = _seed_app_draft()
-    new = add_page_menu(app, nav_id="Navigation_Sample01", page_id="Page_NewSample02", label="Sample Tab")
+    new = add_page_menu(
+        app, nav_id="Navigation_Sample01", page_id="Page_NewSample02", label="Sample Tab"
+    )
 
     nav = new["Navigation_Sample01"]
     added = [m for m in nav["Navigation::Menu"] if m != "Menu_Sample01"]
@@ -203,7 +257,9 @@ def test_add_page_menu_wires_full_chain_and_backref() -> None:
     menu_id = added[0]
     menu = new[menu_id]
     assert menu["Name"] == "Sample Tab"
-    assert menu["Navigation"] == "Navigation_Sample01", "new-style Menu carries the Navigation back-ref"
+    assert menu["Navigation"] == "Navigation_Sample01", (
+        "new-style Menu carries the Navigation back-ref"
+    )
 
     fm_id = menu["Menu::FieldMapping"][0]
     fm = new[fm_id]
@@ -216,7 +272,9 @@ def test_add_page_menu_wires_full_chain_and_backref() -> None:
 
 def test_add_page_menu_leaves_other_navigations_untouched() -> None:
     app = _seed_app_draft()
-    new = add_page_menu(app, nav_id="Navigation_Sample01", page_id="Page_NewSample02", label="Sample Tab")
+    new = add_page_menu(
+        app, nav_id="Navigation_Sample01", page_id="Page_NewSample02", label="Sample Tab"
+    )
     assert new["Navigation_Sample02"]["Navigation::Menu"] == ["Menu_Sample02"]
 
 
@@ -237,10 +295,15 @@ def test_add_page_menu_does_not_mutate_input() -> None:
 # kitchen sink: add a menu, unify, sweep -- the real "give every role the same view" workflow
 # ---------------------------------------------------------------------------------------------
 
+
 def test_unify_then_sweep_end_to_end() -> None:
     app = _seed_app_draft()
-    app = add_page_menu(app, nav_id="Navigation_Sample01", page_id="Page_NewSample02", label="Sample Tab")
-    new_menu_id = next(m for m in app["Navigation_Sample01"]["Navigation::Menu"] if m != "Menu_Sample01")
+    app = add_page_menu(
+        app, nav_id="Navigation_Sample01", page_id="Page_NewSample02", label="Sample Tab"
+    )
+    new_menu_id = next(
+        m for m in app["Navigation_Sample01"]["Navigation::Menu"] if m != "Menu_Sample01"
+    )
 
     unified = point_all_navs_at(app, menu_ids=["Menu_Sample01", new_menu_id])
     swept, dropped = sweep_orphans(unified)

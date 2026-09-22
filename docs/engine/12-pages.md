@@ -169,7 +169,7 @@ role-scoping: prefer `Menu.VisibleTo:[<role ids>]` on a shared Navigation
 shapes/menu_navigation.json.
 
 - **`Page::Component` registration is NOT load-bearing (#24, proven live
-  2026-08-11).** `kfforge/pages.py` never writes `Page::Component`, so a
+  2026-08-11).** `src/app/domain/pages.py` never writes `Page::Component`, so a
   built page leaves the key absent entirely. Test: built a page with three
   `general/label` widgets (their Component ids never registered, `Page::Component`
   absent), published, opened the builder — all three rendered fine. So an

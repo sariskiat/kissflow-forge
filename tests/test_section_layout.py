@@ -1,4 +1,4 @@
-"""The section-layout fact base — kfforge.graph.section_layout.
+"""The section-layout fact base — app.domain.graph.section_layout.
 
 One frozen context object holds everything the visibility machinery knows about a draft's
 sections and columns, so the writer (set_step_permissions), the auditor (verify.doctor) and the
@@ -9,6 +9,7 @@ host), membership, and the no-Permission exclusions.
 Behavior tests only — every expectation is computed from the generated synthetic draft, no live
 Kissflow content.
 """
+
 from __future__ import annotations
 
 import copy
@@ -17,8 +18,8 @@ from typing import Any
 import pytest
 from synthetic import OWNERS, synthetic_process_draft
 
-from kfforge.graph import add_sequence_number, add_table, section_layout
-from kfforge.types import FieldType
+from app.domain.graph import add_sequence_number, add_table, section_layout
+from app.domain.types import FieldType
 
 Draft = dict[str, Any]
 
@@ -37,16 +38,22 @@ def _col_of_field(d: Draft, field_name: str) -> str:
 
 
 def _section_id(d: Draft, name: str) -> str:
-    return next(k for k, v in _nodes(d, "Column").items()
-                if v.get("Type") == "Section" and v.get("Name") == name)
+    return next(
+        k
+        for k, v in _nodes(d, "Column").items()
+        if v.get("Type") == "Section" and v.get("Name") == name
+    )
 
 
 def _section_field_cols(d: Draft, name: str) -> set[str]:
     """Field-type columns directly inside a named Section — the layout's own expectation."""
     sid = _section_id(d, name)
-    return {cid for rid in (d[sid].get("Column::Row") or [])
-            for cid in (d.get(rid) or {}).get("Row::Column") or []
-            if d[cid].get("Type") == "Field"}
+    return {
+        cid
+        for rid in (d[sid].get("Column::Row") or [])
+        for cid in (d.get(rid) or {}).get("Row::Column") or []
+        if d[cid].get("Type") == "Field"
+    }
 
 
 def test_layout_names_every_section(draft: Draft) -> None:
@@ -75,8 +82,9 @@ def test_owner_section_maps_column_to_its_section(draft: Draft) -> None:
 
 
 def test_no_permission_columns_include_hidden_and_sequence(draft: Draft) -> None:
-    d = add_sequence_number(copy.deepcopy(draft), "Running No", "Intake", "TCK-", "0001",
-                            "Ticket arrives")
+    d = add_sequence_number(
+        copy.deepcopy(draft), "Running No", "Intake", "TCK-", "0001", "Ticket arrives"
+    )
     layout = section_layout(d)
     seq_col = _col_of_field(d, "Running No")
     assert seq_col in layout.no_permission_columns
@@ -109,8 +117,11 @@ def test_section_name_beats_same_named_table_host(draft: Draft) -> None:
     layout = section_layout(d)
     assert layout.section_id_of_name[collide] == _section_id(d, collide)
     # the colliding host is still a table host (its own signal is untouched)
-    host = next(k for k, v in _nodes(d, "Column").items()
-                if v.get("Type") == "Model" and v.get("Name") == collide)
+    host = next(
+        k
+        for k, v in _nodes(d, "Column").items()
+        if v.get("Type") == "Model" and v.get("Name") == collide
+    )
     assert host in layout.table_host_columns
 
 
@@ -130,16 +141,30 @@ def test_owner_section_covers_model_host_nested_inside_a_section(draft: Draft) -
     # section (the "table nested inside a section" case). owner_section must mirror that: a
     # column directly in a Section's rows belongs to the Section, whatever its Type.
     d = copy.deepcopy(draft)
-    host = next(k for k, v in _nodes(d, "Column").items() if v.get("Type") == "Model") \
-        if any(v.get("Type") == "Model" for v in _nodes(d, "Column").values()) else None
+    host = (
+        next(k for k, v in _nodes(d, "Column").items() if v.get("Type") == "Model")
+        if any(v.get("Type") == "Model" for v in _nodes(d, "Column").values())
+        else None
+    )
     if host is None:  # plant a Model column inside the Intake section's first row
         rows = d[_section_id(d, "Intake")].get("Column::Row") or []
         row_id = rows[0]
         host = "Column_FakeTableHost"
-        d[host] = {"Id": host, "Kind": "Column", "Type": "Model", "Name": "Fake Table",
-                   "Row": row_id, "Column::Model": ["Model_FakeTable"]}
+        d[host] = {
+            "Id": host,
+            "Kind": "Column",
+            "Type": "Model",
+            "Name": "Fake Table",
+            "Row": row_id,
+            "Column::Model": ["Model_FakeTable"],
+        }
         d[row_id]["Row::Column"].append(host)
-        d["Model_FakeTable"] = {"Id": "Model_FakeTable", "Kind": "Model", "Name": "Fake Table",
-                                "Model": d["Root"], "Column": host}
+        d["Model_FakeTable"] = {
+            "Id": "Model_FakeTable",
+            "Kind": "Model",
+            "Name": "Fake Table",
+            "Model": d["Root"],
+            "Column": host,
+        }
     layout = section_layout(d)
     assert layout.owner_section(host) == "Intake"

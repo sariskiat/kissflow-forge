@@ -1,12 +1,12 @@
 """P3 acceptance (Node K): the intake + design MCP tool surface.
 
 Fully offline -- NO live credentials, no network (every P3 tool is a wrapper around
-kfforge.intake/kfforge.design, both pure/offline packages):
+app.application.intake/app.application.design, both pure/offline packages):
   1. manifest -- every forge_* P3 tool named in the Node K spec exists on the server module AND
      registers on the real FastMCP object with a buildable schema (fastmcp.Client, in-memory
      transport -- same pattern tests/test_p2_server.py already uses).
   2. the gate -- forge_plan_app refuses unless `approval_token` is the exact HMAC only
-     forge_approve_spec can mint for this spec's current content (kfforge.server.
+     forge_approve_spec can mint for this spec's current content (app.infrastructure.mcp.server.
      _mint_approval_token, keyed by a per-process secret no tool ever exposes); refuses an
      unapproved spec and refuses one with blocking gaps, naming them (compile_spec's own two
      refusals, kept as a second, weaker check); forge_approve_spec refuses a stale digest and a
@@ -18,7 +18,7 @@ kfforge.intake/kfforge.design, both pure/offline packages):
      approval, replay the OLD token), B4 (smuggle `approved: true` through forge_update_spec's
      patch), B5 (forge_apply_revisions on an approved spec).
   4. GATE REGRESSION, round 3 (N1/N2/N3/N4) -- ONE root cause: a plain content digest
-     (kfforge.design.spec_digest) proves only "this content was hashed once," never that an
+     (app.application.design.spec_digest) proves only "this content was hashed once," never that an
      approve call happened, and THREE read-only/content-transform tools compute exactly that
      value. N1 (forge_request_confirmation's digest, `approved` hand-set true, no approve call
      anywhere), N2 (mutate an approved spec, RE-confirm the MUTANT for a fresh matching digest,
@@ -44,6 +44,7 @@ Reuses tests/test_intake.py's `_full_spec()`/`_linear_spec()` fixtures directly 
 pattern tests/test_p2_server.py already uses for `FakeClient`) -- no real-app vocabulary anywhere
 in this file (CLAUDE.md BLINDNESS).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -58,15 +59,21 @@ from test_intake import (  # tests/ is on sys.path, see conftest.py
     _linear_spec,
 )
 
-import kfforge.server as srv
-from kfforge.intake.compile import OP_ORDER
-from kfforge.intake.schema import AppSpec
-from kfforge.intake.serde import spec_from_dict, spec_to_dict
+import app.infrastructure.mcp.server as srv
+from app.application.intake.compile import OP_ORDER
+from app.application.intake.schema import AppSpec
+from app.application.intake.serde import spec_from_dict, spec_to_dict
 
 P3_TOOLS = {
-    "forge_intake_questions", "forge_update_spec", "forge_render_flow_diagram",
-    "forge_render_schema_diagram", "forge_render_mockups", "forge_request_confirmation",
-    "forge_apply_revisions", "forge_approve_spec", "forge_plan_app",
+    "forge_intake_questions",
+    "forge_update_spec",
+    "forge_render_flow_diagram",
+    "forge_render_schema_diagram",
+    "forge_render_mockups",
+    "forge_request_confirmation",
+    "forge_apply_revisions",
+    "forge_approve_spec",
+    "forge_plan_app",
 }
 
 # Minimal dummy args each P3 tool needs to reach its first real statement -- every render/confirm/
@@ -123,7 +130,7 @@ def test_every_p3_tool_registers_on_the_real_mcp_server_with_a_valid_schema() ->
         for t in tools:
             if t.name in P3_TOOLS:
                 assert t.description, f"{t.name} has no description"
-                assert t.inputSchema, f"{t.name} has no input schema"
+                assert t.input_schema, f"{t.name} has no input schema"
         return {t.name for t in tools}
 
     names = asyncio.run(_run())
@@ -213,8 +220,7 @@ def test_forge_intake_questions_never_echoes_approved_true() -> None:
 
 def test_forge_update_spec_starting_from_none_applies_a_patch() -> None:
     full = spec_to_dict(_full_spec())
-    patch = {"problem_goal": full["problem_goal"], "roles": full["roles"],
-             "stages": full["stages"]}
+    patch = {"problem_goal": full["problem_goal"], "roles": full["roles"], "stages": full["stages"]}
     got = srv.forge_update_spec(spec=None, patch=patch)
     assert got["isError"] is False
     dims_remaining = {int(g.split(".", 1)[0]) for g in got["gaps"]}
@@ -249,7 +255,7 @@ def test_forge_update_spec_rejects_a_patch_with_an_unknown_key() -> None:
 
 
 def test_forge_update_spec_rejects_a_non_dict_patch() -> None:
-    got = srv.forge_update_spec(spec=None, patch="oops")  # type: ignore[arg-type]
+    got = srv.forge_update_spec(spec=None, patch="oops")  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     assert got["isError"] is True
     assert "patch" in got["error"]
 
@@ -358,7 +364,9 @@ def test_request_confirmation_returns_digest_paths_and_questions(tmp_path: Any) 
     assert got["isError"] is False
     assert len(got["digest"]) == 64  # sha256 hexdigest
     assert set(got["artifact_paths"]) == {
-        "flow_diagram.drawio", "schema_diagram.drawio", "design.html",
+        "flow_diagram.drawio",
+        "schema_diagram.drawio",
+        "design.html",
     }
     for name, path in got["artifact_paths"].items():
         assert path.startswith(str(tmp_path)), f"{name}: out_dir must actually be used"
@@ -402,7 +410,8 @@ def test_approve_spec_refuses_a_stale_digest() -> None:
 def test_approve_spec_refuses_a_decision_that_is_not_the_literal_approve() -> None:
     req = srv.forge_request_confirmation(_FULL_WIRE)
     for bad_decision in ("Approve", "approved", "yes", "revise", ""):
-        got = srv.forge_approve_spec(_FULL_WIRE, digest=req["digest"], decision=bad_decision)
+        # every bad_decision here is outside the closed vocabulary on purpose.
+        got = srv.forge_approve_spec(_FULL_WIRE, digest=req["digest"], decision=bad_decision)  # ty: ignore[invalid-argument-type]
         assert got["isError"] is True, f"decision {bad_decision!r} must be refused"
         assert "not an explicit approval" in got["error"]
 
@@ -418,7 +427,9 @@ def test_approve_spec_succeeds_and_mints_a_usable_approval_token() -> None:
     assert got["approval_token"] != got["digest"]  # a token is NOT just the digest again
 
 
-def test_approve_spec_reapproving_an_already_approved_spec_with_the_original_digest_succeeds() -> None:
+def test_approve_spec_reapproving_an_already_approved_spec_with_the_original_digest_succeeds() -> (
+    None
+):
     """MEDIUM finding: forge_approve_spec used to digest the spec AS GIVEN while forge_plan_app
     always normalized `approved` away -- so re-approving an already-approved spec (SAME content,
     just already flagged) minted a digest that did not match the ORIGINAL, unapproved-form digest
@@ -513,7 +524,8 @@ def test_bypass_b3_rewiring_after_approval_is_refused() -> None:
 
     rewired = copy.deepcopy(approval["spec"])
     rewired["routing"]["points"][0]["route_per_option"] = [
-        ["Yes", ["Return to Customer"]], ["No", ["Return to Customer"]],
+        ["Yes", ["Return to Customer"]],
+        ["No", ["Return to Customer"]],
     ]
     rewired["stages"]["stages"][0]["owner_role"] = "Technician"  # was "Front Desk"; both real
     assert rewired["approved"] is True  # the flag itself was never touched by this mutation
@@ -576,10 +588,13 @@ def test_bypass_n2_reconfirming_a_mutated_spec_mints_no_usable_token() -> None:
 
     mutant = copy.deepcopy(approval["spec"])
     mutant["routing"]["points"][0]["route_per_option"] = [
-        ["Yes", ["Return to Customer"]], ["No", ["Return to Customer"]],
+        ["Yes", ["Return to Customer"]],
+        ["No", ["Return to Customer"]],
     ]
     mutant["stages"]["stages"][0]["owner_role"] = "Technician"
-    mutant["approved"] = False  # looks like an ordinary pre-approval spec to forge_request_confirmation
+    mutant["approved"] = (
+        False  # looks like an ordinary pre-approval spec to forge_request_confirmation
+    )
 
     reconfirm = srv.forge_request_confirmation(mutant)
     assert reconfirm["isError"] is False  # confirmation itself never refuses anything -- read-only
@@ -640,7 +655,9 @@ def test_apply_revisions_surfaces_the_documented_field_rename_defect() -> None:
     field referenced elsewhere (here: a routing point's field_name) returns a spec compile_spec()
     rejects -- this must be REPORTED (compiles=False, a real compile_error), never hidden behind
     isError=False with no other signal."""
-    got = srv.forge_apply_revisions(_FULL_WIRE, {"field:Diagnose:Repairable:rename": "Renamed Field"})
+    got = srv.forge_apply_revisions(
+        _FULL_WIRE, {"field:Diagnose:Repairable:rename": "Renamed Field"}
+    )
     assert got["isError"] is False  # the revision itself was applied successfully
     assert got["compiles"] is False  # but the RESULT is a known-bad spec
     assert got["compile_error"]
@@ -668,7 +685,7 @@ def test_apply_revisions_rejects_a_revision_targeting_something_absent_from_this
 
 
 def test_apply_revisions_rejects_a_non_dict_revisions_argument() -> None:
-    got = srv.forge_apply_revisions(_FULL_WIRE, revisions="oops")  # type: ignore[arg-type]
+    got = srv.forge_apply_revisions(_FULL_WIRE, revisions="oops")  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     assert got["isError"] is True
     assert "revisions" in got["error"]
 
@@ -688,15 +705,20 @@ def test_full_stateless_round_driven_only_through_the_tool_functions(tmp_path: A
     assert [q["dimension"] for q in opening["questions"]] == [1, 1]
 
     # 2. update, incrementally, in two calls -- proves real merging, not a pass-through
-    step_a = srv.forge_update_spec(spec=None, patch={
-        "problem_goal": full_wire["problem_goal"], "roles": full_wire["roles"],
-        "stages": full_wire["stages"],
-    })
+    step_a = srv.forge_update_spec(
+        spec=None,
+        patch={
+            "problem_goal": full_wire["problem_goal"],
+            "roles": full_wire["roles"],
+            "stages": full_wire["stages"],
+        },
+    )
     assert step_a["isError"] is False
     assert set(step_a["blocking_gaps"]) != set()
 
     remaining_patch = {
-        k: v for k, v in full_wire.items()
+        k: v
+        for k, v in full_wire.items()
         if k not in ("problem_goal", "roles", "stages", "approved")  # approved: not a patch key
     }
     step_b = srv.forge_update_spec(spec=step_a["spec"], patch=remaining_patch)
@@ -722,13 +744,16 @@ def test_full_stateless_round_driven_only_through_the_tool_functions(tmp_path: A
     confirmation = srv.forge_request_confirmation(complete_spec, out_dir=str(tmp_path))
     assert confirmation["isError"] is False
     still_unapproved_plan = srv.forge_plan_app(
-        complete_spec, approval_token=confirmation["digest"],
+        complete_spec,
+        approval_token=confirmation["digest"],
     )
     assert still_unapproved_plan["isError"] is True
 
     # 5. approve -- with the real digest just issued
     approval = srv.forge_approve_spec(
-        complete_spec, digest=confirmation["digest"], decision="approve",
+        complete_spec,
+        digest=confirmation["digest"],
+        decision="approve",
     )
     assert approval["isError"] is False
     assert approval["approved"] is True
@@ -752,7 +777,9 @@ def test_full_round_reconstructs_an_appspec_equal_to_the_original_fixture(tmp_pa
     full = _full_spec(approved=False)
     step = srv.forge_update_spec(spec=None, patch=_patch_from(full))
     confirmation = srv.forge_request_confirmation(step["spec"], out_dir=str(tmp_path))
-    approval = srv.forge_approve_spec(step["spec"], digest=confirmation["digest"], decision="approve")
+    approval = srv.forge_approve_spec(
+        step["spec"], digest=confirmation["digest"], decision="approve"
+    )
     reconstructed = spec_from_dict(approval["spec"])
     assert isinstance(reconstructed, AppSpec)
     assert reconstructed == dataclasses.replace(full, approved=True)

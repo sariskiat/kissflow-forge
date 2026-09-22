@@ -120,7 +120,7 @@ All seven verified present and intact through the mesh on 2026-08-18.
 Same process, two source addresses. Uvicorn trusts `127.0.0.1` by default and nothing else.
 
 ```bash
-MCP_HTTP=1 PORT=8899 python -m kfforge.server
+MCP_HTTP=1 PORT=8899 uv run mcp-server
 
 # source = loopback -> trusted -> X-Forwarded-Proto honoured (this is the ngrok case)
 curl -sS -D- -o /dev/null http://127.0.0.1:8899/mcp/ -H 'X-Forwarded-Proto: https'

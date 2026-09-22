@@ -78,7 +78,7 @@ design also uses the *depth* Kissflow offers inside each piece. You do NOT keep 
 in your head — it lives in the catalog. **`forge_capabilities("")` returns the whole
 index; `forge_capabilities("<id or word>")` returns one capability's real captured wire
 shape.** Consult it; never guess a shape. Deeper still: `docs/capabilities/*.md`,
-`shapes/*.json`, `CLAUDE.md` (the engine manual), and `kfforge/intake/query_bank.jsonl`
+`shapes/*.json`, `CLAUDE.md` (the engine manual), and `src/app/application/intake/query_bank.jsonl`
 (~1000 example asks). Treat every note as "captured, verify live," never "guaranteed."
 
 ### Which building block — and how they connect

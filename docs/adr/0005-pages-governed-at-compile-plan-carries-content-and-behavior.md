@@ -28,7 +28,7 @@ mockup-parity a build bar.
 
 ## Consequences
 
-The page half of the coverage contract (`kfforge/coverage.py`) is what compile
+The page half of the coverage contract (`src/app/domain/coverage.py`) is what compile
 consults; every page refusal names its row, same as the workflow refusals.
 Reproducing a specific mockup's layout or colors belongs to the eval harness
 (#16/#28), not the forge, and a shape the plan cannot carry (custom layout,

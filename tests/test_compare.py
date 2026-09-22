@@ -1,24 +1,30 @@
-"""kfforge.compare (#16): the fidelity comparator judges the BUILT graph against the INPUT
+"""app.application.compare (#16): the fidelity comparator judges the BUILT graph against the INPUT
 spec. Offline: drafts are built with the engine's own builders (never hand-guessed shapes),
 then broken in the specific way each check exists to catch — every test's break is a real bug
 class from eval case 1 (#16 'each of which caught a real bug')."""
+
 from __future__ import annotations
 
 from typing import Any
 
 from test_intake import _full_spec
 
-from kfforge.compare import CompareReport, compare_built_to_spec
-from kfforge.graph import apply_changes, build_workflow, regroup_into_sections
-from kfforge.types import FieldSpec, FieldType
+from app.application.compare import CompareReport, compare_built_to_spec
+from app.domain.graph import apply_changes, build_workflow, regroup_into_sections
+from app.domain.types import FieldSpec, FieldType
 
 
 def _built_fields(spec: Any) -> dict[str, Any]:
     """A draft carrying every field/table-column the spec asks for, engine-built."""
     bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": "P", "FlowType": "Process"}}
-    specs = [FieldSpec(name=f.name, type=f.type,
-                       referred_list=("L1" if getattr(f, "list_name", None) else None))
-             for f in spec.data_model.fields]
+    specs = [
+        FieldSpec(
+            name=f.name,
+            type=f.type,
+            referred_list=("L1" if getattr(f, "list_name", None) else None),
+        )
+        for f in spec.data_model.fields
+    ]
     for t in spec.data_model.tables:
         specs += [FieldSpec(name=c.name, type=c.type) for c in t.columns]
     return apply_changes(bare, specs)
@@ -32,11 +38,9 @@ def test_wrong_field_type_and_missing_field_flagged() -> None:
     spec = _full_spec()
     draft = _built_fields(spec)
     # break: retype Urgency (Select -> Text) and delete Quantity outright
-    urgency = next(v for v in draft.values()
-                   if isinstance(v, dict) and v.get("Name") == "Urgency")
+    urgency = next(v for v in draft.values() if isinstance(v, dict) and v.get("Name") == "Urgency")
     urgency["Type"] = "Text"
-    qty = next(k for k, v in draft.items()
-               if isinstance(v, dict) and v.get("Name") == "Quantity")
+    qty = next(k for k, v in draft.items() if isinstance(v, dict) and v.get("Name") == "Quantity")
     del draft[qty]
     rep = compare_built_to_spec(draft, spec)
     assert "built as 'Text', input asked 'Select'" in _msgs(rep)
@@ -46,8 +50,7 @@ def test_wrong_field_type_and_missing_field_flagged() -> None:
 def test_select_without_referredlist_flagged() -> None:
     spec = _full_spec()
     draft = _built_fields(spec)
-    urgency = next(v for v in draft.values()
-                   if isinstance(v, dict) and v.get("Name") == "Urgency")
+    urgency = next(v for v in draft.values() if isinstance(v, dict) and v.get("Name") == "Urgency")
     urgency.pop("ReferredList", None)
     rep = compare_built_to_spec(draft, spec)
     assert "no ReferredList" in _msgs(rep)
@@ -65,7 +68,8 @@ def test_stranded_empty_banner_flagged() -> None:
     spec = _full_spec()
     draft = _built_fields(spec)
     draft = regroup_into_sections(
-        draft, [("Intake Basics", ["Unit Name"]), ("Banner", []), ("Tail", ["Customer Name"])])
+        draft, [("Intake Basics", ["Unit Name"]), ("Banner", []), ("Tail", ["Customer Name"])]
+    )
     rep = compare_built_to_spec(draft, spec)
     assert "stranded banner breaks the WHOLE form's render" in _msgs(rep)
 
@@ -74,8 +78,12 @@ def test_spurious_permission_on_hidden_column_flagged() -> None:
     spec = _full_spec()
     draft = _built_fields(spec)
     draft["Column_Hidden1"] = {"Id": "Column_Hidden1", "Kind": "Column", "IsHidden": True}
-    draft["Permission_Bad1"] = {"Id": "Permission_Bad1", "Kind": "Permission",
-                                "Column": "Column_Hidden1", "Permission": "Editable"}
+    draft["Permission_Bad1"] = {
+        "Id": "Permission_Bad1",
+        "Kind": "Permission",
+        "Column": "Column_Hidden1",
+        "Permission": "Editable",
+    }
     rep = compare_built_to_spec(draft, spec)
     assert "SequenceNumber/IsHidden columns" in _msgs(rep)
 
@@ -90,18 +98,24 @@ def test_unconditional_branch_and_ungated_loop_flagged() -> None:
     spec = _full_spec()
     draft = _built_fields(spec)
     draft = build_workflow(
-        draft, [(s.name, None) for s in spec.stages.stages],
-        parallel=("Route", [("A", [("A1", None)]), ("B", [("B1", None)])]), parallel_after=0)
+        draft,
+        [(s.name, None) for s in spec.stages.stages],
+        parallel=("Route", [("A", [("A1", None)]), ("B", [("B1", None)])]),
+        parallel_after=0,
+    )
     rep = compare_built_to_spec(draft, spec)
     assert "NO condition" in _msgs(rep) and "fail-open" in _msgs(rep)
-    assert "no GotoTask targeting" in _msgs(rep)          # the spec's loop was never built
+    assert "no GotoTask targeting" in _msgs(rep)  # the spec's loop was never built
 
 
 def test_incomplete_style_chain_flagged() -> None:
     spec = _full_spec()
     draft = _built_fields(spec)
-    draft["Appearance_Bad1"] = {"Id": "Appearance_Bad1", "Kind": "Appearance",
-                                "Appearance::Style": []}
+    draft["Appearance_Bad1"] = {
+        "Id": "Appearance_Bad1",
+        "Kind": "Appearance",
+        "Appearance::Style": [],
+    }
     rep = compare_built_to_spec(draft, spec)
     assert "must be exactly 1" in _msgs(rep)
 
@@ -137,9 +151,17 @@ def test_sequence_number_missing_and_present_flagged() -> None:
     spec = _full_spec()
     draft = _built_fields(spec)
     rep = compare_built_to_spec(draft, spec)
-    assert "input asks for an auto-numbered id (sequence) — no SequenceNumber field was built" in _msgs(rep)
+    assert (
+        "input asks for an auto-numbered id (sequence) — no SequenceNumber field was built"
+        in _msgs(rep)
+    )
 
-    draft["Field_Seq"] = {"Id": "Field_Seq", "Kind": "Field", "Name": "CaseNumber", "Type": "SequenceNumber"}
+    draft["Field_Seq"] = {
+        "Id": "Field_Seq",
+        "Kind": "Field",
+        "Name": "CaseNumber",
+        "Type": "SequenceNumber",
+    }
     rep2 = compare_built_to_spec(draft, spec)
     assert "SequenceNumber" not in _msgs(rep2)
 
@@ -160,9 +182,20 @@ def test_empty_section_followed_by_table_model_is_accepted() -> None:
     draft = _built_fields(spec)
     root_id = draft["Root"]
     draft["Row_Banner"] = {"Id": "Row_Banner", "Kind": "Row", "Row::Column": ["Col_Banner"]}
-    draft["Col_Banner"] = {"Id": "Col_Banner", "Kind": "Column", "Type": "Section", "Name": "TableBanner", "Column::Row": []}
+    draft["Col_Banner"] = {
+        "Id": "Col_Banner",
+        "Kind": "Column",
+        "Type": "Section",
+        "Name": "TableBanner",
+        "Column::Row": [],
+    }
     draft["Row_Table"] = {"Id": "Row_Table", "Kind": "Row", "Row::Column": ["Col_Table"]}
-    draft["Col_Table"] = {"Id": "Col_Table", "Kind": "Column", "Type": "Model", "Name": "Parts Used"}
+    draft["Col_Table"] = {
+        "Id": "Col_Table",
+        "Kind": "Column",
+        "Type": "Model",
+        "Name": "Parts Used",
+    }
     draft[root_id]["Model::Row"] = ["Row_Banner", "Row_Table"]
 
     rep = compare_built_to_spec(draft, spec)
@@ -173,9 +206,19 @@ def test_empty_section_followed_by_table_model_is_accepted() -> None:
 def test_permission_on_sequence_number_column_flagged() -> None:
     spec = _full_spec()
     draft = _built_fields(spec)
-    draft["Field_Seq"] = {"Id": "Field_Seq", "Kind": "Field", "Name": "CaseId", "Type": "SequenceNumber"}
+    draft["Field_Seq"] = {
+        "Id": "Field_Seq",
+        "Kind": "Field",
+        "Name": "CaseId",
+        "Type": "SequenceNumber",
+    }
     draft["Col_Seq"] = {"Id": "Col_Seq", "Kind": "Column", "Column::Field": ["Field_Seq"]}
-    draft["Perm_Seq"] = {"Id": "Perm_Seq", "Kind": "Permission", "Column": "Col_Seq", "Permission": "Editable"}
+    draft["Perm_Seq"] = {
+        "Id": "Perm_Seq",
+        "Kind": "Permission",
+        "Column": "Col_Seq",
+        "Permission": "Editable",
+    }
     rep = compare_built_to_spec(draft, spec)
     assert "Permission(s) sit on SequenceNumber/IsHidden columns" in _msgs(rep)
 
@@ -183,8 +226,15 @@ def test_permission_on_sequence_number_column_flagged() -> None:
 def test_event_with_wrong_trigger_flagged() -> None:
     spec = _full_spec()
     draft = _built_fields(spec)
-    qty_id = next(k for k, v in draft.items() if isinstance(v, dict) and v.get("Name") == "Quantity")
-    draft["Event_Wrong"] = {"Id": "Event_Wrong", "Kind": "Event", "Field": qty_id, "Trigger": "invalid_trigger"}
+    qty_id = next(
+        k for k, v in draft.items() if isinstance(v, dict) and v.get("Name") == "Quantity"
+    )
+    draft["Event_Wrong"] = {
+        "Id": "Event_Wrong",
+        "Kind": "Event",
+        "Field": qty_id,
+        "Trigger": "invalid_trigger",
+    }
     rep = compare_built_to_spec(draft, spec)
     assert "has trigger(s) ['invalid_trigger']" in _msgs(rep)
     assert "never fires" in _msgs(rep)
@@ -245,7 +295,9 @@ def test_conditional_branch_and_gated_loop_pass() -> None:
 
 def test_spec_without_routing_points_skips_gateway_checks() -> None:
     import dataclasses
-    from kfforge.intake.schema import Routing
+
+    from app.application.intake.schema import Routing
+
     spec = _full_spec()
     spec_no_routing = dataclasses.replace(spec, routing=Routing(points=()))
     draft = _built_fields(spec_no_routing)
@@ -255,18 +307,36 @@ def test_spec_without_routing_points_skips_gateway_checks() -> None:
 
 def test_fully_valid_built_draft_passes_all_checks() -> None:
     import dataclasses
+
     spec = _full_spec()
     draft = _built_fields(spec)
     root_id = draft["Root"]
 
     # 1. Sequence field
-    draft["Field_Seq"] = {"Id": "Field_Seq", "Kind": "Field", "Name": "CaseId", "Type": "SequenceNumber"}
+    draft["Field_Seq"] = {
+        "Id": "Field_Seq",
+        "Kind": "Field",
+        "Name": "CaseId",
+        "Type": "SequenceNumber",
+    }
 
     # 2. Sections & Table hosts in Root Model::Row
     draft["Row_S1"] = {"Id": "Row_S1", "Kind": "Row", "Row::Column": ["Col_S1"]}
-    draft["Col_S1"] = {"Id": "Col_S1", "Kind": "Column", "Type": "Section", "Name": "Intake Basics", "Column::Row": ["R1"]}
+    draft["Col_S1"] = {
+        "Id": "Col_S1",
+        "Kind": "Column",
+        "Type": "Section",
+        "Name": "Intake Basics",
+        "Column::Row": ["R1"],
+    }
     draft["Row_S2"] = {"Id": "Row_S2", "Kind": "Row", "Row::Column": ["Col_S2"]}
-    draft["Col_S2"] = {"Id": "Col_S2", "Kind": "Column", "Type": "Section", "Name": "Intake Priority", "Column::Row": ["R2"]}
+    draft["Col_S2"] = {
+        "Id": "Col_S2",
+        "Kind": "Column",
+        "Type": "Section",
+        "Name": "Intake Priority",
+        "Column::Row": ["R2"],
+    }
     draft["Row_T1"] = {"Id": "Row_T1", "Kind": "Row", "Row::Column": ["Col_T1"]}
     draft["Col_T1"] = {"Id": "Col_T1", "Kind": "Column", "Type": "Model", "Name": "Parts Used"}
     draft[root_id]["Model::Row"] = ["Row_S1", "Row_S2", "Row_T1"]
@@ -277,8 +347,12 @@ def test_fully_valid_built_draft_passes_all_checks() -> None:
             a["Appearance::Style"] = ["Style_Existing"]
 
     # 4. Computed field events with correct trigger ("onSelect" for Number fields Quantity and Unit Cost)
-    qty_id = next(k for k, v in draft.items() if isinstance(v, dict) and v.get("Name") == "Quantity")
-    cost_id = next(k for k, v in draft.items() if isinstance(v, dict) and v.get("Name") == "Unit Cost")
+    qty_id = next(
+        k for k, v in draft.items() if isinstance(v, dict) and v.get("Name") == "Quantity"
+    )
+    cost_id = next(
+        k for k, v in draft.items() if isinstance(v, dict) and v.get("Name") == "Unit Cost"
+    )
     draft["Ev_Qty"] = {"Id": "Ev_Qty", "Kind": "Event", "Field": qty_id, "Trigger": "onSelect"}
     draft["Ev_Cost"] = {"Id": "Ev_Cost", "Kind": "Event", "Field": cost_id, "Trigger": "onSelect"}
 
@@ -287,8 +361,18 @@ def test_fully_valid_built_draft_passes_all_checks() -> None:
         draft[f"Act_{s.name}"] = {"Id": f"Act_{s.name}", "Kind": "Activity", "Name": s.name}
 
     # Parallel gateway with conditional branches + one parallel without branches to test empty branch_ids
-    draft["PD_Yes"] = {"Id": "PD_Yes", "Kind": "ProcessDef", "Name": "Yes", "ProcessDef::Expression": ["Expr_Yes"]}
-    draft["PD_No"] = {"Id": "PD_No", "Kind": "ProcessDef", "Name": "No", "ProcessDef::Expression": ["Expr_No"]}
+    draft["PD_Yes"] = {
+        "Id": "PD_Yes",
+        "Kind": "ProcessDef",
+        "Name": "Yes",
+        "ProcessDef::Expression": ["Expr_Yes"],
+    }
+    draft["PD_No"] = {
+        "Id": "PD_No",
+        "Kind": "ProcessDef",
+        "Name": "No",
+        "ProcessDef::Expression": ["Expr_No"],
+    }
     draft["Act_Par1"] = {
         "Id": "Act_Par1",
         "Kind": "Activity",
@@ -325,7 +409,9 @@ def test_fully_valid_built_draft_passes_all_checks() -> None:
     assert rep.mismatches == ()
 
     # Spec without sequence
-    spec_no_seq = dataclasses.replace(spec, data_model=dataclasses.replace(spec.data_model, sequence=None))
+    spec_no_seq = dataclasses.replace(
+        spec, data_model=dataclasses.replace(spec.data_model, sequence=None)
+    )
     rep_no_seq = compare_built_to_spec(draft, spec_no_seq)
     assert "sequence" not in rep_no_seq.checked
 
@@ -338,7 +424,11 @@ def test_extract_row_first_cols_edge_cases() -> None:
     # 2. Row without columns or row missing
     draft_empty_row = {
         "Root": "M1",
-        "M1": {"Id": "M1", "Kind": "Model", "Model::Row": ["Row_NonExistent", "Row_NoCols", "Row_ColNotDict"]},
+        "M1": {
+            "Id": "M1",
+            "Kind": "Model",
+            "Model::Row": ["Row_NonExistent", "Row_NoCols", "Row_ColNotDict"],
+        },
         "Row_NoCols": {"Id": "Row_NoCols", "Kind": "Row", "Row::Column": []},
         "Row_ColNotDict": {"Id": "Row_ColNotDict", "Kind": "Row", "Row::Column": ["Col_Missing"]},
     }

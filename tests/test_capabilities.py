@@ -1,7 +1,8 @@
-"""Offline unit tests for kfforge.capabilities.search_capabilities (#55, forge_capabilities)."""
+"""Offline unit tests for app.infrastructure.capabilities.search_capabilities (#55, forge_capabilities)."""
+
 from __future__ import annotations
 
-from kfforge.capabilities import search_capabilities
+from app.infrastructure.capabilities import search_capabilities
 
 
 def test_empty_query_returns_the_full_index() -> None:

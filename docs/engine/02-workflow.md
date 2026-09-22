@@ -39,7 +39,7 @@ an earlier step:
   condition loops forever; see Expressions for how the condition attaches.
 
   ⚠️ A CORRECTED BELIEF on "sits LAST", found live 2026-08-06 building node G's `add_goto_task`
-  (kfforge/graph.py) + Robot acceptance suite. The line above was captured off a MINIMAL 2-node
+  (src/app/domain/graph.py) + Robot acceptance suite. The line above was captured off a MINIMAL 2-node
   illustration (one UserTask + the GotoTask, no Start/End shown), where "last" and "last of the
   two elements shown" were indistinguishable. Against a REAL workflow with a terminal EndEvent,
   appending the GotoTask strictly last — AFTER the EndEvent too — PUTs 400

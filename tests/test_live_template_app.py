@@ -4,20 +4,21 @@ to end — then a real item walks Start -> Manager Approve to completion, comput
 is read back, and teardown archives+deletes the app.
 
 Same conventions as test_live_lifecycle.py: ordered dependent tests sharing a module `ctx`
-fixture whose finalizer ALWAYS attempts teardown; direct in-process calls to kfforge.server's own
+fixture whose finalizer ALWAYS attempts teardown; direct in-process calls to app.infrastructure.mcp.server's own
 tool functions; skipped unless --run-live.
 
 Run with: pytest --run-live tests/test_live_template_app.py -q
 """
+
 from __future__ import annotations
 
 import os
 from typing import Any
 
+import live_helpers
 import pytest
 
-import kfforge.server as srv
-import live_helpers
+import app.infrastructure.mcp.server as srv
 
 pytestmark = pytest.mark.live
 
@@ -29,8 +30,13 @@ def ctx(request: pytest.FixtureRequest) -> dict[str, Any]:
     live_helpers.load_env_file()
     if not os.environ.get("KF_DEV_ACCESS_KEY_ID"):
         pytest.skip("KF_DEV_ACCESS_KEY_ID not set — no .env / live credentials available")
-    state: dict[str, Any] = {"app_id": None, "flow_id": None, "role_id": None, "iid": None,
-                             "doctor_problems": None}
+    state: dict[str, Any] = {
+        "app_id": None,
+        "flow_id": None,
+        "role_id": None,
+        "iid": None,
+        "doctor_problems": None,
+    }
 
     def _cleanup() -> None:
         """Suite Teardown equivalent. Always runs; never raises over an unverified deletion —
@@ -46,8 +52,7 @@ def ctx(request: pytest.FixtureRequest) -> dict[str, Any]:
         if state["role_id"]:
             # An application delete is NOT proven to cascade to its scoped AppRoles — delete the
             # role explicitly so a live run never leaks one into the account.
-            role_del = srv.forge_delete_app_role(role_id=state["role_id"],
-                                                 app_id=state["app_id"])
+            role_del = srv.forge_delete_app_role(role_id=state["role_id"], app_id=state["app_id"])
             print(f"app-role delete: {role_del}")
 
     request.addfinalizer(_cleanup)
@@ -62,7 +67,8 @@ def _field_ids(ctx: dict[str, Any]) -> dict[str, str]:
     )
     assert not draft.get("isError"), f"could not fetch draft to resolve field ids: {draft}"
     return {
-        node["Name"]: node_id for node_id, node in draft.items()
+        node["Name"]: node_id
+        for node_id, node in draft.items()
         if isinstance(node, dict) and node.get("Kind") == "Field" and node.get("Name")
     }
 
@@ -95,16 +101,17 @@ def test_02_doctor_bar_is_differential_no_new_problems_beyond_the_capture(
         pytest.skip("no doctor report captured — step 01 failed")
     import re
 
-    from kfforge.graph import transplant_template
-    from kfforge.verify import doctor
+    from app.application.verify import doctor
+    from app.domain.graph import transplant_template
 
-    bare = {"Root": "M1", "M1": {"Id": "M1", "Kind": "Model", "Name": APP_NAME,
-                                 "FlowType": "Process"}}
-    baseline = doctor(transplant_template(
-        bare, app_role=(ctx["role_id"], f"{APP_NAME} Role")))
+    bare = {
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model", "Name": APP_NAME, "FlowType": "Process"},
+    }
+    baseline = doctor(transplant_template(bare, app_role=(ctx["role_id"], f"{APP_NAME} Role")))
 
     def _normalize(problem: str) -> str:
-        # minted node ids are {Kind}_ + 10 alphanumerics (kfforge.pages._mint)
+        # minted node ids are {Kind}_ + 10 alphanumerics (app.domain.pages._mint)
         return re.sub(r"\b([A-Za-z]+)_[A-Za-z0-9]{10}\b", r"\1_<id>", problem)
 
     baseline_set = {_normalize(p) for p in baseline.problems}
@@ -139,8 +146,8 @@ def test_03_walk_an_item_through_manager_approve_to_completion(ctx: dict[str, An
         pytest.skip("no flow — step 01 failed")
     import time
 
-    from kfforge.client import Err, KfClient, KfConfig, apply_add_role_users
-    from kfforge.dataplane import LiveDataPlane, live_aiid
+    from app.infrastructure.kissflow.client import Err, KfClient, KfConfig, apply_add_role_users
+    from app.infrastructure.kissflow.dataplane import LiveDataPlane, live_aiid
 
     cfg = KfConfig.from_env(app_id_override=ctx["app_id"])
     assert not isinstance(cfg, Err), f"live config: {cfg}"
@@ -149,8 +156,9 @@ def test_03_walk_an_item_through_manager_approve_to_completion(ctx: dict[str, An
 
     draft = client.get_draft("process", ctx["flow_id"])
     assert not isinstance(draft, Err), f"draft read: {draft}"
-    fields = {nid: v for nid, v in draft.items()
-              if isinstance(v, dict) and v.get("Kind") == "Field"}
+    fields = {
+        nid: v for nid, v in draft.items() if isinstance(v, dict) and v.get("Kind") == "Field"
+    }
 
     recs = client.list_dataset_records("Master_Branch")
     assert not isinstance(recs, Err), f"Master_Branch dataset read: {recs}"
@@ -185,8 +193,7 @@ def test_03_walk_an_item_through_manager_approve_to_completion(ctx: dict[str, An
     assert not isinstance(probe_detail, Err), f"probe detail: {probe_detail}"
     caller = (probe_detail.get("_current_assigned_to") or [None])[0]
     assert caller, f"could not discover the calling user from the item assignment: {probe_detail}"
-    granted = apply_add_role_users(client, ctx["role_id"], user_ids=[caller],
-                                   app_id=ctx["app_id"])
+    granted = apply_add_role_users(client, ctx["role_id"], user_ids=[caller], app_id=ctx["app_id"])
     assert not isinstance(granted, Err), f"caller into role: {granted}"
     print(f"caller into role: {granted.as_tool_result()}")
 
@@ -201,8 +208,11 @@ def test_03_walk_an_item_through_manager_approve_to_completion(ctx: dict[str, An
     # Computed fields (Field::Expression) are server-owned: a direct write there reads back None
     # by design (captured live 2026-08-20), so the silent-discard audit covers only the fields a
     # caller genuinely owns.
-    discarded = [fields[k]["Name"] for k in values
-                 if after_fill.get(k) is None and "Field::Expression" not in fields[k]]
+    discarded = [
+        fields[k]["Name"]
+        for k in values
+        if after_fill.get(k) is None and "Field::Expression" not in fields[k]
+    ]
     assert not discarded, f"fill values silently discarded (PUT 200 proves nothing): {discarded}"
 
     sub1 = dp.submit(ctx["flow_id"], iid, hop1_aiid)
@@ -270,6 +280,7 @@ def test_05_duplicate_app_name_fails_loud(ctx: dict[str, Any]) -> None:
 
     listed = srv.forge_list_apps()
     assert not listed.get("isError"), f"list apps: {listed}"
-    same_name = [a for a in listed.get("apps", [])
-                 if isinstance(a, dict) and a.get("Name") == APP_NAME]
+    same_name = [
+        a for a in listed.get("apps", []) if isinstance(a, dict) and a.get("Name") == APP_NAME
+    ]
     assert len(same_name) <= 1, f"a second app with the same name appeared: {same_name}"

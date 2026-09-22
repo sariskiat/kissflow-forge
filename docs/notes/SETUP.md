@@ -35,8 +35,8 @@ If missing:
 - **macOS/Linux:** `curl -LsSf https://astral.sh/uv/install.sh | sh` then reopen the terminal.
 - **Windows:** `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`.
 
-You do NOT need to install Python separately — `uv` handles it. Every command uses
-`uv run --with 'fastmcp==3.4.7' --no-project ...`, which fetches the dependency each run.
+You do NOT need to install Python separately — `uv` handles it. Run `uv sync` once to build
+`.venv` from `uv.lock`; after that every command is a plain `uv run ...` or `make ...`.
 
 ## Step 2 — create the secrets file `.env`  ← **ASK THE HUMAN**
 The server needs 5 secret values. There is a template at `kf.env.example`. Copy it to `.env`
@@ -68,7 +68,7 @@ printf '%s\n' \
  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-| uv run --with 'fastmcp==3.4.7' --no-project python -m kfforge.server 2>/dev/null
+| uv run mcp-server 2>/dev/null
 ```
 Success = a big JSON blob listing tools whose names start with `forge_` and `kf_`.
 (First run is slow — it downloads the dependency once. If it errors, the `.env` values are
@@ -85,7 +85,7 @@ missing — and add a server entry. **Use the real absolute `REPO` path**:
   "mcpServers": {
     "kissflow-forge": {
       "command": "sh",
-      "args": ["-lc", "cd 'REPO' && set -a; . ./.env; set +a; exec uv run --with 'fastmcp==3.4.7' --no-project python -m kfforge.server"]
+      "args": ["-lc", "cd 'REPO' && set -a; . ./.env; set +a; exec uv run mcp-server"]
     }
   }
 }
@@ -96,7 +96,7 @@ object — don't delete what's there. Then **fully quit and reopen Claude Deskto
 ### If you are **Claude Code** (the CLI)
 From `REPO`, run:
 ```bash
-claude mcp add kissflow-forge -- sh -lc "cd '$(pwd)' && set -a; . ./.env; set +a; exec uv run --with 'fastmcp==3.4.7' --no-project python -m kfforge.server"
+claude mcp add kissflow-forge -- sh -lc "cd '$(pwd)' && set -a; . ./.env; set +a; exec uv run mcp-server"
 ```
 Then restart the session (or run `/mcp` and reconnect).
 

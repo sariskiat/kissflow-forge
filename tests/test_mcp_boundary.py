@@ -15,19 +15,24 @@ Four axes:
                           mirrors (the anti-drift guard).
   4. no raises          — no tool escapes as an exception, with well-formed OR malformed args.
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 
 import pytest
 
-import kfforge.server as srv
-from kfforge.client import _SWEEP_SCOPES, _TIER_MAP, FlowKind
-from kfforge.types import FieldType
+import app.infrastructure.mcp.server as srv
+from app.domain.types import FieldType
+from app.infrastructure.kissflow.client import _SWEEP_SCOPES, _TIER_MAP, FlowKind
 
 KF_ENV_VARS = (
-    "KF_DEV_ACCESS_KEY_ID", "KF_DEV_ACCESS_KEY_SECRET", "KF_DEV_ACCOUNT_ID", "KF_DEV_DOMAIN",
+    "KF_DEV_ACCESS_KEY_ID",
+    "KF_DEV_ACCESS_KEY_SECRET",
+    "KF_DEV_ACCOUNT_ID",
+    "KF_DEV_DOMAIN",
     "KF_APP",
 )
 
@@ -56,8 +61,14 @@ MINIMAL_ARGS: dict[str, dict[str, Any]] = {
     "forge_add_table": {"flow_id": "F", "name": "T", "columns": []},
     "forge_compare_to_spec": {"flow_id": "F", "spec": {}},
     "forge_create_list": {"name": "L", "values": []},
-    "forge_add_sequence_number": {"flow_id": "F", "field_name": "N", "section_name": "S",
-                                  "prefix": "P-", "padding": "0001", "step_activity_name": "Start"},
+    "forge_add_sequence_number": {
+        "flow_id": "F",
+        "field_name": "N",
+        "section_name": "S",
+        "prefix": "P-",
+        "padding": "0001",
+        "step_activity_name": "Start",
+    },
     "forge_add_field_validation": {"flow_id": "F", "rules": {}},
     "forge_build_workflow": {"flow_id": "F", "steps": []},
     "forge_add_goto_gate": {"flow_id": "F", "target_activity_name": "A", "field_name": "B"},
@@ -102,7 +113,9 @@ MINIMAL_ARGS: dict[str, dict[str, Any]] = {
 
 
 def _tool_names() -> list[str]:
-    return sorted(n for n in dir(srv) if n.startswith(("kf_", "forge_")) and callable(getattr(srv, n)))
+    return sorted(
+        n for n in dir(srv) if n.startswith(("kf_", "forge_")) and callable(getattr(srv, n))
+    )
 
 
 def _listed() -> list[Any]:
@@ -130,6 +143,7 @@ def test_minimal_args_cover_every_registered_tool() -> None:
 # 1. PROTOCOL isError (M1) — the finding, on the wire
 # =================================================================================================
 
+
 def _call(tool: str, args: dict[str, Any]) -> Any:
     from fastmcp import Client
 
@@ -142,12 +156,24 @@ def _call(tool: str, args: dict[str, Any]) -> Any:
     return asyncio.run(_run())
 
 
-@pytest.mark.parametrize("tool_name", sorted(n for n in MINIMAL_ARGS if n.startswith("forge_")
-                                             and n not in {"forge_capabilities", "forge_playbook",
-                                                           "forge_intake_questions",
-                                                           "forge_update_spec"}))
-def test_a_failing_tool_sets_isError_on_the_PROTOCOL_envelope(tool_name: str,
-                                                              no_kf_env: None) -> None:
+@pytest.mark.parametrize(
+    "tool_name",
+    sorted(
+        n
+        for n in MINIMAL_ARGS
+        if n.startswith("forge_")
+        and n
+        not in {
+            "forge_capabilities",
+            "forge_playbook",
+            "forge_intake_questions",
+            "forge_update_spec",
+        }
+    ),
+)
+def test_a_failing_tool_sets_isError_on_the_PROTOCOL_envelope(
+    tool_name: str, no_kf_env: None
+) -> None:
     """M1: every tool reports failure as a payload dict carrying `isError: true`, but MCP defines
     isError on the result ENVELOPE. Because these tools RETURN rather than raise, the envelope
     flag stayed False and every failure read as a protocol SUCCESS to any gateway, dashboard or
@@ -197,10 +223,12 @@ def test_every_boundary_returns_a_dict_carrying_an_explicit_isError(no_kf_env: N
     (forge_sweep -> run_sweep, forge_capabilities -> search_capabilities), plus forge_playbook and
     forge_delete_flow, now all route through it. Whatever they return must carry the payload key
     the middleware reads, or the promotion above can never fire for them."""
-    for tool, args in (("forge_sweep", {"scope": "apps"}),
-                       ("forge_capabilities", {"query": ""}),
-                       ("forge_playbook", {}),
-                       ("forge_delete_flow", {"kind": "process", "flow_id": "F"})):
+    for tool, args in (
+        ("forge_sweep", {"scope": "apps"}),
+        ("forge_capabilities", {"query": ""}),
+        ("forge_playbook", {}),
+        ("forge_delete_flow", {"kind": "process", "flow_id": "F"}),
+    ):
         got = getattr(srv, tool)(**args)
         assert isinstance(got, dict), f"{tool} returned {type(got).__name__}"
         assert "isError" in got, f"{tool} result has no isError key: {sorted(got)}"
@@ -210,6 +238,7 @@ def test_every_boundary_returns_a_dict_carrying_an_explicit_isError(no_kf_env: N
 # 2. ANNOTATIONS + TITLES (M2)
 # =================================================================================================
 
+
 def test_every_tool_carries_all_four_hints_and_a_title() -> None:
     """M2: zero of the 59 tools carried readOnlyHint/destructiveHint/idempotentHint/openWorldHint,
     despite ~40 live write tools and several that delete whole applications."""
@@ -217,7 +246,7 @@ def test_every_tool_carries_all_four_hints_and_a_title() -> None:
         assert t.title, f"{t.name} has no human-readable title"
         a = t.annotations
         assert a is not None, f"{t.name} has no annotations"
-        for hint in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"):
+        for hint in ("read_only_hint", "destructive_hint", "idempotent_hint", "open_world_hint"):
             assert getattr(a, hint) is not None, f"{t.name} is missing {hint}"
 
 
@@ -236,34 +265,44 @@ def test_read_only_is_never_claimed_by_a_tool_that_writes_something(
     from synthetic import synthetic_process_draft
     from test_client import FakeClient
 
-    writes_files = {"forge_render_flow_diagram", "forge_render_schema_diagram",
-                    "forge_render_mockups", "forge_request_confirmation"}
+    writes_files = {
+        "forge_render_flow_diagram",
+        "forge_render_schema_diagram",
+        "forge_render_mockups",
+        "forge_request_confirmation",
+    }
     by_name = {t.name: t for t in _listed()}
     for name in writes_files:
-        assert by_name[name].annotations.readOnlyHint is False, (
+        assert by_name[name].annotations.read_only_hint is False, (
             f"{name} writes artifact files to disk — it is not read-only, whatever its "
             f"description prefix says"
         )
-        assert by_name[name].annotations.openWorldHint is False, f"{name} touches no tenant"
+        assert by_name[name].annotations.open_world_hint is False, f"{name} touches no tenant"
 
     artifacts: list[str] = []
     monkeypatch.setattr(
-        srv, "_write_artifact",
+        srv,
+        "_write_artifact",
         lambda directory, filename, content: (artifacts.append(filename), str(directory))[1],
     )
     for name, t in sorted(by_name.items()):
-        if not t.annotations.readOnlyHint:
+        if not t.annotations.read_only_hint:
             continue
         fake = FakeClient(synthetic_process_draft())
         monkeypatch.setattr(srv, "_client", lambda app_id=None, require_app=True, f=fake: f)
         artifacts.clear()
-        try:
+        # an error is not a write — only the counters below disprove the claim
+        with contextlib.suppress(Exception):
             getattr(srv, name)(**MINIMAL_ARGS[name])
-        except Exception:
-            pass  # an error is not a write — only the counters below disprove the claim
-        wrote_tenant = (fake.puts or fake.published or fake.member_batches
-                        or fake.report_member_batches or fake.applications
-                        or fake.app_roles or fake.pages)
+        wrote_tenant = (
+            fake.puts
+            or fake.published
+            or fake.member_batches
+            or fake.report_member_batches
+            or fake.applications
+            or fake.app_roles
+            or fake.pages
+        )
         assert not wrote_tenant, f"{name} claims readOnlyHint but wrote the (fake) tenant"
         assert not artifacts, f"{name} claims readOnlyHint but wrote a file: {artifacts}"
 
@@ -273,7 +312,8 @@ def test_destructive_hint_is_set_on_every_tool_that_replaces_or_deletes_state() 
     by_name = {t.name: t for t in _listed()}
     must_be_destructive = {
         # replaces EVERY Permission on the flow
-        "forge_set_visibility", "kf_set_step_visibility",
+        "forge_set_visibility",
+        "kf_set_step_visibility",
         # wipes every Activity/ProcessDef/Resource/Permission
         "forge_build_workflow",
         # REPLACE semantics on the whole item array
@@ -281,24 +321,33 @@ def test_destructive_hint_is_set_on_every_tool_that_replaces_or_deletes_state() 
         # SET semantics: every root field not listed comes back optional
         "forge_set_required",
         # rebuilds every Row in the named sections
-        "forge_apply_layout", "forge_apply_fields",
+        "forge_apply_layout",
+        "forge_apply_fields",
         # replaces every existing event on the named fields
         "forge_set_events",
         # "No access" is a real DELETE .../member/{role_id}
         "forge_grant_tier",
         # deletes, outright
-        "forge_delete_fields", "forge_delete_flow", "forge_delete_app_role",
+        "forge_delete_fields",
+        "forge_delete_flow",
+        "forge_delete_app_role",
         # op="delete" is one of the four
         "forge_dataset_records",
     }
     for name in sorted(must_be_destructive):
-        assert by_name[name].annotations.destructiveHint is True, (
+        assert by_name[name].annotations.destructive_hint is True, (
             f"{name} removes or overwrites existing state but is not marked destructive"
         )
     # ...and the additive ones are not over-flagged
-    for name in ("kf_apply_field_change", "forge_add_table", "forge_add_sequence_number",
-                 "forge_add_field_validation", "forge_add_role_users", "forge_member_batch"):
-        assert by_name[name].annotations.destructiveHint is False, name
+    for name in (
+        "kf_apply_field_change",
+        "forge_add_table",
+        "forge_add_sequence_number",
+        "forge_add_field_validation",
+        "forge_add_role_users",
+        "forge_member_batch",
+    ):
+        assert by_name[name].annotations.destructive_hint is False, name
 
 
 def test_open_world_is_exactly_the_tenant_touching_set(
@@ -309,7 +358,7 @@ def test_open_world_is_exactly_the_tenant_touching_set(
     for a recorder that refuses before any tenant traffic, every tool is CALLED with its minimal
     args, and the hint must match whether the tool actually tried to resolve a client — however
     it reached `_client`, helper or not."""
-    from kfforge.client import Err
+    from app.infrastructure.kissflow.client import Err
 
     resolved: list[str] = []
 
@@ -320,13 +369,12 @@ def test_open_world_is_exactly_the_tenant_touching_set(
     monkeypatch.setattr(srv, "_client", probe)
     for t in _listed():
         resolved.clear()
-        try:
+        # a raise past the probe still tells us whether a client was resolved
+        with contextlib.suppress(Exception):
             getattr(srv, t.name)(**MINIMAL_ARGS[t.name])
-        except Exception:
-            pass  # a raise past the probe still tells us whether a client was resolved
         touches_tenant = bool(resolved)
-        assert t.annotations.openWorldHint is touches_tenant, (
-            f"{t.name}: openWorldHint={t.annotations.openWorldHint} but "
+        assert t.annotations.open_world_hint is touches_tenant, (
+            f"{t.name}: openWorldHint={t.annotations.open_world_hint} but "
             f"{'it resolves a KfClient' if touches_tenant else 'it never touches the tenant'}"
         )
 
@@ -335,16 +383,19 @@ def test_the_four_render_tools_no_longer_advertise_themselves_as_offline_only() 
     """A hint disagreeing with its own description is the same bug in a different place."""
     by_name = {t.name: t for t in _listed()}
     for name in ("forge_render_flow_diagram", "forge_render_mockups"):
-        assert "Written to" in by_name[name].description or "written to" in by_name[name].description
+        assert (
+            "Written to" in by_name[name].description or "written to" in by_name[name].description
+        )
 
 
 # =================================================================================================
 # 3. CLOSED-SET ENUMS (A2)
 # =================================================================================================
 
+
 def _param_schema(tool_name: str, param: str) -> dict[str, Any]:
     t = next(t for t in _listed() if t.name == tool_name)
-    return (t.inputSchema.get("properties") or {})[param]
+    return (t.input_schema.get("properties") or {})[param]
 
 
 def _closed_values(schema: dict[str, Any]) -> list[Any]:
@@ -356,22 +407,29 @@ def _closed_values(schema: dict[str, Any]) -> list[Any]:
     raise AssertionError(f"not a closed set: {schema}")
 
 
-@pytest.mark.parametrize("tool_name, param, expected", [
-    ("kf_get_flow_schema", "flow_kind", ["form", "process", "case", "dataset", "page"]),
-    ("kf_apply_field_change", "flow_kind", ["form", "process", "case", "dataset"]),
-    ("forge_apply_fields", "kind", ["form", "process", "case", "dataset"]),
-    ("kf_publish", "flow_kind", ["form", "process", "case"]),
-    ("forge_publish", "kind", ["form", "process", "case", "page", "application"]),
-    ("forge_delete_flow", "kind",
-     ["form", "process", "case", "list", "dataset", "page", "application"]),
-    ("forge_grant_tier", "kind", ["process", "case"]),
-    ("forge_create_flow", "kind", ["process", "form", "list", "dataset", "case"]),
-    ("forge_dataset_records", "op", ["create", "update", "delete", "list"]),
-    ("forge_sweep", "scope", ["apps", "flows", "pages", "roles", "lists", "all"]),
-    ("forge_approve_spec", "decision", ["approve"]),
-])
-def test_a_closed_vocabulary_reaches_the_schema_as_an_enum(tool_name: str, param: str,
-                                                           expected: list[str]) -> None:
+@pytest.mark.parametrize(
+    "tool_name, param, expected",
+    [
+        ("kf_get_flow_schema", "flow_kind", ["form", "process", "case", "dataset", "page"]),
+        ("kf_apply_field_change", "flow_kind", ["form", "process", "case", "dataset"]),
+        ("forge_apply_fields", "kind", ["form", "process", "case", "dataset"]),
+        ("kf_publish", "flow_kind", ["form", "process", "case"]),
+        ("forge_publish", "kind", ["form", "process", "case", "page", "application"]),
+        (
+            "forge_delete_flow",
+            "kind",
+            ["form", "process", "case", "list", "dataset", "page", "application"],
+        ),
+        ("forge_grant_tier", "kind", ["process", "case"]),
+        ("forge_create_flow", "kind", ["process", "form", "list", "dataset", "case"]),
+        ("forge_dataset_records", "op", ["create", "update", "delete", "list"]),
+        ("forge_sweep", "scope", ["apps", "flows", "pages", "roles", "lists", "all"]),
+        ("forge_approve_spec", "decision", ["approve"]),
+    ],
+)
+def test_a_closed_vocabulary_reaches_the_schema_as_an_enum(
+    tool_name: str, param: str, expected: list[str]
+) -> None:
     """A2: 214 parameters, ZERO enums — and two of these were interpolated UNVALIDATED into live
     API URLs. Every one of them is a set the engine already knew and erased at the boundary."""
     assert _closed_values(_param_schema(tool_name, param)) == expected
@@ -400,7 +458,7 @@ def test_every_kind_shaped_parameter_is_a_closed_set() -> None:
     closed_names = {"kind", "flow_kind", "scope", "op", "tier", "decision"}
     checked = 0
     for t in _listed():
-        for pname, schema in (t.inputSchema.get("properties") or {}).items():
+        for pname, schema in (t.input_schema.get("properties") or {}).items():
             # forge_build_page's `op` is a compiled build_page OBJECT, not a vocabulary — the
             # name collides, the meaning does not. Only string-valued slots are vocabularies.
             if pname not in closed_names or schema.get("type") != "string":
@@ -418,7 +476,9 @@ def test_boundary_enums_match_the_engine_constants_they_mirror() -> None:
     assert set(_closed_values(_param_schema("forge_grant_tier", "tier"))) == {
         tier for by_tier in _TIER_MAP.values() for tier in by_tier
     }
-    assert set(_closed_values(_param_schema("forge_sweep", "scope"))) == set(_SWEEP_SCOPES) | {"all"}
+    assert set(_closed_values(_param_schema("forge_sweep", "scope"))) == set(_SWEEP_SCOPES) | {
+        "all"
+    }
 
 
 def test_kf_list_field_types_still_serves_the_engine_set_it_documents() -> None:
@@ -446,39 +506,46 @@ def test_kf_list_field_types_no_longer_calls_the_engine_set_the_platforms_closed
 # value each, of the shape an agent actually gets wrong (a pair one element short, an object with
 # a missing key), paired with the fragment its refusal MUST name.
 MALFORMED_ARGS: dict[str, tuple[dict[str, Any], str]] = {
-    "kf_plan_field_change": ({"draft": {}, "changes": [{"name": "x"}]},
-                             "changes[0]['type']"),
-    "kf_apply_field_change": ({"flow_kind": "process", "flow_id": "F",
-                               "changes": [{"name": "x", "type": "Wat"}]},
-                              "changes[0]['type']"),
-    "kf_create_process": ({"name": "N", "steps": [], "fields": [{"type": "Text"}]},
-                          "fields[0]['name']"),
-    "forge_apply_fields": ({"flow_id": "F", "fields": [{"name": "a", "type": "Nope"}]},
-                           "fields[0]['type']"),
-    "forge_apply_layout": ({"flow_id": "F", "layout": {"S": [[["a", 0]]]}},
-                           "layout['S'][0][0]"),
-    "forge_add_table": ({"flow_id": "F", "name": "T", "columns": [["only-a-name"]]},
-                        "columns[0]"),
-    "forge_add_field_validation": ({"flow_id": "F", "rules": {"a": [["CONTAINS"]]}},
-                                   "rules['a'][0]"),
-    "forge_build_workflow": ({"flow_id": "F", "steps": [["Approve"]]},
-                             "steps[0]"),
-    "forge_set_events": ({"flow_id": "F", "events": {"a": [["onChange"]]}},
-                         "events['a'][0]"),
-    "forge_build_page": ({"app_id": "A", "page_id": "P", "steps": [{"kwargs": {}}]},
-                         "steps[0]['kind']"),
-    "forge_simulate_case": ({"flow_id": "F", "steps": [{"values": {}}]},
-                            "steps[0]['name']"),
+    "kf_plan_field_change": ({"draft": {}, "changes": [{"name": "x"}]}, "changes[0]['type']"),
+    "kf_apply_field_change": (
+        {"flow_kind": "process", "flow_id": "F", "changes": [{"name": "x", "type": "Wat"}]},
+        "changes[0]['type']",
+    ),
+    "kf_create_process": (
+        {"name": "N", "steps": [], "fields": [{"type": "Text"}]},
+        "fields[0]['name']",
+    ),
+    "forge_apply_fields": (
+        {"flow_id": "F", "fields": [{"name": "a", "type": "Nope"}]},
+        "fields[0]['type']",
+    ),
+    "forge_apply_layout": ({"flow_id": "F", "layout": {"S": [[["a", 0]]]}}, "layout['S'][0][0]"),
+    "forge_add_table": ({"flow_id": "F", "name": "T", "columns": [["only-a-name"]]}, "columns[0]"),
+    "forge_add_field_validation": (
+        {"flow_id": "F", "rules": {"a": [["CONTAINS"]]}},
+        "rules['a'][0]",
+    ),
+    "forge_build_workflow": ({"flow_id": "F", "steps": [["Approve"]]}, "steps[0]"),
+    "forge_set_events": ({"flow_id": "F", "events": {"a": [["onChange"]]}}, "events['a'][0]"),
+    "forge_build_page": (
+        {"app_id": "A", "page_id": "P", "steps": [{"kwargs": {}}]},
+        "steps[0]['kind']",
+    ),
+    "forge_simulate_case": ({"flow_id": "F", "steps": [{"values": {}}]}, "steps[0]['name']"),
 }
 
 # The one parameter with a nested list-of-lists inside an object.
-MALFORMED_PARALLEL = {"flow_id": "F", "steps": [["Approve", None]],
-                      "parallel": {"branches": [["B", [["S", None]]]]}}  # no 'name'
+MALFORMED_PARALLEL = {
+    "flow_id": "F",
+    "steps": [["Approve", None]],
+    "parallel": {"branches": [["B", [["S", None]]]]},
+}  # no 'name'
 
 
 @pytest.mark.parametrize("tool_name", sorted(MALFORMED_ARGS))
-def test_a_malformed_nested_arg_returns_data_not_a_traceback(tool_name: str,
-                                                             fake_kf_env: None) -> None:
+def test_a_malformed_nested_arg_returns_data_not_a_traceback(
+    tool_name: str, fake_kf_env: None
+) -> None:
     """A1 / doctrine 7. Every one of these destructured a nested parameter with no shape check, so
     the single most likely agent mistake produced a bare Python traceback instead of structured
     data. `fake_kf_env` puts a well-formed (fake) dev config in place on purpose: without it the
@@ -493,8 +560,9 @@ def test_a_malformed_nested_arg_returns_data_not_a_traceback(tool_name: str,
 
 
 @pytest.mark.parametrize("tool_name", sorted(MALFORMED_ARGS))
-def test_the_refusal_names_the_parameter_and_shows_a_correct_example(tool_name: str,
-                                                                     fake_kf_env: None) -> None:
+def test_the_refusal_names_the_parameter_and_shows_a_correct_example(
+    tool_name: str, fake_kf_env: None
+) -> None:
     """A refusal that does not say WHICH argument was wrong, what arrived, and what right looks
     like is just a nicer traceback."""
     args, wanted = MALFORMED_ARGS[tool_name]
@@ -504,7 +572,8 @@ def test_the_refusal_names_the_parameter_and_shows_a_correct_example(tool_name: 
 
 
 def test_a_parallel_block_with_no_name_is_refused_by_name(fake_kf_env: None) -> None:
-    got = srv.forge_build_workflow(**MALFORMED_PARALLEL)
+    # MALFORMED_PARALLEL is malformed BY NAME — splatting it is how the refusal gets exercised.
+    got = srv.forge_build_workflow(**MALFORMED_PARALLEL)  # ty: ignore[invalid-argument-type]
     assert got.get("isError") is True
     assert "parallel['name']" in got["error"], got
 
@@ -523,8 +592,9 @@ def test_the_two_plan_tools_no_longer_raise_before_any_gate(no_kf_env: None) -> 
 
 
 @pytest.mark.parametrize("tool_name", sorted(MINIMAL_ARGS))
-def test_no_tool_escapes_as_an_exception_with_no_credentials(tool_name: str,
-                                                             no_kf_env: None) -> None:
+def test_no_tool_escapes_as_an_exception_with_no_credentials(
+    tool_name: str, no_kf_env: None
+) -> None:
     """The blanket net: every tool on the surface, called with well-typed args and no config,
     returns rather than raises."""
     got = getattr(srv, tool_name)(**MINIMAL_ARGS[tool_name])
@@ -532,8 +602,9 @@ def test_no_tool_escapes_as_an_exception_with_no_credentials(tool_name: str,
 
 
 @pytest.mark.parametrize("tool_name", sorted(MINIMAL_ARGS))
-def test_no_tool_escapes_as_an_exception_with_malformed_args(tool_name: str,
-                                                             no_kf_env: None) -> None:
+def test_no_tool_escapes_as_an_exception_with_malformed_args(
+    tool_name: str, no_kf_env: None
+) -> None:
     """The same net, with garbage in every slot the schema types loosely. Offline (no config), so
     a tool that survives its own shape check simply stops at the config gate — either way nothing
     leaves this boundary as an exception."""
@@ -550,8 +621,9 @@ def test_no_tool_escapes_as_an_exception_with_malformed_args(tool_name: str,
 
 
 @pytest.mark.parametrize("tool_name", sorted(MALFORMED_ARGS))
-def test_a_malformed_arg_is_an_error_on_the_protocol_envelope_too(tool_name: str,
-                                                                  fake_kf_env: None) -> None:
+def test_a_malformed_arg_is_an_error_on_the_protocol_envelope_too(
+    tool_name: str, fake_kf_env: None
+) -> None:
     """The two fixes meet: a shape refusal is structured DATA (A1) AND a protocol error (M1)."""
     result = _call(tool_name, MALFORMED_ARGS[tool_name][0])
     assert result.is_error is True, result.structured_content
@@ -573,6 +645,7 @@ def fake_kf_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 # ---- D3: a DIAGNOSIS is not a failed call ------------------------------------------------------
 
+
 def test_a_health_verdict_is_not_promoted_to_a_protocol_error(monkeypatch) -> None:
     """Driven END TO END through the real middleware, because that is where the bug lived.
 
@@ -584,16 +657,22 @@ def test_a_health_verdict_is_not_promoted_to_a_protocol_error(monkeypatch) -> No
     diagnosis the caller asked for.
     """
     import asyncio
-    import kfforge.server as srv
+
+    import app.infrastructure.mcp.server as srv
 
     draft = {
-        "Root": "M1", "M1": {"Id": "M1", "Kind": "Model"},
+        "Root": "M1",
+        "M1": {"Id": "M1", "Kind": "Model"},
         "A1": {"Id": "A1", "Kind": "Activity", "Name": "S1"},
         "R1": {"Id": "R1", "Kind": "Row", "Row::Column": ["C_a"]},
-        "S1": {"Id": "S1", "Kind": "Column", "Type": "Section", "Name": "Ghost",
-               "Column::Row": ["R1"]},
-        "C_a": {"Id": "C_a", "Kind": "Column", "Type": "Field", "Name": "F",
-                "Start": 0, "End": 2},
+        "S1": {
+            "Id": "S1",
+            "Kind": "Column",
+            "Type": "Section",
+            "Name": "Ghost",
+            "Column::Row": ["R1"],
+        },
+        "C_a": {"Id": "C_a", "Kind": "Column", "Type": "Field", "Name": "F", "Start": 0, "End": 2},
     }
 
     class _Fake:
@@ -619,13 +698,14 @@ def test_a_health_verdict_is_not_promoted_to_a_protocol_error(monkeypatch) -> No
 def test_a_real_failure_is_still_promoted_end_to_end(monkeypatch) -> None:
     """The control: the M1 fix must survive the D3 carve-out."""
     import asyncio
-    import kfforge.server as srv
-    from kfforge.client import Err
 
-    monkeypatch.setattr(srv, "_client",
-                        lambda app_id=None, require_app=True: Err("config", "missing env var"))
-    result = asyncio.run(srv.mcp.call_tool("kf_publish",
-                                           {"flow_kind": "process", "flow_id": "X"}))
+    import app.infrastructure.mcp.server as srv
+    from app.infrastructure.kissflow.client import Err
+
+    monkeypatch.setattr(
+        srv, "_client", lambda app_id=None, require_app=True: Err("config", "missing env var")
+    )
+    result = asyncio.run(srv.mcp.call_tool("kf_publish", {"flow_kind": "process", "flow_id": "X"}))
     payload = result.structured_content or {}
     assert payload["isError"] is True and "error" in payload
     assert result.is_error is True, "a genuine failure must still reach the envelope"
@@ -667,7 +747,7 @@ def test_delete_anything_really_routes_a_list_and_a_dataset(monkeypatch) -> None
     """Not just the schema: the engine path behind the widened enum, exercised offline. A `list`
     and a `dataset` take the generic /flow/2/{acct}/{kind}/{id} branch and are verified by
     re-listing that kind — never archived first (only a process needs that)."""
-    from kfforge.client import delete_anything
+    from app.infrastructure.kissflow.client import delete_anything
 
     class _Fake:
         def __init__(self) -> None:
@@ -684,9 +764,16 @@ def test_delete_anything_really_routes_a_list_and_a_dataset(monkeypatch) -> None
 
     for kind in ("list", "dataset"):
         c = _Fake()
-        got = delete_anything(c, kind, "F1")
-        assert got == {"kind": kind, "id": "F1", "deleted": True, "verified": True,
-                       "isError": False}, got
+        # `_Fake` is a structural double: delete_anything reaches across page/application/flow
+        # families, and the double implements exactly the slice each kind touches.
+        got = delete_anything(c, kind, "F1")  # ty: ignore[invalid-argument-type]
+        assert got == {
+            "kind": kind,
+            "id": "F1",
+            "deleted": True,
+            "verified": True,
+            "isError": False,
+        }, got
         assert c.deleted == [(kind, "F1", True)] and c.listed == [kind]
 
 
@@ -696,9 +783,11 @@ def test_a_dataform_draft_is_still_readable_and_field_writable() -> None:
     coverage row that proves it ("the engine's `apply_fields` runs unmodified with
     kind='dataset'"). `list` is NOT admitted anywhere — a word list has no draft graph, and
     doctrine 10 says no capture means refuse, not guess."""
-    for tool, param in (("kf_get_flow_schema", "flow_kind"),
-                        ("kf_apply_field_change", "flow_kind"),
-                        ("forge_apply_fields", "kind")):
+    for tool, param in (
+        ("kf_get_flow_schema", "flow_kind"),
+        ("kf_apply_field_change", "flow_kind"),
+        ("forge_apply_fields", "kind"),
+    ):
         values = set(_closed_values(_param_schema(tool, param)))
         assert "dataset" in values, f"{tool}.{param} lost the dataform"
         assert "list" not in values, f"{tool}.{param} admits a kind with no captured draft graph"
@@ -710,9 +799,9 @@ def test_the_widened_sets_are_still_closed_and_still_reject_junk() -> None:
 
     async def _run() -> Any:
         async with Client(srv.mcp) as client:
-            return await client.call_tool("forge_delete_flow",
-                                          {"kind": "spreadsheet", "flow_id": "F"},
-                                          raise_on_error=False)
+            return await client.call_tool(
+                "forge_delete_flow", {"kind": "spreadsheet", "flow_id": "F"}, raise_on_error=False
+            )
 
     result = asyncio.run(_run())
     assert result.is_error is True
@@ -733,13 +822,14 @@ def test_force_regrant_groups_is_forwarded_through_the_tool_boundary(
     monkeypatch.setattr(srv, "_client", lambda app_id=None, require_app=True: fake)
 
     refused = srv.forge_add_role_users(
-        role_id="R1", groups=[everyone], confirm_group_notification=True)
+        role_id="R1", groups=[everyone], confirm_group_notification=True
+    )
     assert refused["groups_refused"] == ["everyone"]
     assert fake.body is None, "the refused grant must not write"
 
     forced = srv.forge_add_role_users(
-        role_id="R1", groups=[everyone], confirm_group_notification=True,
-        force_regrant_groups=True)
+        role_id="R1", groups=[everyone], confirm_group_notification=True, force_regrant_groups=True
+    )
     assert forced["groups_refused"] == []
     assert fake.body is not None and fake.body.get("Groups"), (
         "force_regrant_groups=True from the tool boundary must reach the client layer "

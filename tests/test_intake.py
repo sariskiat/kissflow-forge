@@ -1,4 +1,4 @@
-"""Spec for kfforge.intake — the input spec (schema.py), the grilling script (questions.py), and
+"""Spec for app.application.intake — the input spec (schema.py), the grilling script (questions.py), and
 the spec-to-plan compiler (compile.py).
 
 Offline, synthetic AppSpec only — no network, no live Kissflow calls. The fixture specs below use
@@ -6,15 +6,16 @@ a neutral, fictional business domain, never the real app this engine was extract
 (CLAUDE.md BLINDNESS discipline): no real-app field/option/role/page names or vocabulary anywhere
 in this file.
 """
+
 from __future__ import annotations
 
 import dataclasses
 
 import pytest
 
-from kfforge.intake.compile import OP_ORDER, BuildPlan, Op, compile_spec
-from kfforge.intake.questions import QUESTIONS, Question, next_questions
-from kfforge.intake.schema import (
+from app.application.intake.compile import OP_ORDER, BuildPlan, Op, compile_spec
+from app.application.intake.questions import QUESTIONS, Question, next_questions
+from app.application.intake.schema import (
     ADVISORY_DIMENSIONS,
     DIMENSION_NAMES,
     START_STAGE,
@@ -53,9 +54,10 @@ from kfforge.intake.schema import (
     VisibilityMatrix,
     WidgetIntent,
 )
-from kfforge.types import FieldType, Visibility
+from app.domain.types import FieldType, Visibility
 
 # ---- the synthetic fixtures ------------------------------------------------------------------
+
 
 def _full_spec(*, approved: bool = True) -> AppSpec:
     """A fully-populated AppSpec for a neutral domain: a small equipment repair shop tracking a
@@ -70,66 +72,130 @@ def _full_spec(*, approved: bool = True) -> AppSpec:
         problem_goal=ProblemGoal(
             pain="technicians and customers cannot see which repair job is stuck or with whom",
             goal="every repair job is trackable from intake to return, with a clear owner at "
-                 "each step",
+            "each step",
             done_definition="the unit is repaired or declared unrepairable, and the customer "
-                             "has been notified",
+            "has been notified",
             terminal_states=("Completed", "Cancelled"),
             result_values=("Repaired", "Beyond repair", "Cancelled by customer"),
         ),
-        roles=Roles(roles=(
-            RoleSpec("Front Desk", is_admin=False, members_hint="2 front-desk staff"),
-            RoleSpec("Technician", is_admin=False, members_hint="5 technicians"),
-            RoleSpec("Service Manager", is_admin=True, members_hint="1 manager"),
-        )),
-        stages=Stages(stages=(
-            StageSpec("Intake", "Front Desk", "log the unit and customer details",
-                      "customer drops off a unit", "unit logged with a case number"),
-            StageSpec("Diagnose", "Technician", "assess whether the unit is repairable",
-                      "unit logged", "repairable decision recorded"),
-            StageSpec("Repair", "Technician", "perform the repair",
-                      "marked repairable", "repair work finished"),
-            StageSpec("Quality Check", "Service Manager", "verify the repair meets standard",
-                      "repair marked finished", "quality check passed"),
-            StageSpec("Return to Customer", "Front Desk", "notify customer and close the job",
-                      "quality check passed, or unit deemed unrepairable",
-                      "customer notified and job closed"),
-        )),
-        routing=Routing(points=(
-            DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
-                          route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
-        )),
-        rework_loops=ReworkLoops(loops=(
-            LoopSpec(from_stage="Quality Check", to_stage="Repair", gate_field="Quality Passed",
-                     max_rounds=3),
-        )),
+        roles=Roles(
+            roles=(
+                RoleSpec("Front Desk", is_admin=False, members_hint="2 front-desk staff"),
+                RoleSpec("Technician", is_admin=False, members_hint="5 technicians"),
+                RoleSpec("Service Manager", is_admin=True, members_hint="1 manager"),
+            )
+        ),
+        stages=Stages(
+            stages=(
+                StageSpec(
+                    "Intake",
+                    "Front Desk",
+                    "log the unit and customer details",
+                    "customer drops off a unit",
+                    "unit logged with a case number",
+                ),
+                StageSpec(
+                    "Diagnose",
+                    "Technician",
+                    "assess whether the unit is repairable",
+                    "unit logged",
+                    "repairable decision recorded",
+                ),
+                StageSpec(
+                    "Repair",
+                    "Technician",
+                    "perform the repair",
+                    "marked repairable",
+                    "repair work finished",
+                ),
+                StageSpec(
+                    "Quality Check",
+                    "Service Manager",
+                    "verify the repair meets standard",
+                    "repair marked finished",
+                    "quality check passed",
+                ),
+                StageSpec(
+                    "Return to Customer",
+                    "Front Desk",
+                    "notify customer and close the job",
+                    "quality check passed, or unit deemed unrepairable",
+                    "customer notified and job closed",
+                ),
+            )
+        ),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose",
+                    field_name="Repairable",
+                    options=("Yes", "No"),
+                    route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",))),
+                ),
+            )
+        ),
+        rework_loops=ReworkLoops(
+            loops=(
+                LoopSpec(
+                    from_stage="Quality Check",
+                    to_stage="Repair",
+                    gate_field="Quality Passed",
+                    max_rounds=3,
+                ),
+            )
+        ),
         data_model=DataModel(
             fields=(
                 FieldReq("Unit Name", FieldType.TEXT, True, "Intake", section="Intake Basics"),
-                FieldReq("Customer Name", FieldType.TEXT, True, "Intake",
-                         section="Intake Basics"),
-                FieldReq("Urgency", FieldType.SELECT, True, "Intake", list_name="Urgency Levels",
-                         section="Intake Priority"),
+                FieldReq("Customer Name", FieldType.TEXT, True, "Intake", section="Intake Basics"),
+                FieldReq(
+                    "Urgency",
+                    FieldType.SELECT,
+                    True,
+                    "Intake",
+                    list_name="Urgency Levels",
+                    section="Intake Priority",
+                ),
                 FieldReq("Repairable", FieldType.SELECT, True, "Diagnose", list_name="Yes No"),
-                FieldReq("Diagnosis Notes", FieldType.TEXTAREA, False, "Diagnose",
-                         options=(("AllowFormatting", "true"),)),
+                FieldReq(
+                    "Diagnosis Notes",
+                    FieldType.TEXTAREA,
+                    False,
+                    "Diagnose",
+                    options=(("AllowFormatting", "true"),),
+                ),
                 FieldReq("Quality Passed", FieldType.BOOLEAN, False, "Quality Check"),
-                FieldReq("Repair Cost", FieldType.NUMBER, False, "Repair",
-                         options=(("Decimalpoint", "2"),)),
+                FieldReq(
+                    "Repair Cost",
+                    FieldType.NUMBER,
+                    False,
+                    "Repair",
+                    options=(("Decimalpoint", "2"),),
+                ),
                 # the computed field's real TARGET — an earlier round of this fixture wired an
                 # event onto a field name that was never declared anywhere; this is that bug,
                 # fixed (see test_computed_source_resolves_against_table_columns).
                 FieldReq("Total Parts Cost", FieldType.NUMBER, False, "Repair"),
             ),
             tables=(
-                TableReq("Parts Used", "Repair", (
-                    TableColumnReq("Part Name", FieldType.TEXT, True),
-                    TableColumnReq("Quantity", FieldType.NUMBER, True),
-                    TableColumnReq("Unit Cost", FieldType.NUMBER, True),
-                ), max_rows=20),
+                TableReq(
+                    "Parts Used",
+                    "Repair",
+                    (
+                        TableColumnReq("Part Name", FieldType.TEXT, True),
+                        TableColumnReq("Quantity", FieldType.NUMBER, True),
+                        TableColumnReq("Unit Cost", FieldType.NUMBER, True),
+                    ),
+                    max_rows=20,
+                ),
             ),
             computed=(
-                ComputedReq("Total Parts Cost", ("Quantity", "Unit Cost"), None,
-                            "quantity times unit cost, summed across every row"),
+                ComputedReq(
+                    "Total Parts Cost",
+                    ("Quantity", "Unit Cost"),
+                    None,
+                    "quantity times unit cost, summed across every row",
+                ),
             ),
             # two DISTINCT sections at the SAME stage — the exact shape a forced
             # section-equals-stage schema could never express.
@@ -139,110 +205,166 @@ def _full_spec(*, approved: bool = True) -> AppSpec:
             ),
             sequence=SequenceReq("RPR", "0001"),
         ),
-        master_data=MasterData(lists=(
-            ListSpec("Urgency Levels", ("High", "Medium", "Low"), "Service Manager"),
-            ListSpec("Yes No", ("Yes", "No"), "Service Manager"),
-        )),
-        visibility=VisibilityMatrix(entries=(
-            VisibilityEntry("Intake Basics", START_STAGE, Visibility.EDITABLE),
-            VisibilityEntry("Intake Basics", "Intake", Visibility.EDITABLE),
-            VisibilityEntry("Intake Priority", "Intake", Visibility.EDITABLE),
-            VisibilityEntry("Intake Basics", "Diagnose", Visibility.READONLY),
-            VisibilityEntry("Diagnose", "Diagnose", Visibility.EDITABLE),
-            VisibilityEntry("Parts Used", "Repair", Visibility.EDITABLE),
-            VisibilityEntry("Parts Used", "Quality Check", Visibility.READONLY),
-            VisibilityEntry("Quality Check", "Quality Check", Visibility.EDITABLE),
-            # a field-level override: at Quality Check, only Repair Cost (inside the "Repair"
-            # section, being reviewed) is locked read-only — the rest of that section is not
-            # otherwise mentioned at this stage, so this is a targeted, single-field rule.
-            VisibilityEntry("Repair", "Quality Check", Visibility.READONLY, field="Repair Cost"),
-        )),
+        master_data=MasterData(
+            lists=(
+                ListSpec("Urgency Levels", ("High", "Medium", "Low"), "Service Manager"),
+                ListSpec("Yes No", ("Yes", "No"), "Service Manager"),
+            )
+        ),
+        visibility=VisibilityMatrix(
+            entries=(
+                VisibilityEntry("Intake Basics", START_STAGE, Visibility.EDITABLE),
+                VisibilityEntry("Intake Basics", "Intake", Visibility.EDITABLE),
+                VisibilityEntry("Intake Priority", "Intake", Visibility.EDITABLE),
+                VisibilityEntry("Intake Basics", "Diagnose", Visibility.READONLY),
+                VisibilityEntry("Diagnose", "Diagnose", Visibility.EDITABLE),
+                VisibilityEntry("Parts Used", "Repair", Visibility.EDITABLE),
+                VisibilityEntry("Parts Used", "Quality Check", Visibility.READONLY),
+                VisibilityEntry("Quality Check", "Quality Check", Visibility.EDITABLE),
+                # a field-level override: at Quality Check, only Repair Cost (inside the "Repair"
+                # section, being reviewed) is locked read-only — the rest of that section is not
+                # otherwise mentioned at this stage, so this is a targeted, single-field rule.
+                VisibilityEntry(
+                    "Repair", "Quality Check", Visibility.READONLY, field="Repair Cost"
+                ),
+            )
+        ),
         timing=Timing(
             sla_notes="Diagnose must finish within 1 business day of intake",
             batch_days=("Friday",),
             reminders=("remind the technician if a job sits over 3 days",),
         ),
-        personas=Personas(views=(
-            PersonaView(
-                "Service Manager",
-                pages=(PageIntent("Manager Dashboard", (
-                    WidgetIntent("metrics", config=(("flow_type", "process"),
-                                                     ("flow_id", "RepairJobs"))),
-                    WidgetIntent("view/table", config=(("flow_type", "process"),
-                                                        ("flow_id", "RepairJobs"),
-                                                        ("view_id", "myitems"))),
-                )),),
-                kpis=("open jobs", "overdue jobs"),
-                actions=("reassign job", "approve quality check"),
-            ),
-            PersonaView(
-                "Technician",
-                pages=(PageIntent("My Jobs", (
-                    WidgetIntent("view/table", config=(("flow_type", "process"),
-                                                        ("flow_id", "RepairJobs"),
-                                                        ("view_id", "assigned"))),
-                )),),
-                kpis=("jobs assigned to me",),
-                actions=("submit diagnosis", "mark repaired"),
-            ),
-            PersonaView(
-                "Front Desk",
-                # deliberately the SAME page name as Service Manager, to exercise dedup + kpi/
-                # action/WIDGET aggregation across roles (F6): "general/label" appears ONLY here,
-                # never on Service Manager's copy of this page, so a passing
-                # test_build_page_aggregates_widgets_across_roles_not_just_first proves it isn't
-                # silently dropped just because Service Manager's PageIntent is the one
-                # _unique_pages happens to keep for page-identity purposes.
-                pages=(PageIntent("Manager Dashboard", (
-                    WidgetIntent("metrics", config=(("flow_type", "process"),
-                                                     ("flow_id", "RepairJobs"))),
-                    WidgetIntent("view/table", config=(("flow_type", "process"),
-                                                        ("flow_id", "RepairJobs"),
-                                                        ("view_id", "myitems"))),
-                    WidgetIntent("general/label"),
-                )),),
-                kpis=("jobs awaiting pickup",),
-                actions=("log new unit", "notify customer"),
-            ),
-        )),
-        test_cases=TestCases(cases=(
-            CaseWalk(
-                "Straightforward repair",
-                fills=(
-                    StepFill("Intake", (("Unit Name", "Printer"), ("Urgency", "Medium"))),
-                    StepFill("Diagnose", (("Repairable", "Yes"),)),
-                    StepFill("Quality Check", (("Quality Passed", "true"),)),
+        personas=Personas(
+            views=(
+                PersonaView(
+                    "Service Manager",
+                    pages=(
+                        PageIntent(
+                            "Manager Dashboard",
+                            (
+                                WidgetIntent(
+                                    "metrics",
+                                    config=(("flow_type", "process"), ("flow_id", "RepairJobs")),
+                                ),
+                                WidgetIntent(
+                                    "view/table",
+                                    config=(
+                                        ("flow_type", "process"),
+                                        ("flow_id", "RepairJobs"),
+                                        ("view_id", "myitems"),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    kpis=("open jobs", "overdue jobs"),
+                    actions=("reassign job", "approve quality check"),
                 ),
-                expected_path=("Intake", "Diagnose", "Repair", "Quality Check",
-                               "Return to Customer"),
-                expected_result="Repaired",
-            ),
-            CaseWalk(
-                "Beyond repair",
-                fills=(
-                    StepFill("Intake", (("Unit Name", "Old Fax Machine"), ("Urgency", "Low"))),
-                    StepFill("Diagnose", (("Repairable", "No"),)),
+                PersonaView(
+                    "Technician",
+                    pages=(
+                        PageIntent(
+                            "My Jobs",
+                            (
+                                WidgetIntent(
+                                    "view/table",
+                                    config=(
+                                        ("flow_type", "process"),
+                                        ("flow_id", "RepairJobs"),
+                                        ("view_id", "assigned"),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    kpis=("jobs assigned to me",),
+                    actions=("submit diagnosis", "mark repaired"),
                 ),
-                expected_path=("Intake", "Diagnose", "Return to Customer"),
-                expected_result="Beyond repair",
-            ),
-            CaseWalk(
-                # proves the exact expressiveness M11 demanded: the SAME stage visited twice
-                # with DIFFERENT values, so a rework-loop case can tick its Boolean gate false
-                # the first time and true the second — see
-                # test_looped_case_can_tick_gate_differently_per_visit
-                "Rework then pass",
-                fills=(
-                    StepFill("Intake", (("Unit Name", "Blender"), ("Urgency", "High"))),
-                    StepFill("Diagnose", (("Repairable", "Yes"),)),
-                    StepFill("Quality Check", (("Quality Passed", "false"),)),
-                    StepFill("Quality Check", (("Quality Passed", "true"),)),
+                PersonaView(
+                    "Front Desk",
+                    # deliberately the SAME page name as Service Manager, to exercise dedup + kpi/
+                    # action/WIDGET aggregation across roles (F6): "general/label" appears ONLY here,
+                    # never on Service Manager's copy of this page, so a passing
+                    # test_build_page_aggregates_widgets_across_roles_not_just_first proves it isn't
+                    # silently dropped just because Service Manager's PageIntent is the one
+                    # _unique_pages happens to keep for page-identity purposes.
+                    pages=(
+                        PageIntent(
+                            "Manager Dashboard",
+                            (
+                                WidgetIntent(
+                                    "metrics",
+                                    config=(("flow_type", "process"), ("flow_id", "RepairJobs")),
+                                ),
+                                WidgetIntent(
+                                    "view/table",
+                                    config=(
+                                        ("flow_type", "process"),
+                                        ("flow_id", "RepairJobs"),
+                                        ("view_id", "myitems"),
+                                    ),
+                                ),
+                                WidgetIntent("general/label"),
+                            ),
+                        ),
+                    ),
+                    kpis=("jobs awaiting pickup",),
+                    actions=("log new unit", "notify customer"),
                 ),
-                expected_path=("Intake", "Diagnose", "Repair", "Quality Check", "Repair",
-                               "Quality Check", "Return to Customer"),
-                expected_result="Repaired",
-            ),
-        )),
+            )
+        ),
+        test_cases=TestCases(
+            cases=(
+                CaseWalk(
+                    "Straightforward repair",
+                    fills=(
+                        StepFill("Intake", (("Unit Name", "Printer"), ("Urgency", "Medium"))),
+                        StepFill("Diagnose", (("Repairable", "Yes"),)),
+                        StepFill("Quality Check", (("Quality Passed", "true"),)),
+                    ),
+                    expected_path=(
+                        "Intake",
+                        "Diagnose",
+                        "Repair",
+                        "Quality Check",
+                        "Return to Customer",
+                    ),
+                    expected_result="Repaired",
+                ),
+                CaseWalk(
+                    "Beyond repair",
+                    fills=(
+                        StepFill("Intake", (("Unit Name", "Old Fax Machine"), ("Urgency", "Low"))),
+                        StepFill("Diagnose", (("Repairable", "No"),)),
+                    ),
+                    expected_path=("Intake", "Diagnose", "Return to Customer"),
+                    expected_result="Beyond repair",
+                ),
+                CaseWalk(
+                    # proves the exact expressiveness M11 demanded: the SAME stage visited twice
+                    # with DIFFERENT values, so a rework-loop case can tick its Boolean gate false
+                    # the first time and true the second — see
+                    # test_looped_case_can_tick_gate_differently_per_visit
+                    "Rework then pass",
+                    fills=(
+                        StepFill("Intake", (("Unit Name", "Blender"), ("Urgency", "High"))),
+                        StepFill("Diagnose", (("Repairable", "Yes"),)),
+                        StepFill("Quality Check", (("Quality Passed", "false"),)),
+                        StepFill("Quality Check", (("Quality Passed", "true"),)),
+                    ),
+                    expected_path=(
+                        "Intake",
+                        "Diagnose",
+                        "Repair",
+                        "Quality Check",
+                        "Repair",
+                        "Quality Check",
+                        "Return to Customer",
+                    ),
+                    expected_result="Repaired",
+                ),
+            )
+        ),
         approved=approved,
     )
 
@@ -263,16 +385,30 @@ def _linear_spec(*, approved: bool = True) -> AppSpec:
             terminal_states=("Done",),
             result_values=("Resolved",),
         ),
-        roles=Roles(roles=(
-            RoleSpec("Front Desk", is_admin=False),
-            RoleSpec("Manager", is_admin=True),
-        )),
-        stages=Stages(stages=(
-            StageSpec("Log Ticket", "Front Desk", "record the request", "a request comes in",
-                      "ticket logged"),
-            StageSpec("Handle Ticket", "Manager", "resolve the request", "ticket logged",
-                      "request resolved"),
-        )),
+        roles=Roles(
+            roles=(
+                RoleSpec("Front Desk", is_admin=False),
+                RoleSpec("Manager", is_admin=True),
+            )
+        ),
+        stages=Stages(
+            stages=(
+                StageSpec(
+                    "Log Ticket",
+                    "Front Desk",
+                    "record the request",
+                    "a request comes in",
+                    "ticket logged",
+                ),
+                StageSpec(
+                    "Handle Ticket",
+                    "Manager",
+                    "resolve the request",
+                    "ticket logged",
+                    "request resolved",
+                ),
+            )
+        ),
         routing=Routing(points=(), confirmed_none=True),
         rework_loops=ReworkLoops(loops=(), confirmed_none=True),
         data_model=DataModel(
@@ -281,22 +417,35 @@ def _linear_spec(*, approved: bool = True) -> AppSpec:
             computed=(),
         ),
         master_data=MasterData(lists=(), confirmed_none=True),
-        visibility=VisibilityMatrix(entries=(
-            VisibilityEntry("Log Ticket", START_STAGE, Visibility.EDITABLE),
-            VisibilityEntry("Log Ticket", "Log Ticket", Visibility.EDITABLE),
-            VisibilityEntry("Log Ticket", "Handle Ticket", Visibility.READONLY),
-            VisibilityEntry("Handle Ticket", "Handle Ticket", Visibility.EDITABLE),
-        )),
+        visibility=VisibilityMatrix(
+            entries=(
+                VisibilityEntry("Log Ticket", START_STAGE, Visibility.EDITABLE),
+                VisibilityEntry("Log Ticket", "Log Ticket", Visibility.EDITABLE),
+                VisibilityEntry("Log Ticket", "Handle Ticket", Visibility.READONLY),
+                VisibilityEntry("Handle Ticket", "Handle Ticket", Visibility.EDITABLE),
+            )
+        ),
         timing=Timing(sla_notes="", batch_days=(), reminders=()),  # left blank on purpose
-        personas=Personas(views=(
-            PersonaView("Manager", pages=(PageIntent("Tickets", (WidgetIntent("general/label"),)),),
-                        kpis=(), actions=()),
-        )),
-        test_cases=TestCases(cases=(
-            CaseWalk("Simple ticket",
-                     fills=(StepFill("Log Ticket", (("Request Text", "Fix the printer"),)),),
-                     expected_path=("Log Ticket", "Handle Ticket"), expected_result="Resolved"),
-        )),
+        personas=Personas(
+            views=(
+                PersonaView(
+                    "Manager",
+                    pages=(PageIntent("Tickets", (WidgetIntent("general/label"),)),),
+                    kpis=(),
+                    actions=(),
+                ),
+            )
+        ),
+        test_cases=TestCases(
+            cases=(
+                CaseWalk(
+                    "Simple ticket",
+                    fills=(StepFill("Log Ticket", (("Request Text", "Fix the printer"),)),),
+                    expected_path=("Log Ticket", "Handle Ticket"),
+                    expected_result="Resolved",
+                ),
+            )
+        ),
         approved=approved,
     )
 
@@ -309,69 +458,117 @@ def _branch_local_loop_spec(*, approved: bool = True) -> AppSpec:
     return AppSpec(
         app_name="Claim Review",
         problem_goal=ProblemGoal(
-            pain="claims get handled inconsistently", goal="every claim is triaged and closed",
-            done_definition="the claim is closed", terminal_states=("Closed",),
-            result_values=("Settled",)),
-        roles=Roles(roles=(
-            RoleSpec("Intake", is_admin=False),
-            RoleSpec("Adjuster", is_admin=True),
-        )),
-        stages=Stages(stages=(
-            StageSpec("Log", "Intake", "log the claim", "a claim arrives", "claim logged"),
-            StageSpec("Triage", "Adjuster", "decide the path", "claim logged", "path chosen"),
-            StageSpec("Quick Close", "Adjuster", "close a simple claim", "path is Simple",
-                      "claim closed"),
-            StageSpec("Deep Review", "Adjuster", "review a complex claim", "path is Complex",
-                      "reviewed"),
-            StageSpec("Fix", "Adjuster", "correct the claim", "review found an issue", "corrected"),
-            StageSpec("Verify", "Adjuster", "verify the correction", "corrected", "verified"),
-            StageSpec("Close", "Intake", "close the claim", "verified or quick-closed", "closed"),
-        )),
-        routing=Routing(points=(
-            DecisionPoint(at_stage="Triage", field_name="Path", options=("Simple", "Complex"),
-                          route_per_option=(("Simple", ("Quick Close",)),
-                                            ("Complex", ("Deep Review", "Fix", "Verify")))),
-        )),
-        rework_loops=ReworkLoops(loops=(
-            LoopSpec(from_stage="Verify", to_stage="Fix", gate_field="Fix Approved", max_rounds=3),
-        )),
+            pain="claims get handled inconsistently",
+            goal="every claim is triaged and closed",
+            done_definition="the claim is closed",
+            terminal_states=("Closed",),
+            result_values=("Settled",),
+        ),
+        roles=Roles(
+            roles=(
+                RoleSpec("Intake", is_admin=False),
+                RoleSpec("Adjuster", is_admin=True),
+            )
+        ),
+        stages=Stages(
+            stages=(
+                StageSpec("Log", "Intake", "log the claim", "a claim arrives", "claim logged"),
+                StageSpec("Triage", "Adjuster", "decide the path", "claim logged", "path chosen"),
+                StageSpec(
+                    "Quick Close",
+                    "Adjuster",
+                    "close a simple claim",
+                    "path is Simple",
+                    "claim closed",
+                ),
+                StageSpec(
+                    "Deep Review",
+                    "Adjuster",
+                    "review a complex claim",
+                    "path is Complex",
+                    "reviewed",
+                ),
+                StageSpec(
+                    "Fix", "Adjuster", "correct the claim", "review found an issue", "corrected"
+                ),
+                StageSpec("Verify", "Adjuster", "verify the correction", "corrected", "verified"),
+                StageSpec(
+                    "Close", "Intake", "close the claim", "verified or quick-closed", "closed"
+                ),
+            )
+        ),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Triage",
+                    field_name="Path",
+                    options=("Simple", "Complex"),
+                    route_per_option=(
+                        ("Simple", ("Quick Close",)),
+                        ("Complex", ("Deep Review", "Fix", "Verify")),
+                    ),
+                ),
+            )
+        ),
+        rework_loops=ReworkLoops(
+            loops=(
+                LoopSpec(
+                    from_stage="Verify", to_stage="Fix", gate_field="Fix Approved", max_rounds=3
+                ),
+            )
+        ),
         data_model=DataModel(
             fields=(
                 FieldReq("Claim Text", FieldType.TEXT, True, "Log"),
                 FieldReq("Path", FieldType.SELECT, True, "Triage", list_name="Paths"),
                 FieldReq("Fix Approved", FieldType.BOOLEAN, False, "Verify"),
             ),
-            tables=(), computed=()),
+            tables=(),
+            computed=(),
+        ),
         master_data=MasterData(lists=(ListSpec("Paths", ("Simple", "Complex"), "Adjuster"),)),
-        visibility=VisibilityMatrix(entries=(
-            VisibilityEntry("Log", START_STAGE, Visibility.EDITABLE),
-            VisibilityEntry("Log", "Log", Visibility.EDITABLE),
-            VisibilityEntry("Triage", "Triage", Visibility.EDITABLE),
-            VisibilityEntry("Verify", "Verify", Visibility.EDITABLE),
-        )),
+        visibility=VisibilityMatrix(
+            entries=(
+                VisibilityEntry("Log", START_STAGE, Visibility.EDITABLE),
+                VisibilityEntry("Log", "Log", Visibility.EDITABLE),
+                VisibilityEntry("Triage", "Triage", Visibility.EDITABLE),
+                VisibilityEntry("Verify", "Verify", Visibility.EDITABLE),
+            )
+        ),
         timing=Timing(sla_notes="", batch_days=(), reminders=()),
-        personas=Personas(views=(
-            PersonaView("Adjuster", pages=(PageIntent("Board", (WidgetIntent("general/label"),)),),
-                        kpis=(), actions=()),
-        )),
-        test_cases=TestCases(cases=(
-            CaseWalk("Complex claim, one rework round",
-                     fills=(
-                         StepFill("Log", (("Claim Text", "Water damage"),)),
-                         StepFill("Triage", (("Path", "Complex"),)),
-                         StepFill("Verify", (("Fix Approved", "true"),)),
-                     ),
-                     expected_path=("Log", "Triage", "Deep Review", "Fix", "Verify", "Close"),
-                     expected_result="Settled"),
-        )),
+        personas=Personas(
+            views=(
+                PersonaView(
+                    "Adjuster",
+                    pages=(PageIntent("Board", (WidgetIntent("general/label"),)),),
+                    kpis=(),
+                    actions=(),
+                ),
+            )
+        ),
+        test_cases=TestCases(
+            cases=(
+                CaseWalk(
+                    "Complex claim, one rework round",
+                    fills=(
+                        StepFill("Log", (("Claim Text", "Water damage"),)),
+                        StepFill("Triage", (("Path", "Complex"),)),
+                        StepFill("Verify", (("Fix Approved", "true"),)),
+                    ),
+                    expected_path=("Log", "Triage", "Deep Review", "Fix", "Verify", "Close"),
+                    expected_result="Settled",
+                ),
+            )
+        ),
         approved=approved,
     )
 
 
 _EMPTY_SPEC = AppSpec(
     app_name="",
-    problem_goal=ProblemGoal(pain="", goal="", done_definition="", terminal_states=(),
-                             result_values=()),
+    problem_goal=ProblemGoal(
+        pain="", goal="", done_definition="", terminal_states=(), result_values=()
+    ),
     roles=Roles(roles=()),
     stages=Stages(stages=()),
     routing=Routing(points=()),
@@ -397,6 +594,7 @@ def _replace_data_model(spec: AppSpec, **kwargs: object) -> AppSpec:
 
 # ---- schema: frozen structs, no dimension silently skipped -----------------------------------
 
+
 def test_dataclasses_are_frozen() -> None:
     spec = _full_spec()
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -421,7 +619,7 @@ def test_empty_spec_has_11_gaps() -> None:
 
 
 def test_empty_spec_blocking_gaps_excludes_advisory_dimension() -> None:
-    assert ADVISORY_DIMENSIONS == frozenset({9})
+    assert frozenset({9}) == ADVISORY_DIMENSIONS
     blocking = _EMPTY_SPEC.blocking_gaps()
     assert len(blocking) == 10
     assert 9 not in _dims(blocking)
@@ -442,12 +640,14 @@ def test_partially_filled_spec_has_exactly_the_missing_dimensions() -> None:
 
 def test_filling_the_last_gap_clears_it() -> None:
     # start from the complete spec, blank out ONLY timing (dimension 9)
-    spec = dataclasses.replace(_full_spec(), timing=Timing(sla_notes="", batch_days=(),
-                                                           reminders=()))
+    spec = dataclasses.replace(
+        _full_spec(), timing=Timing(sla_notes="", batch_days=(), reminders=())
+    )
     assert _dims(spec.gaps()) == [9]
 
 
 # ---- M14: dimensions 4/5/7 satisfiable by an explicit "none" instead of non-emptiness ---------
+
 
 def test_confirmed_none_satisfies_routing_rework_and_master_data_gaps() -> None:
     spec = _linear_spec()
@@ -470,13 +670,17 @@ def test_linear_spec_needs_no_branch_or_loop_or_list() -> None:
 def test_confirmed_none_defaults_to_false_so_a_blank_dimension_still_gaps() -> None:
     # without the explicit flag, an empty Routing/ReworkLoops/MasterData is STILL a gap — the
     # escape hatch is opt-in, never silently assumed
-    spec = dataclasses.replace(_full_spec(), routing=Routing(points=()),
-                                rework_loops=ReworkLoops(loops=()),
-                                master_data=MasterData(lists=()))
+    spec = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(points=()),
+        rework_loops=ReworkLoops(loops=()),
+        master_data=MasterData(lists=()),
+    )
     assert _dims(spec.gaps()) == [4, 5, 7]
 
 
 # ---- questions: only gap dimensions, priority order, limit respected -------------------------
+
 
 def test_next_questions_empty_when_spec_is_complete() -> None:
     assert next_questions(_full_spec()) == ()
@@ -497,8 +701,9 @@ def test_next_questions_respects_a_larger_limit() -> None:
 
 
 def test_next_questions_only_asks_about_the_one_remaining_gap() -> None:
-    spec = dataclasses.replace(_full_spec(), timing=Timing(sla_notes="", batch_days=(),
-                                                           reminders=()))
+    spec = dataclasses.replace(
+        _full_spec(), timing=Timing(sla_notes="", batch_days=(), reminders=())
+    )
     got = next_questions(spec, limit=4)
     assert [q.id for q in got] == ["9a"]
 
@@ -527,6 +732,7 @@ def test_optional_dimension_questions_invite_a_none_answer() -> None:
 
 # ---- compile_spec: the two upfront refusals ---------------------------------------------------
 
+
 def test_compile_refuses_unapproved_spec() -> None:
     with pytest.raises(ValueError, match="confirmation required first"):
         compile_spec(_full_spec(approved=False))
@@ -540,23 +746,30 @@ def test_compile_refuses_incomplete_spec_and_lists_gaps() -> None:
 
 def test_compile_does_not_refuse_over_advisory_timing_alone() -> None:
     """M13: do not keep gating on data the engine cannot act on."""
-    spec = dataclasses.replace(_full_spec(), timing=Timing(sla_notes="", batch_days=(),
-                                                           reminders=()))
+    spec = dataclasses.replace(
+        _full_spec(), timing=Timing(sla_notes="", batch_days=(), reminders=())
+    )
     plan = compile_spec(spec)  # must NOT raise
     assert isinstance(plan, BuildPlan)
 
 
 # ---- B1: assignees ------------------------------------------------------------------------
 
+
 def test_set_assignees_carries_stage_and_owner_role() -> None:
     plan = compile_spec(_full_spec())
     assignee_ops = [op for op in plan.ops if op.kind == "set_assignees"]
     assert len(assignee_ops) == 5
     pairs = sorted((op.args["stage"], op.args["owner_role"]) for op in assignee_ops)
-    assert pairs == sorted([
-        ("Intake", "Front Desk"), ("Diagnose", "Technician"), ("Repair", "Technician"),
-        ("Quality Check", "Service Manager"), ("Return to Customer", "Front Desk"),
-    ])
+    assert pairs == sorted(
+        [
+            ("Intake", "Front Desk"),
+            ("Diagnose", "Technician"),
+            ("Repair", "Technician"),
+            ("Quality Check", "Service Manager"),
+            ("Return to Customer", "Front Desk"),
+        ]
+    )
     for op in assignee_ops:
         assert "AppRole" in op.why
 
@@ -570,6 +783,7 @@ def test_set_assignees_sits_between_build_workflow_and_add_goto_gate() -> None:
 
 # ---- S4 (#35): branch conditions attach right after the Goto gates, before visibility ----------
 
+
 def test_set_branch_conditions_sits_between_add_goto_gate_and_set_visibility() -> None:
     """S4 (#35): the branch-condition op that turns S1's unconditional Parallel into a real
     conditional split belongs right after the Goto gates (Build order step 7 covers both the
@@ -582,6 +796,7 @@ def test_set_branch_conditions_sits_between_add_goto_gate_and_set_visibility() -
 
 
 # ---- B2: master-data list values must reach the plan ------------------------------------------
+
 
 def test_create_list_carries_values_and_is_executable() -> None:
     """#13: the gate lifted — a non-personal list compiles to an EXECUTABLE op naming
@@ -603,8 +818,10 @@ def test_create_list_personal_data_stays_human_gated() -> None:
     import dataclasses as _dc
 
     full = _full_spec()
-    flagged = tuple(_dc.replace(l, personal_data=(l.name == "Urgency Levels"))
-                    for l in full.master_data.lists)
+    flagged = tuple(
+        _dc.replace(lst, personal_data=(lst.name == "Urgency Levels"))
+        for lst in full.master_data.lists
+    )
     spec = _dc.replace(full, master_data=_dc.replace(full.master_data, lists=flagged))
     plan = compile_spec(spec)
     by_name = {op.args["name"]: op for op in plan.ops if op.kind == "create_list"}
@@ -626,6 +843,7 @@ def test_create_list_precedes_apply_fields() -> None:
 # must state, explicitly, where the id comes from; a plan compiled before anything exists can
 # never carry the id itself.
 
+
 def _apply_field(plan: BuildPlan, stage: str, field_name: str) -> dict:
     op = next(o for o in plan.ops if o.kind == "apply_fields" and o.args["stage"] == stage)
     return next(f for f in op.args["fields"] if f["name"] == field_name)
@@ -636,12 +854,17 @@ def test_apply_fields_binds_every_select_to_the_list_the_plan_creates() -> None:
     supplies the id. `referred_list` itself stays None — a compile-time id would be a fiction."""
     plan = compile_spec(_full_spec())
     created = {op.args["name"] for op in plan.ops if op.kind == "create_list"}
-    for stage, field, list_name in (("Intake", "Urgency", "Urgency Levels"),
-                                    ("Diagnose", "Repairable", "Yes No")):
+    for stage, field, list_name in (
+        ("Intake", "Urgency", "Urgency Levels"),
+        ("Diagnose", "Repairable", "Yes No"),
+    ):
         got = _apply_field(plan, stage, field)
         assert got["referred_list"] is None, "no id can exist at compile time"
-        assert got["referred_list_from"] == {"list_name": list_name, "from_op": "create_list",
-                                             "personal_data": False}
+        assert got["referred_list_from"] == {
+            "list_name": list_name,
+            "from_op": "create_list",
+            "personal_data": False,
+        }
         assert list_name in created, "the op the binding names must actually be in the plan"
 
 
@@ -649,8 +872,9 @@ def test_apply_fields_states_the_substitution_contract_in_its_why() -> None:
     """The contract travels with the op, not in a reader's head: WHO substitutes the id, from
     WHERE, and what happens if nobody does."""
     plan = compile_spec(_full_spec())
-    why = next(op for op in plan.ops
-               if op.kind == "apply_fields" and op.args["stage"] == "Intake").why
+    why = next(
+        op for op in plan.ops if op.kind == "apply_fields" and op.args["stage"] == "Intake"
+    ).why
     assert "referred_list_from" in why and "create_list" in why
     assert "referred_list" in why
 
@@ -660,13 +884,19 @@ def test_a_personal_data_list_binds_to_the_human_made_list_not_to_create_list() 
     forge_create_list, so its Select's id comes from the HUMAN-made list, and the binding says so
     (`from_op` None) instead of naming an op that must not run."""
     full = _full_spec()
-    flagged = tuple(dataclasses.replace(lst, personal_data=(lst.name == "Urgency Levels"))
-                    for lst in full.master_data.lists)
-    plan = compile_spec(dataclasses.replace(
-        full, master_data=dataclasses.replace(full.master_data, lists=flagged)))
+    flagged = tuple(
+        dataclasses.replace(lst, personal_data=(lst.name == "Urgency Levels"))
+        for lst in full.master_data.lists
+    )
+    plan = compile_spec(
+        dataclasses.replace(full, master_data=dataclasses.replace(full.master_data, lists=flagged))
+    )
     got = _apply_field(plan, "Intake", "Urgency")
-    assert got["referred_list_from"] == {"list_name": "Urgency Levels", "from_op": None,
-                                         "personal_data": True}
+    assert got["referred_list_from"] == {
+        "list_name": "Urgency Levels",
+        "from_op": None,
+        "personal_data": True,
+    }
     by_name = {op.args["name"]: op for op in plan.ops if op.kind == "create_list"}
     assert "HUMAN-GATED" in by_name["Urgency Levels"].why  # the PDPA gate itself is untouched
 
@@ -683,71 +913,130 @@ def test_a_select_with_no_backing_list_refuses_at_compile_naming_its_coverage_ro
     """ADR-0004: a dropdown backed by no list at all is refused at COMPILE, naming its coverage
     row — never left to fail at write time with a 500 nobody can read."""
     full = _full_spec()
-    bad = _replace_data_model(full, fields=tuple(
-        dataclasses.replace(f, list_name=None) if f.name == "Urgency" else f
-        for f in full.data_model.fields
-    ))
+    bad = _replace_data_model(
+        full,
+        fields=tuple(
+            dataclasses.replace(f, list_name=None) if f.name == "Urgency" else f
+            for f in full.data_model.fields
+        ),
+    )
     with pytest.raises(ValueError, match="word-list-dropdown"):
         compile_spec(bad)
 
 
 # ---- M3: gate polarity resolved against real fields, not a self-declared flag ------------------
 
+
 def test_check_loop_gate_unknown_field_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), rework_loops=ReworkLoops(loops=(
-        LoopSpec(from_stage="Quality Check", to_stage="Repair", gate_field="Does Not Exist",
-                 max_rounds=3),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        rework_loops=ReworkLoops(
+            loops=(
+                LoopSpec(
+                    from_stage="Quality Check",
+                    to_stage="Repair",
+                    gate_field="Does Not Exist",
+                    max_rounds=3,
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Does Not Exist"):
         compile_spec(bad)
 
 
 def test_check_loop_gate_wrong_type_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), rework_loops=ReworkLoops(loops=(
-        LoopSpec(from_stage="Quality Check", to_stage="Repair", gate_field="Repair Cost",
-                 max_rounds=3),  # Repair Cost is Number, not Boolean
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        rework_loops=ReworkLoops(
+            loops=(
+                LoopSpec(
+                    from_stage="Quality Check",
+                    to_stage="Repair",
+                    gate_field="Repair Cost",
+                    max_rounds=3,
+                ),  # Repair Cost is Number, not Boolean
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Repair Cost"):
         compile_spec(bad)
 
 
 # ---- M4: routing — at_stage/targets known, every option routed, literals validated ------------
 
+
 def test_check_routing_unknown_at_stage_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Nonexistent Stage", field_name="Repairable",
-                      options=("Yes", "No"),
-                      route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Nonexistent Stage",
+                    field_name="Repairable",
+                    options=("Yes", "No"),
+                    route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",))),
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Nonexistent Stage"):
         compile_spec(bad)
 
 
 def test_check_routing_unknown_target_stage_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
-                      route_per_option=(("Yes", ("Nonexistent Target",)),
-                                        ("No", ("Return to Customer",)))),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose",
+                    field_name="Repairable",
+                    options=("Yes", "No"),
+                    route_per_option=(
+                        ("Yes", ("Nonexistent Target",)),
+                        ("No", ("Return to Customer",)),
+                    ),
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Nonexistent Target"):
         compile_spec(bad)
 
 
 def test_check_routing_unrouted_option_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Repairable",
-                      options=("Yes", "No", "Maybe Later"),
-                      route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose",
+                    field_name="Repairable",
+                    options=("Yes", "No", "Maybe Later"),
+                    route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",))),
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="routed options"):
         compile_spec(bad)
 
 
 def test_check_routing_literal_not_in_list_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "Maybe"),
-                      route_per_option=(("Yes", ("Repair",)), ("Maybe", ("Repair",)))),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose",
+                    field_name="Repairable",
+                    options=("Yes", "Maybe"),
+                    route_per_option=(("Yes", ("Repair",)), ("Maybe", ("Repair",))),
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Maybe"):
         compile_spec(bad)
 
@@ -756,57 +1045,99 @@ def test_a_branch_route_may_be_a_sequence_of_stages() -> None:
     """P1 (#30): route_per_option maps an option to an ORDERED LIST of stages; compile accepts a
     multi-stage branch as long as every named stage is real (a one-element list is the old
     single-stage route). Building it as a Parallel is S1 (#32) — here it only has to compile."""
-    spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
-                      route_per_option=(("Yes", ("Repair", "Quality Check")),
-                                        ("No", ("Return to Customer",)))),
-    )))
+    spec = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose",
+                    field_name="Repairable",
+                    options=("Yes", "No"),
+                    route_per_option=(
+                        ("Yes", ("Repair", "Quality Check")),
+                        ("No", ("Return to Customer",)),
+                    ),
+                ),
+            )
+        ),
+    )
     compile_spec(spec)  # must not raise
 
 
 def test_check_routing_empty_target_sequence_raises() -> None:
     """A route to an EMPTY sequence names no stage at all — a dead-end the single-stage shape could
     never express. The list shape makes it possible, so compile must refuse it loudly."""
-    bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
-                      route_per_option=(("Yes", ()), ("No", ("Return to Customer",)))),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose",
+                    field_name="Repairable",
+                    options=("Yes", "No"),
+                    route_per_option=(("Yes", ()), ("No", ("Return to Customer",))),
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="empty"):
         compile_spec(bad)
 
 
 # ---- M5: loops — from/to stage known, and strictly backward ------------------------------------
 
+
 def test_check_loop_unknown_from_stage_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), rework_loops=ReworkLoops(loops=(
-        LoopSpec(from_stage="Nonexistent", to_stage="Repair", gate_field="Quality Passed"),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        rework_loops=ReworkLoops(
+            loops=(
+                LoopSpec(from_stage="Nonexistent", to_stage="Repair", gate_field="Quality Passed"),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Nonexistent"):
         compile_spec(bad)
 
 
 def test_check_loop_unknown_to_stage_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), rework_loops=ReworkLoops(loops=(
-        LoopSpec(from_stage="Quality Check", to_stage="Nonexistent", gate_field="Quality Passed"),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        rework_loops=ReworkLoops(
+            loops=(
+                LoopSpec(
+                    from_stage="Quality Check", to_stage="Nonexistent", gate_field="Quality Passed"
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Nonexistent"):
         compile_spec(bad)
 
 
 def test_check_loop_forward_direction_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), rework_loops=ReworkLoops(loops=(
-        LoopSpec(from_stage="Intake", to_stage="Repair", gate_field="Quality Passed"),  # forward!
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        rework_loops=ReworkLoops(
+            loops=(
+                LoopSpec(
+                    from_stage="Intake", to_stage="Repair", gate_field="Quality Passed"
+                ),  # forward!
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="not backward"):
         compile_spec(bad)
 
 
 # ---- M6: sections are a real dimension, not forced-equal-to-stage -----------------------------
 
+
 def test_two_sections_at_one_stage_expressible() -> None:
     plan = compile_spec(_full_spec())
-    intake_ops = [op for op in plan.ops
-                  if op.kind == "apply_fields" and op.args["stage"] == "Intake"]
+    intake_ops = [
+        op for op in plan.ops if op.kind == "apply_fields" and op.args["stage"] == "Intake"
+    ]
     assert len(intake_ops) == 1
     sections_used = {f["section"] for f in intake_ops[0].args["fields"]}
     assert sections_used == {"Intake Basics", "Intake Priority"}
@@ -815,9 +1146,9 @@ def test_two_sections_at_one_stage_expressible() -> None:
 def test_check_section_unknown_stage_raises() -> None:
     full = _full_spec()
     bad = _replace_data_model(
-        full, sections=full.data_model.sections + (
-            SectionReq("Orphan Section", "Nonexistent Stage", "desc"),
-        ),
+        full,
+        sections=full.data_model.sections
+        + (SectionReq("Orphan Section", "Nonexistent Stage", "desc"),),
     )
     with pytest.raises(ValueError, match="Nonexistent Stage"):
         compile_spec(bad)
@@ -847,6 +1178,7 @@ def test_check_field_section_belongs_to_different_stage_raises() -> None:
 
 # ---- M7: field-level visibility override ------------------------------------------------------
 
+
 def test_visibility_field_level_entry_present() -> None:
     plan = compile_spec(_full_spec())
     vis_op = next(op for op in plan.ops if op.kind == "set_visibility")
@@ -856,14 +1188,20 @@ def test_visibility_field_level_entry_present() -> None:
 
 
 def test_check_visibility_unknown_field_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), visibility=VisibilityMatrix(entries=(
-        VisibilityEntry("Intake", "Intake", Visibility.EDITABLE, field="Does Not Exist"),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        visibility=VisibilityMatrix(
+            entries=(
+                VisibilityEntry("Intake", "Intake", Visibility.EDITABLE, field="Does Not Exist"),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Does Not Exist"):
         compile_spec(bad)
 
 
 # ---- M8: Start must be owned by the first stage's own section ---------------------------------
+
 
 def test_check_start_not_owned_raises() -> None:
     full = _full_spec()
@@ -877,7 +1215,8 @@ def test_check_start_owned_by_wrong_section_raises() -> None:
     full = _full_spec()
     entries = tuple(
         VisibilityEntry("Parts Used", START_STAGE, Visibility.EDITABLE)
-        if e.stage == START_STAGE else e
+        if e.stage == START_STAGE
+        else e
         for e in full.visibility.entries
     )
     bad = dataclasses.replace(full, visibility=VisibilityMatrix(entries=entries))
@@ -886,6 +1225,7 @@ def test_check_start_owned_by_wrong_section_raises() -> None:
 
 
 # ---- M9: table columns carry type/required; stage and max_rows validated ----------------------
+
 
 def test_add_table_columns_carry_type_and_required() -> None:
     plan = compile_spec(_full_spec())
@@ -913,20 +1253,27 @@ def test_check_table_non_positive_max_rows_raises() -> None:
 
 # ---- M10: computed fields resolve against real fields + table columns; trigger is an enum -----
 
+
 def test_check_computed_unknown_target_raises() -> None:
     full = _full_spec()
-    bad = _replace_data_model(full, computed=(
-        ComputedReq("Does Not Exist", ("Quantity", "Unit Cost"), EventTrigger.ON_CHANGE, "x"),
-    ))
+    bad = _replace_data_model(
+        full,
+        computed=(
+            ComputedReq("Does Not Exist", ("Quantity", "Unit Cost"), EventTrigger.ON_CHANGE, "x"),
+        ),
+    )
     with pytest.raises(ValueError, match="Does Not Exist"):
         compile_spec(bad)
 
 
 def test_check_computed_unknown_source_raises() -> None:
     full = _full_spec()
-    bad = _replace_data_model(full, computed=(
-        ComputedReq("Total Parts Cost", ("Nonexistent Column",), EventTrigger.ON_CHANGE, "x"),
-    ))
+    bad = _replace_data_model(
+        full,
+        computed=(
+            ComputedReq("Total Parts Cost", ("Nonexistent Column",), EventTrigger.ON_CHANGE, "x"),
+        ),
+    )
     with pytest.raises(ValueError, match="Nonexistent Column"):
         compile_spec(bad)
 
@@ -970,15 +1317,22 @@ def test_trigger_derived_per_source_family() -> None:
     """#12: one source per trigger family — Select->onClick, Number->onSelect, Text->onChange —
     derived from the source field's own type, never defaulted to onChange."""
     full = _full_spec()
-    spec = _replace_data_model(full, computed=(
-        ComputedReq("Total Parts Cost", ("Urgency", "Quantity", "Unit Name"),
-                    None, "derived-trigger fan-out"),
-    ))
+    spec = _replace_data_model(
+        full,
+        computed=(
+            ComputedReq(
+                "Total Parts Cost",
+                ("Urgency", "Quantity", "Unit Name"),
+                None,
+                "derived-trigger fan-out",
+            ),
+        ),
+    )
     plan = compile_spec(spec)
     event_op = next(op for op in plan.ops if op.kind == "set_events")
     assert event_op.args["triggers"] == {
-        "Urgency": "onClick",     # Select — live-observed (was wrongly onChange before #12)
-        "Quantity": "onSelect",   # Number — live-observed (Date shares the family)
+        "Urgency": "onClick",  # Select — live-observed (was wrongly onChange before #12)
+        "Quantity": "onSelect",  # Number — live-observed (Date shares the family)
         "Unit Name": "onChange",  # Text — live-observed
     }
 
@@ -987,9 +1341,10 @@ def test_trigger_explicit_mismatch_refused() -> None:
     """An explicit trigger that the source's type can never fire is refused at compile with the
     derived trigger named — not written and discovered never (#12)."""
     full = _full_spec()
-    spec = _replace_data_model(full, computed=(
-        ComputedReq("Total Parts Cost", ("Quantity",), EventTrigger.ON_CHANGE, "x"),
-    ))
+    spec = _replace_data_model(
+        full,
+        computed=(ComputedReq("Total Parts Cost", ("Quantity",), EventTrigger.ON_CHANGE, "x"),),
+    )
     with pytest.raises(ValueError, match="onSelect"):
         compile_spec(spec)
 
@@ -1000,9 +1355,8 @@ def test_trigger_attachment_source_refused() -> None:
     full = _full_spec()
     spec = _replace_data_model(
         full,
-        fields=full.data_model.fields + (
-            FieldReq("Damage Photos", FieldType.ATTACHMENT, False, "Intake"),
-        ),
+        fields=full.data_model.fields
+        + (FieldReq("Damage Photos", FieldType.ATTACHMENT, False, "Intake"),),
         computed=(ComputedReq("Total Parts Cost", ("Damage Photos",), None, "x"),),
     )
     with pytest.raises(ValueError, match="no events"):
@@ -1011,45 +1365,77 @@ def test_trigger_attachment_source_refused() -> None:
 
 # ---- M11: test cases validated for real; per-stage-visit fills, not a flat dict ---------------
 
+
 def test_check_case_unknown_fill_field_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), test_cases=TestCases(cases=(
-        CaseWalk("Bad case", (StepFill("Intake", (("Does Not Exist", "x"),)),),
-                 ("Intake",), "Repaired"),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        test_cases=TestCases(
+            cases=(
+                CaseWalk(
+                    "Bad case",
+                    (StepFill("Intake", (("Does Not Exist", "x"),)),),
+                    ("Intake",),
+                    "Repaired",
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Does Not Exist"):
         compile_spec(bad)
 
 
 def test_check_case_select_value_not_in_list_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), test_cases=TestCases(cases=(
-        CaseWalk("Bad case", (StepFill("Intake", (("Urgency", "Critical"),)),),
-                 ("Intake",), "Repaired"),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        test_cases=TestCases(
+            cases=(
+                CaseWalk(
+                    "Bad case",
+                    (StepFill("Intake", (("Urgency", "Critical"),)),),
+                    ("Intake",),
+                    "Repaired",
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Critical"):
         compile_spec(bad)
 
 
 def test_check_case_expected_result_not_in_result_values_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), test_cases=TestCases(cases=(
-        CaseWalk("Bad case", (), ("Intake",), "Not A Real Result"),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        test_cases=TestCases(cases=(CaseWalk("Bad case", (), ("Intake",), "Not A Real Result"),)),
+    )
     with pytest.raises(ValueError, match="Not A Real Result"):
         compile_spec(bad)
 
 
 def test_check_case_fill_stage_not_in_path_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), test_cases=TestCases(cases=(
-        CaseWalk("Bad case", (StepFill("Repair", (("Repair Cost", "10"),)),),
-                 ("Intake",), "Repaired"),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        test_cases=TestCases(
+            cases=(
+                CaseWalk(
+                    "Bad case",
+                    (StepFill("Repair", (("Repair Cost", "10"),)),),
+                    ("Intake",),
+                    "Repaired",
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="never visits"):
         compile_spec(bad)
 
 
 def test_check_case_expected_path_unknown_stage_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), test_cases=TestCases(cases=(
-        CaseWalk("Bad case", (), ("Intake", "Nonexistent Stage"), "Repaired"),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        test_cases=TestCases(
+            cases=(CaseWalk("Bad case", (), ("Intake", "Nonexistent Stage"), "Repaired"),)
+        ),
+    )
     with pytest.raises(ValueError, match="Nonexistent Stage"):
         compile_spec(bad)
 
@@ -1068,6 +1454,7 @@ def test_looped_case_can_tick_gate_differently_per_visit() -> None:
 
 # ---- M12: widgets validated against the real palette; persona roles validated -----------------
 
+
 def test_check_widget_unknown_slug_raises() -> None:
     full = _full_spec()
     bad_view = dataclasses.replace(
@@ -1083,8 +1470,11 @@ def test_check_widget_missing_required_config_raises() -> None:
     full = _full_spec()
     bad_view = dataclasses.replace(
         full.personas.views[0],
-        pages=(PageIntent("Bad Page",
-                          (WidgetIntent("view/table", config=(("flow_type", "process"),)),)),),
+        pages=(
+            PageIntent(
+                "Bad Page", (WidgetIntent("view/table", config=(("flow_type", "process"),)),)
+            ),
+        ),
         # missing flow_id and view_id
     )
     bad = dataclasses.replace(full, personas=Personas(views=(bad_view, *full.personas.views[1:])))
@@ -1096,10 +1486,17 @@ def test_check_widget_missing_row_fields_raises() -> None:
     full = _full_spec()
     bad_view = dataclasses.replace(
         full.personas.views[0],
-        pages=(PageIntent("Bad Page", (
-            WidgetIntent("repeater", config=(("flow_type", "process"), ("flow_id", "x"),
-                                             ("view_id", "myitems"))),
-        )),),  # row_fields left empty
+        pages=(
+            PageIntent(
+                "Bad Page",
+                (
+                    WidgetIntent(
+                        "repeater",
+                        config=(("flow_type", "process"), ("flow_id", "x"), ("view_id", "myitems")),
+                    ),
+                ),
+            ),
+        ),  # row_fields left empty
     )
     bad = dataclasses.replace(full, personas=Personas(views=(bad_view, *full.personas.views[1:])))
     with pytest.raises(ValueError, match="row_fields"):
@@ -1122,6 +1519,7 @@ def test_widget_with_no_required_config_needs_none() -> None:
 
 # ---- M13: nothing collected is silently discarded ----------------------------------------------
 
+
 def test_create_process_carries_pain_goal_and_result_values() -> None:
     spec = _full_spec()
     plan = compile_spec(spec)
@@ -1141,6 +1539,7 @@ def test_build_workflow_carries_stage_descriptions() -> None:
 
 # ---- S1 (#32): one decision split compiles to a Parallel gateway with its branches ------------
 
+
 def _workflow_op(spec: AppSpec) -> Op:
     return next(op for op in compile_spec(spec).ops if op.kind == "build_workflow")
 
@@ -1149,15 +1548,15 @@ def test_one_split_compiles_to_a_parallel_with_its_branches() -> None:
     """S1 (#32) AC1: the single DecisionPoint in _full_spec (Diagnose -> Yes:Repair / No:Return)
     is lifted into a Parallel gateway whose branches ARE the option route sequences, and the
     branch stages are removed from the linear spine. Still ONE build_workflow op (the whole
-    ProcessDef), now carrying the parallel structure kfforge.graph.build_workflow consumes."""
+    ProcessDef), now carrying the parallel structure app.domain.graph.build_workflow consumes."""
     op = _workflow_op(_full_spec())
     # branch stages lifted out of the linear spine; the fork stem and merge stay linear
     assert op.args["steps"] == ("Intake", "Diagnose", "Quality Check")
     parallels = op.args["parallels"]
     assert len(parallels) == 1
     parallel = parallels[0]
-    assert parallel["name"] == "Repairable"            # the deciding field
-    assert parallel["after"] == 1                       # inserted right after "Diagnose"
+    assert parallel["name"] == "Repairable"  # the deciding field
+    assert parallel["after"] == 1  # inserted right after "Diagnose"
     assert parallel["branches"] == (
         {"name": "Yes", "stages": ("Repair",)},
         {"name": "No", "stages": ("Return to Customer",)},
@@ -1167,11 +1566,22 @@ def test_one_split_compiles_to_a_parallel_with_its_branches() -> None:
 def test_split_branch_may_be_a_multi_stage_sequence() -> None:
     """A branch is an ORDERED SEQUENCE of stages (P1 #30): the whole sequence becomes ONE
     Parallel branch, in order, every stage lifted out of the linear spine."""
-    spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
-                      route_per_option=(("Yes", ("Repair", "Quality Check")),
-                                        ("No", ("Return to Customer",)))),
-    )))
+    spec = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose",
+                    field_name="Repairable",
+                    options=("Yes", "No"),
+                    route_per_option=(
+                        ("Yes", ("Repair", "Quality Check")),
+                        ("No", ("Return to Customer",)),
+                    ),
+                ),
+            )
+        ),
+    )
     parallel = _workflow_op(spec).args["parallels"][0]
     assert parallel["branches"][0] == {"name": "Yes", "stages": ("Repair", "Quality Check")}
     # both branch's stages are gone from the linear spine; only stem + prefix remain
@@ -1182,11 +1592,20 @@ def test_branch_order_follows_declared_options_not_route_map_order() -> None:
     """Branch order is the DECIDING FIELD's declared option order, so it lines up with the diagram
     (which iterates `options`) and with S4's per-branch conditions — not whatever order
     route_per_option's pairs happen to be written in."""
-    spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
-                      # route pairs written No-first on purpose
-                      route_per_option=(("No", ("Return to Customer",)), ("Yes", ("Repair",)))),
-    )))
+    spec = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose",
+                    field_name="Repairable",
+                    options=("Yes", "No"),
+                    # route pairs written No-first on purpose
+                    route_per_option=(("No", ("Return to Customer",)), ("Yes", ("Repair",))),
+                ),
+            )
+        ),
+    )
     names = [b["name"] for b in _workflow_op(spec).args["parallels"][0]["branches"]]
     assert names == ["Yes", "No"]
 
@@ -1201,6 +1620,7 @@ def test_linear_spec_has_no_parallel() -> None:
 
 # ---- S2 (#33): N sequential splits — split, rejoin, later split, rejoin -----------------------
 
+
 def test_two_sequential_splits_compile_to_two_parallels_in_order() -> None:
     """D3 (#29 spec decisions): S2 generalises S1's one-split shape to N SEQUENTIAL splits. Two
     independent DecisionPoints — Diagnose (existing) and a new one at Quality Check, each on its
@@ -1210,27 +1630,56 @@ def test_two_sequential_splits_compile_to_two_parallels_in_order() -> None:
     full = _full_spec()
     spec = dataclasses.replace(
         full,
-        stages=Stages(stages=full.stages.stages + (
-            StageSpec("Escalate to Manager", "Service Manager",
-                      "escalate the finished job for a second look",
-                      "quality check flagged it for escalation", "manager has reviewed it"),
-            StageSpec("Notify Front Desk", "Front Desk", "tell front desk the job is ready",
-                      "quality check passed with nothing to escalate", "front desk notified"),
-        )),
-        data_model=dataclasses.replace(full.data_model, fields=full.data_model.fields + (
-            FieldReq("Escalate", FieldType.SELECT, True, "Quality Check",
-                     list_name="Escalate Options"),
-        )),
-        master_data=MasterData(lists=full.master_data.lists + (
-            ListSpec("Escalate Options", ("Escalate", "Close"), "Service Manager"),
-        )),
-        routing=Routing(points=(
-            full.routing.points[0],
-            DecisionPoint(at_stage="Quality Check", field_name="Escalate",
-                          options=("Escalate", "Close"),
-                          route_per_option=(("Escalate", ("Escalate to Manager",)),
-                                            ("Close", ("Notify Front Desk",)))),
-        )),
+        stages=Stages(
+            stages=full.stages.stages
+            + (
+                StageSpec(
+                    "Escalate to Manager",
+                    "Service Manager",
+                    "escalate the finished job for a second look",
+                    "quality check flagged it for escalation",
+                    "manager has reviewed it",
+                ),
+                StageSpec(
+                    "Notify Front Desk",
+                    "Front Desk",
+                    "tell front desk the job is ready",
+                    "quality check passed with nothing to escalate",
+                    "front desk notified",
+                ),
+            )
+        ),
+        data_model=dataclasses.replace(
+            full.data_model,
+            fields=full.data_model.fields
+            + (
+                FieldReq(
+                    "Escalate",
+                    FieldType.SELECT,
+                    True,
+                    "Quality Check",
+                    list_name="Escalate Options",
+                ),
+            ),
+        ),
+        master_data=MasterData(
+            lists=full.master_data.lists
+            + (ListSpec("Escalate Options", ("Escalate", "Close"), "Service Manager"),)
+        ),
+        routing=Routing(
+            points=(
+                full.routing.points[0],
+                DecisionPoint(
+                    at_stage="Quality Check",
+                    field_name="Escalate",
+                    options=("Escalate", "Close"),
+                    route_per_option=(
+                        ("Escalate", ("Escalate to Manager",)),
+                        ("Close", ("Notify Front Desk",)),
+                    ),
+                ),
+            )
+        ),
     )
     op = _workflow_op(spec)
     assert op.args["steps"] == ("Intake", "Diagnose", "Quality Check")
@@ -1238,13 +1687,13 @@ def test_two_sequential_splits_compile_to_two_parallels_in_order() -> None:
     assert len(parallels) == 2
     first, second = parallels
     assert first["name"] == "Repairable"
-    assert first["after"] == 1                          # right after "Diagnose"
+    assert first["after"] == 1  # right after "Diagnose"
     assert first["branches"] == (
         {"name": "Yes", "stages": ("Repair",)},
         {"name": "No", "stages": ("Return to Customer",)},
     )
     assert second["name"] == "Escalate"
-    assert second["after"] == 2                          # right after "Quality Check"
+    assert second["after"] == 2  # right after "Quality Check"
     assert second["branches"] == (
         {"name": "Escalate", "stages": ("Escalate to Manager",)},
         {"name": "Close", "stages": ("Notify Front Desk",)},
@@ -1255,12 +1704,25 @@ def test_split_nested_in_a_branch_is_refused() -> None:
     """D3 (#29): a split whose OWN at_stage sits inside a DIFFERENT split's branch has no captured
     shape — refused at compile (THE RULE), naming the nested-split coverage row. Split B's
     at_stage ("Repair") is exactly the stage split A's own "Yes" branch routes through."""
-    spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
-                      route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
-        DecisionPoint(at_stage="Repair", field_name="Repairable", options=("Yes", "No"),
-                      route_per_option=(("Yes", ("Quality Check",)), ("No", ("Quality Check",)))),
-    )))
+    spec = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose",
+                    field_name="Repairable",
+                    options=("Yes", "No"),
+                    route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",))),
+                ),
+                DecisionPoint(
+                    at_stage="Repair",
+                    field_name="Repairable",
+                    options=("Yes", "No"),
+                    route_per_option=(("Yes", ("Quality Check",)), ("No", ("Quality Check",))),
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="nested-split") as exc_info:
         compile_spec(spec)
     message = str(exc_info.value)
@@ -1273,14 +1735,28 @@ def test_two_splits_sharing_a_branch_name_are_refused() -> None:
     SAME option/branch name collide on that id and silently overwrite one another. Refused at
     compile, mirroring graph.build_workflow's own runtime guard. The two splits here are siblings
     (neither nested in the other's branch), so this isolates the duplicate-name refusal alone."""
-    spec = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=("Yes", "No"),
-                      route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",)))),
-        DecisionPoint(at_stage="Quality Check", field_name="Repairable",
-                      options=("Yes", "Something Else"),
-                      route_per_option=(("Yes", ("Repair",)),
-                                        ("Something Else", ("Return to Customer",)))),
-    )))
+    spec = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose",
+                    field_name="Repairable",
+                    options=("Yes", "No"),
+                    route_per_option=(("Yes", ("Repair",)), ("No", ("Return to Customer",))),
+                ),
+                DecisionPoint(
+                    at_stage="Quality Check",
+                    field_name="Repairable",
+                    options=("Yes", "Something Else"),
+                    route_per_option=(
+                        ("Yes", ("Repair",)),
+                        ("Something Else", ("Return to Customer",)),
+                    ),
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Yes") as exc_info:
         compile_spec(spec)
     message = str(exc_info.value)
@@ -1289,6 +1765,7 @@ def test_two_splits_sharing_a_branch_name_are_refused() -> None:
 
 
 # ---- S3 (#34): a rework loop is scoped to ITS branch — carried explicitly, and branch-local ----
+
 
 def test_branch_local_loop_goto_op_carries_its_branch_name() -> None:
     """S3 AC1/US11: a loop whose endpoints both live in one branch compiles to an add_goto_gate op
@@ -1317,12 +1794,14 @@ def test_spine_only_loop_goto_op_has_no_branch_name() -> None:
     base = _linear_spec()
     spec = dataclasses.replace(
         base,
-        rework_loops=ReworkLoops(loops=(
-            LoopSpec(from_stage="Handle Ticket", to_stage="Log Ticket", gate_field="Redo"),
-        )),
-        data_model=dataclasses.replace(base.data_model, fields=base.data_model.fields + (
-            FieldReq("Redo", FieldType.BOOLEAN, False, "Handle Ticket"),
-        )),
+        rework_loops=ReworkLoops(
+            loops=(LoopSpec(from_stage="Handle Ticket", to_stage="Log Ticket", gate_field="Redo"),)
+        ),
+        data_model=dataclasses.replace(
+            base.data_model,
+            fields=base.data_model.fields
+            + (FieldReq("Redo", FieldType.BOOLEAN, False, "Handle Ticket"),),
+        ),
     )
     goto = next(op for op in compile_spec(spec).ops if op.kind == "add_goto_gate")
     assert goto.args["branch_name"] is None
@@ -1332,12 +1811,23 @@ def test_duplicate_step_name_across_branches_is_refused() -> None:
     """S3 AC2/AC5: the SAME step name in two different branches is refused, naming the
     `duplicate-branch-step` coverage row — a loop's branch is derived from its step names, so a
     name owned by two branches makes that derivation (and the branch id) a coin flip."""
-    spec = dataclasses.replace(_branch_local_loop_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Triage", field_name="Path", options=("Simple", "Complex"),
-                      # both branches route through "Fix" — one step name, two branches
-                      route_per_option=(("Simple", ("Quick Close", "Fix")),
-                                        ("Complex", ("Deep Review", "Fix", "Verify")))),
-    )))
+    spec = dataclasses.replace(
+        _branch_local_loop_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Triage",
+                    field_name="Path",
+                    options=("Simple", "Complex"),
+                    # both branches route through "Fix" — one step name, two branches
+                    route_per_option=(
+                        ("Simple", ("Quick Close", "Fix")),
+                        ("Complex", ("Deep Review", "Fix", "Verify")),
+                    ),
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="duplicate-branch-step") as exc_info:
         compile_spec(spec)
     message = str(exc_info.value)
@@ -1350,9 +1840,14 @@ def test_cross_branch_loop_is_refused() -> None:
     naming the `cross-branch-jump` coverage row — a loop must stay within its own branch. Verify
     (in 'Complex') jumps back to Quick Close (in 'Simple'): backward in stage order, but across
     branches."""
-    spec = dataclasses.replace(_branch_local_loop_spec(), rework_loops=ReworkLoops(loops=(
-        LoopSpec(from_stage="Verify", to_stage="Quick Close", gate_field="Fix Approved"),
-    )))
+    spec = dataclasses.replace(
+        _branch_local_loop_spec(),
+        rework_loops=ReworkLoops(
+            loops=(
+                LoopSpec(from_stage="Verify", to_stage="Quick Close", gate_field="Fix Approved"),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="cross-branch-jump") as exc_info:
         compile_spec(spec)
     message = str(exc_info.value)
@@ -1362,7 +1857,10 @@ def test_cross_branch_loop_is_refused() -> None:
 # ---- S4 (#35): one decision split's branch attaches real conditions, not just an unconditional
 #      Parallel ------------------------------------------------------------------------------
 
-def test_one_split_emits_one_set_branch_conditions_op_with_the_deciding_field_and_literals() -> None:
+
+def test_one_split_emits_one_set_branch_conditions_op_with_the_deciding_field_and_literals() -> (
+    None
+):
     """S4 (#35) AC1/AC2: `_full_spec`'s one DecisionPoint (Diagnose -> Repairable, Yes/No) compiles
     to exactly one `set_branch_conditions` op naming the fork stage, the deciding field, and a
     branch-name -> literal mapping — matching `forge_set_branch_conditions`'s own shape."""
@@ -1392,8 +1890,8 @@ def test_check_unclaimed_deciding_value_raises() -> None:
     this is the NEW, opposite check (list values must be ⊆ options)."""
     full = _full_spec()
     bad_lists = tuple(
-        dataclasses.replace(l, values=("Yes", "No", "Maybe")) if l.name == "Yes No" else l
-        for l in full.master_data.lists
+        dataclasses.replace(lst, values=("Yes", "No", "Maybe")) if lst.name == "Yes No" else lst
+        for lst in full.master_data.lists
     )
     bad = dataclasses.replace(full, master_data=MasterData(lists=bad_lists))
     with pytest.raises(ValueError) as exc_info:
@@ -1410,20 +1908,25 @@ def test_build_page_carries_aggregated_kpis_and_actions() -> None:
     # Service Manager + Front Desk both reference this page — both contributions must be present
     assert dash.args["kpis"] == ("jobs awaiting pickup", "open jobs", "overdue jobs")
     assert dash.args["actions"] == (
-        "approve quality check", "log new unit", "notify customer", "reassign job",
+        "approve quality check",
+        "log new unit",
+        "notify customer",
+        "reassign job",
     )
 
 
 def test_timing_blank_does_not_block_but_is_still_collected() -> None:
-    spec = dataclasses.replace(_full_spec(), timing=Timing(sla_notes="", batch_days=(),
-                                                           reminders=()))
-    assert _dims(spec.gaps()) == [9]      # still asked about
-    assert spec.blocking_gaps() == ()     # never blocks
+    spec = dataclasses.replace(
+        _full_spec(), timing=Timing(sla_notes="", batch_days=(), reminders=())
+    )
+    assert _dims(spec.gaps()) == [9]  # still asked about
+    assert spec.blocking_gaps() == ()  # never blocks
     plan = compile_spec(spec)
     assert isinstance(plan, BuildPlan)
 
 
 # ---- F1 BLOCKER: a Required field Hidden (or unmentioned) at its own stage must raise ----------
+
 
 def test_check_required_field_hidden_at_own_stage_raises() -> None:
     """The exact reviewer probe: a required field's SECTION is Hidden at the field's own stage —
@@ -1431,7 +1934,8 @@ def test_check_required_field_hidden_at_own_stage_raises() -> None:
     full = _full_spec()
     entries = tuple(
         VisibilityEntry("Intake Basics", "Intake", Visibility.HIDDEN)
-        if (e.section == "Intake Basics" and e.stage == "Intake") else e
+        if (e.section == "Intake Basics" and e.stage == "Intake")
+        else e
         for e in full.visibility.entries
     )
     bad = dataclasses.replace(full, visibility=VisibilityMatrix(entries=entries))
@@ -1440,11 +1944,14 @@ def test_check_required_field_hidden_at_own_stage_raises() -> None:
 
 
 def test_check_required_field_with_no_visibility_entry_at_own_stage_raises() -> None:
-    """"No entry at all" is exactly as fatal as an explicit Hidden — neither one is a proven
+    """ "No entry at all" is exactly as fatal as an explicit Hidden — neither one is a proven
     Editable."""
     full = _full_spec()
-    entries = tuple(e for e in full.visibility.entries
-                    if not (e.section == "Intake Priority" and e.stage == "Intake"))
+    entries = tuple(
+        e
+        for e in full.visibility.entries
+        if not (e.section == "Intake Priority" and e.stage == "Intake")
+    )
     bad = dataclasses.replace(full, visibility=VisibilityMatrix(entries=entries))
     with pytest.raises(ValueError, match="Urgency"):
         compile_spec(bad)
@@ -1456,7 +1963,8 @@ def test_check_required_field_editable_via_field_level_override_passes() -> None
     full = _full_spec()
     entries = tuple(
         VisibilityEntry("Intake Basics", "Intake", Visibility.READONLY)
-        if (e.section == "Intake Basics" and e.stage == "Intake") else e
+        if (e.section == "Intake Basics" and e.stage == "Intake")
+        else e
         for e in full.visibility.entries
     ) + (
         VisibilityEntry("Intake Basics", "Intake", Visibility.EDITABLE, field="Unit Name"),
@@ -1469,13 +1977,15 @@ def test_check_required_field_editable_via_field_level_override_passes() -> None
 
 # ---- F2 BLOCKER: Start must be owned WITH Editable permission, not just named ------------------
 
+
 def test_check_start_hidden_raises() -> None:
     """The exact reviewer probe: VisibilityEntry(first section, Start, Hidden) satisfied the OLD
     check (which only asked WHICH section owns Start) but must raise now."""
     full = _full_spec()
     entries = tuple(
         VisibilityEntry("Intake Basics", START_STAGE, Visibility.HIDDEN)
-        if e.stage == START_STAGE else e
+        if e.stage == START_STAGE
+        else e
         for e in full.visibility.entries
     )
     bad = dataclasses.replace(full, visibility=VisibilityMatrix(entries=entries))
@@ -1487,7 +1997,8 @@ def test_check_start_readonly_raises() -> None:
     full = _full_spec()
     entries = tuple(
         VisibilityEntry("Intake Basics", START_STAGE, Visibility.READONLY)
-        if e.stage == START_STAGE else e
+        if e.stage == START_STAGE
+        else e
         for e in full.visibility.entries
     )
     bad = dataclasses.replace(full, visibility=VisibilityMatrix(entries=entries))
@@ -1496,6 +2007,7 @@ def test_check_start_readonly_raises() -> None:
 
 
 # ---- F3: a Select field's list_name is tied to a real MasterData list --------------------------
+
 
 def test_check_select_field_no_list_name_raises() -> None:
     full = _full_spec()
@@ -1523,27 +2035,41 @@ def test_check_select_field_unknown_list_name_raises() -> None:
 
 # ---- F4: DecisionPoint.field_name validated independently of options; empty options rejected ---
 
+
 def test_check_routing_field_name_unknown_even_with_no_options_raises() -> None:
     """The exact reviewer probe: field_name was only ever reached inside the per-option loop, so
     options=() used to skip validation entirely and a branch on a phantom field compiled clean."""
-    bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Phantom Field", options=(),
-                      route_per_option=()),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose", field_name="Phantom Field", options=(), route_per_option=()
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="Phantom Field"):
         compile_spec(bad)
 
 
 def test_check_routing_empty_options_raises() -> None:
-    bad = dataclasses.replace(_full_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Diagnose", field_name="Repairable", options=(),
-                      route_per_option=()),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Diagnose", field_name="Repairable", options=(), route_per_option=()
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="zero options"):
         compile_spec(bad)
 
 
 # ---- F5: field/section stage-mismatch guard now also covers stage-named sections ----------------
+
 
 def test_check_field_section_mismatched_stage_named_section_raises() -> None:
     """The exact reviewer probe: a field's section names a real STAGE (not an explicit
@@ -1562,13 +2088,15 @@ def test_check_field_section_mismatched_stage_named_section_raises() -> None:
 
 # ---- F6: build_page aggregates widgets across every role sharing a page, not just the first ----
 
+
 def test_build_page_aggregates_widgets_across_roles_not_just_first() -> None:
     """The exact reviewer probe: _unique_pages kept only the first PageIntent per name, so
     _op_build_page silently dropped every OTHER role's widgets — contradicting its own docstring
     claim that nothing is dropped (which was already true for kpis/actions, just not widgets)."""
     plan = compile_spec(_full_spec())
-    dash = next(op for op in plan.ops
-               if op.kind == "build_page" and op.args["name"] == "Manager Dashboard")
+    dash = next(
+        op for op in plan.ops if op.kind == "build_page" and op.args["name"] == "Manager Dashboard"
+    )
     slugs = {w["slug"] for w in dash.args["widgets"]}
     assert "metrics" in slugs
     assert "view/table" in slugs
@@ -1577,8 +2105,9 @@ def test_build_page_aggregates_widgets_across_roles_not_just_first() -> None:
 
 def test_build_page_widget_dedup_by_slug_and_config() -> None:
     plan = compile_spec(_full_spec())
-    dash = next(op for op in plan.ops
-               if op.kind == "build_page" and op.args["name"] == "Manager Dashboard")
+    dash = next(
+        op for op in plan.ops if op.kind == "build_page" and op.args["name"] == "Manager Dashboard"
+    )
     # metrics/view-table are declared IDENTICALLY by both Service Manager and Front Desk — each
     # must appear exactly once, not duplicated by the aggregation
     metrics = [w for w in dash.args["widgets"] if w["slug"] == "metrics"]
@@ -1591,35 +2120,38 @@ def test_build_page_widget_dedup_by_slug_and_config() -> None:
 # refuses any behavior shape it can't build, and walks popup-hosted widgets through the same
 # widget cross-checks.
 
+
 def _dashboard_with_behavior() -> AppSpec:
     """`_full_spec()` with the two roles that share 'Manager Dashboard' each declaring their OWN
     popup + on-click wiring — so aggregation across roles (not just the first) is exercised. Both
     actions used (`reassign job`, `notify customer`) are ones their own role already declares."""
     full = _full_spec()
-    sm_view = full.personas.views[0]           # Service Manager, declares "reassign job"
+    sm_view = full.personas.views[0]  # Service Manager, declares "reassign job"
     sm_page = dataclasses.replace(
         sm_view.pages[0],
         popups=(PopupIntent("Job Detail", (WidgetIntent("general/label"),)),),
-        on_click=(OnClickAction("reassign job", ClickActionKind.OPEN_POPUP,
-                                target_popup="Job Detail"),),
+        on_click=(
+            OnClickAction("reassign job", ClickActionKind.OPEN_POPUP, target_popup="Job Detail"),
+        ),
     )
     sm2 = dataclasses.replace(sm_view, pages=(sm_page,))
-    fd_view = full.personas.views[2]           # Front Desk, same page name, declares "notify customer"
+    fd_view = full.personas.views[2]  # Front Desk, same page name, declares "notify customer"
     fd_page = dataclasses.replace(
         fd_view.pages[0],
         popups=(PopupIntent("Unit Detail", (WidgetIntent("general/label"),)),),
-        on_click=(OnClickAction("notify customer", ClickActionKind.JS_ACTION,
-                                script="kf.doThing()"),),
+        on_click=(
+            OnClickAction("notify customer", ClickActionKind.JS_ACTION, script="kf.doThing()"),
+        ),
     )
     fd2 = dataclasses.replace(fd_view, pages=(fd_page,))
-    return dataclasses.replace(
-        full, personas=Personas(views=(sm2, full.personas.views[1], fd2)))
+    return dataclasses.replace(full, personas=Personas(views=(sm2, full.personas.views[1], fd2)))
 
 
 def test_build_page_carries_popups_and_on_click_aggregated_across_roles() -> None:
     plan = compile_spec(_dashboard_with_behavior())
-    dash = next(op for op in plan.ops
-               if op.kind == "build_page" and op.args["name"] == "Manager Dashboard")
+    dash = next(
+        op for op in plan.ops if op.kind == "build_page" and op.args["name"] == "Manager Dashboard"
+    )
     # both roles' popups survive aggregation, neither silently dropped for sharing the page name
     assert {p["name"] for p in dash.args["popups"]} == {"Job Detail", "Unit Detail"}
     events = {(e["action"], e["kind"], e["target_popup"]) for e in dash.args["on_click"]}
@@ -1630,40 +2162,56 @@ def test_build_page_carries_popups_and_on_click_aggregated_across_roles() -> Non
 def test_build_page_no_behavior_carries_empty_popups_and_on_click() -> None:
     # a plain content-only page still emits the keys (empty), never omits them
     plan = compile_spec(_full_spec())
-    jobs = next(op for op in plan.ops
-               if op.kind == "build_page" and op.args["name"] == "My Jobs")
+    jobs = next(op for op in plan.ops if op.kind == "build_page" and op.args["name"] == "My Jobs")
     assert jobs.args["popups"] == ()
     assert jobs.args["on_click"] == ()
 
 
 # ---- page.design.md: a page's beautiful-page DESIGN tree carried through compile ---------------
 
+
 def _rich_design() -> DesignNode:
     """A small but real beautiful-page tree: page shell -> hero (styled) + card, each with a widget
     inside. Depth and styling mirror the recipes in page.design.md."""
     return DesignNode(
-        kind="container", name="page shell",
-        style=(("Container.Background", "#FCFAF2"), ("Container.Flex.Direction", "column"),
-               ("Container.Row.Gap", "16px")),
+        kind="container",
+        name="page shell",
+        style=(
+            ("Container.Background", "#FCFAF2"),
+            ("Container.Flex.Direction", "column"),
+            ("Container.Row.Gap", "16px"),
+        ),
         children=(
             DesignNode(
-                kind="container", name="hero",
+                kind="container",
+                name="hero",
                 style=(("Container.Background", "#2E6B3B"), ("Container.Padding.Top", "32px")),
                 children=(
-                    DesignNode(kind="widget", name="hero title",
-                               style=(("Label.Color", "token:Color.White"),),
-                               widget=WidgetIntent("general/label",
-                                                   config=(("title", "Submit your case"),))),
-                )),
+                    DesignNode(
+                        kind="widget",
+                        name="hero title",
+                        style=(("Label.Color", "token:Color.White"),),
+                        widget=WidgetIntent(
+                            "general/label", config=(("title", "Submit your case"),)
+                        ),
+                    ),
+                ),
+            ),
             DesignNode(
-                kind="container", name="card",
+                kind="container",
+                name="card",
                 style=(("Container.Background", "#FFFFFF"),),
                 children=(
-                    DesignNode(kind="widget", name="form",
-                               widget=WidgetIntent("view/form",
-                                                   config=(("flow_type", "process"),
-                                                           ("flow_id", "RepairJobs")))),
-                )),
+                    DesignNode(
+                        kind="widget",
+                        name="form",
+                        widget=WidgetIntent(
+                            "view/form",
+                            config=(("flow_type", "process"), ("flow_id", "RepairJobs")),
+                        ),
+                    ),
+                ),
+            ),
         ),
     )
 
@@ -1673,16 +2221,14 @@ def _spec_with_design(design: DesignNode) -> AppSpec:
     v0 = base.personas.views[0]
     page = PageIntent(name="Submit Case", widgets=(), design=design)
     view = dataclasses.replace(v0, pages=(page,))
-    return dataclasses.replace(
-        base, personas=Personas(views=(view, *base.personas.views[1:])))
+    return dataclasses.replace(base, personas=Personas(views=(view, *base.personas.views[1:])))
 
 
 def test_build_page_op_carries_the_design_tree_as_wire() -> None:
     """A page with a `design` compiles it INTO the build_page op as the plain wire dict
     pages.build_design consumes — nested containers, each carrying style, wrapping the widgets."""
     plan = compile_spec(_spec_with_design(_rich_design()))
-    op = next(op for op in plan.ops
-              if op.kind == "build_page" and op.args["name"] == "Submit Case")
+    op = next(op for op in plan.ops if op.kind == "build_page" and op.args["name"] == "Submit Case")
     design = op.args["design"]
     assert design is not None
     # top is a container carrying a real style key, with children (the nested tree, not a flat list)
@@ -1711,16 +2257,17 @@ def test_design_widget_is_governed_by_the_same_checks() -> None:
     """A widget buried in a design tree is not a loophole: an API-impossible slug inside a design
     container is refused at compile naming its coverage row, same as a top-level/popup widget."""
     bad_design = DesignNode(
-        kind="container", name="shell",
-        children=(DesignNode(kind="widget", name="bad", widget=WidgetIntent("custom")),))
+        kind="container",
+        name="shell",
+        children=(DesignNode(kind="widget", name="bad", widget=WidgetIntent("custom")),),
+    )
     with pytest.raises(ValueError, match="custom-component"):
         compile_spec(_spec_with_design(bad_design))
 
 
 def test_design_container_carrying_a_widget_is_refused() -> None:
     """_check_page_design: a container node must not carry a widget (widgets are leaf nodes)."""
-    bad = DesignNode(kind="container", name="oops",
-                     widget=WidgetIntent("general/label"))
+    bad = DesignNode(kind="container", name="oops", widget=WidgetIntent("general/label"))
     with pytest.raises(ValueError, match="must not carry a widget"):
         compile_spec(_spec_with_design(bad))
 
@@ -1729,10 +2276,13 @@ def test_check_unknown_widget_slug_inside_popup_raises() -> None:
     """AC4: an unknown-slug widget HIDDEN inside a popup is refused, not escaped."""
     full = _full_spec()
     v = full.personas.views[0]
-    p = dataclasses.replace(v.pages[0],
-                            popups=(PopupIntent("Detail", (WidgetIntent("not/a/real/slug"),)),))
+    p = dataclasses.replace(
+        v.pages[0], popups=(PopupIntent("Detail", (WidgetIntent("not/a/real/slug"),)),)
+    )
     bad = dataclasses.replace(
-        full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
+        full,
+        personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])),
+    )
     with pytest.raises(ValueError, match="not/a/real/slug"):
         compile_spec(bad)
 
@@ -1742,10 +2292,11 @@ def test_check_api_impossible_widget_inside_popup_raises_naming_row() -> None:
     popup-opening action can't build, so it's refused, never downgraded to a static button (D6)."""
     full = _full_spec()
     v = full.personas.views[0]
-    p = dataclasses.replace(v.pages[0],
-                            popups=(PopupIntent("Detail", (WidgetIntent("custom"),)),))
+    p = dataclasses.replace(v.pages[0], popups=(PopupIntent("Detail", (WidgetIntent("custom"),)),))
     bad = dataclasses.replace(
-        full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
+        full,
+        personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])),
+    )
     with pytest.raises(ValueError, match="custom-component"):
         compile_spec(bad)
 
@@ -1754,11 +2305,16 @@ def test_check_on_click_dangling_target_popup_raises() -> None:
     """An OpenPopup naming a popup that doesn't exist on the page — a build that would open nothing."""
     full = _full_spec()
     v = full.personas.views[0]
-    p = dataclasses.replace(v.pages[0],
-                            on_click=(OnClickAction("reassign job", ClickActionKind.OPEN_POPUP,
-                                                    target_popup="No Such Popup"),))
+    p = dataclasses.replace(
+        v.pages[0],
+        on_click=(
+            OnClickAction("reassign job", ClickActionKind.OPEN_POPUP, target_popup="No Such Popup"),
+        ),
+    )
     bad = dataclasses.replace(
-        full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
+        full,
+        personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])),
+    )
     with pytest.raises(ValueError, match="No Such Popup"):
         compile_spec(bad)
 
@@ -1770,10 +2326,19 @@ def test_check_on_click_both_arms_set_raises() -> None:
     p = dataclasses.replace(
         v.pages[0],
         popups=(PopupIntent("Job Detail", (WidgetIntent("general/label"),)),),
-        on_click=(OnClickAction("reassign job", ClickActionKind.OPEN_POPUP,
-                                target_popup="Job Detail", script="kf.x()"),))
+        on_click=(
+            OnClickAction(
+                "reassign job",
+                ClickActionKind.OPEN_POPUP,
+                target_popup="Job Detail",
+                script="kf.x()",
+            ),
+        ),
+    )
     bad = dataclasses.replace(
-        full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
+        full,
+        personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])),
+    )
     with pytest.raises(ValueError, match="exactly one arm"):
         compile_spec(bad)
 
@@ -1782,22 +2347,35 @@ def test_check_on_click_unknown_action_raises() -> None:
     """`action` must name one the owning role actually declares (#39 gap (c))."""
     full = _full_spec()
     v = full.personas.views[0]
-    p = dataclasses.replace(v.pages[0],
-                            on_click=(OnClickAction("ghost action", ClickActionKind.JS_ACTION,
-                                                    script="kf.x()"),))
+    p = dataclasses.replace(
+        v.pages[0],
+        on_click=(OnClickAction("ghost action", ClickActionKind.JS_ACTION, script="kf.x()"),),
+    )
     bad = dataclasses.replace(
-        full, personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])))
+        full,
+        personas=Personas(views=(dataclasses.replace(v, pages=(p,)), *full.personas.views[1:])),
+    )
     with pytest.raises(ValueError, match="ghost action"):
         compile_spec(bad)
 
 
 # ---- F15: the loop-gate-type message shows the plain wire value, not the raw enum repr ---------
 
+
 def test_loop_gate_wrong_type_message_shows_plain_value_not_enum_repr() -> None:
-    bad = dataclasses.replace(_full_spec(), rework_loops=ReworkLoops(loops=(
-        LoopSpec(from_stage="Quality Check", to_stage="Repair", gate_field="Repair Cost",
-                 max_rounds=3),
-    )))
+    bad = dataclasses.replace(
+        _full_spec(),
+        rework_loops=ReworkLoops(
+            loops=(
+                LoopSpec(
+                    from_stage="Quality Check",
+                    to_stage="Repair",
+                    gate_field="Repair Cost",
+                    max_rounds=3,
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError) as exc_info:
         compile_spec(bad)
     message = str(exc_info.value)
@@ -1806,6 +2384,7 @@ def test_loop_gate_wrong_type_message_shows_plain_value_not_enum_repr() -> None:
 
 
 # ---- F16 (required half): table column types/required and section description are now asked ---
+
 
 def test_q6_has_dedicated_table_column_and_section_description_questions() -> None:
     ids = {q.id for q in QUESTIONS[6]}
@@ -1818,6 +2397,7 @@ def test_q6_has_dedicated_table_column_and_section_description_questions() -> No
 
 # ---- m15: mapping-shaped fields are tuples of pairs, not mutable dicts ------------------------
 
+
 def test_mapping_shaped_fields_are_tuples_not_dicts() -> None:
     full = _full_spec()
     assert isinstance(full.routing.points[0].route_per_option, tuple)
@@ -1829,6 +2409,7 @@ def test_mapping_shaped_fields_are_tuples_not_dicts() -> None:
 
 
 # ---- m17: the field-unknown-stage guard is a real, tested cross-check -------------------------
+
 
 def test_check_field_unknown_stage_raises() -> None:
     full = _full_spec()
@@ -1854,10 +2435,11 @@ def test_check_field_non_fieldtype_raises() -> None:
 
 # ---- m18: a raw-string permission raises ValueError naming the offender, not AttributeError ---
 
+
 def test_check_visibility_non_enum_permission_raises_named_valueerror() -> None:
     full = _full_spec()
-    bad_entry = VisibilityEntry(section="Intake", stage="Intake",
-                                permission="Editable")  # type: ignore[arg-type]
+    # a wire STRING where a Visibility member belongs — the refusal is the test.
+    bad_entry = VisibilityEntry(section="Intake", stage="Intake", permission="Editable")  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     bad = dataclasses.replace(full, visibility=VisibilityMatrix(entries=(bad_entry,)))
     with pytest.raises(ValueError) as exc_info:
         compile_spec(bad)
@@ -1868,18 +2450,22 @@ def test_check_visibility_non_enum_permission_raises_named_valueerror() -> None:
 
 # ---- m19: per-type field options; legal FieldType list surfaced in the question ----------------
 
+
 def test_field_options_thread_into_apply_fields() -> None:
     plan = compile_spec(_full_spec())
-    diagnose_op = next(op for op in plan.ops
-                       if op.kind == "apply_fields" and op.args["stage"] == "Diagnose")
+    diagnose_op = next(
+        op for op in plan.ops if op.kind == "apply_fields" and op.args["stage"] == "Diagnose"
+    )
     notes = next(f for f in diagnose_op.args["fields"] if f["name"] == "Diagnosis Notes")
     assert notes["options"] == {"AllowFormatting": "true"}
 
 
 # ---- m20: parallel branches are documented as explicitly out of scope -------------------------
 
+
 def test_parallel_branches_documented_as_out_of_scope() -> None:
-    import kfforge.intake.schema as schema_module
+    import app.application.intake.schema as schema_module
+
     doc = (schema_module.__doc__ or "").lower()
     assert "parallel" in doc
     assert "out of scope" in doc
@@ -1890,6 +2476,7 @@ def test_parallel_branches_documented_as_out_of_scope() -> None:
 
 
 # ---- compile_spec: proven order, full dimension coverage, summary reconciliation -------------
+
 
 def test_compiles_to_every_op_kind_in_proven_order() -> None:
     plan = compile_spec(_full_spec())
@@ -1918,25 +2505,25 @@ def test_op_counts_match_the_fixture_exactly() -> None:
     plan = compile_spec(_full_spec())
     assert plan.summary() == {
         "create_process": 1,
-        "member_batch": 3,       # one per role
-        "create_list": 2,        # Urgency Levels, Yes No
-        "apply_fields": 4,       # Intake, Diagnose, Repair, Quality Check have fields; Return to
-                                 # Customer has none, so it gets no apply_fields op
-        "add_table": 1,          # Parts Used
-        "build_workflow": 1,     # one ProcessDef for the whole stage sequence
-        "set_assignees": 5,      # one per stage
-        "add_goto_gate": 1,      # Quality Check -> Repair
+        "member_batch": 3,  # one per role
+        "create_list": 2,  # Urgency Levels, Yes No
+        "apply_fields": 4,  # Intake, Diagnose, Repair, Quality Check have fields; Return to
+        # Customer has none, so it gets no apply_fields op
+        "add_table": 1,  # Parts Used
+        "build_workflow": 1,  # one ProcessDef for the whole stage sequence
+        "set_assignees": 5,  # one per stage
+        "add_goto_gate": 1,  # Quality Check -> Repair
         "set_branch_conditions": 1,  # Diagnose's one split, Yes/No
-        "set_visibility": 1,     # the whole matrix in one op
-        "set_events": 1,         # Total Parts Cost
-        "set_styles": 5,         # one per stage
+        "set_visibility": 1,  # the whole matrix in one op
+        "set_events": 1,  # Total Parts Cost
+        "set_styles": 5,  # one per stage
         "publish": 1,
         "doctor": 1,
-        "compare": 1,        # fidelity vs the input spec (#16), right after doctor
-        "create_page": 2,        # Manager Dashboard, My Jobs — deduplicated across 2 roles
+        "compare": 1,  # fidelity vs the input spec (#16), right after doctor
+        "create_page": 2,  # Manager Dashboard, My Jobs — deduplicated across 2 roles
         "build_page": 2,
-        "set_navigation": 3,     # (Service Manager, Manager Dashboard), (Technician, My Jobs),
-                                 # (Front Desk, Manager Dashboard)
+        "set_navigation": 3,  # (Service Manager, Manager Dashboard), (Technician, My Jobs),
+        # (Front Desk, Manager Dashboard)
         "simulate_case": 3,
     }
     assert len(plan.ops) == 39
@@ -1992,14 +2579,14 @@ def test_set_navigation_binds_the_shared_page_to_both_its_roles() -> None:
 
 # ---- #6: role-scoped visibility is a claim the doctor refuses, not compile ----------------------
 
+
 class TestRoleScopedVisibilityClaim:
     @staticmethod
     def _spec_with_role_claim() -> AppSpec:
         full = _full_spec()
         vm = full.visibility
         claimed = dataclasses.replace(vm.entries[3], role="Front Desk")
-        new_vm = dataclasses.replace(
-            vm, entries=vm.entries[:3] + (claimed,) + vm.entries[4:])
+        new_vm = dataclasses.replace(vm, entries=vm.entries[:3] + (claimed,) + vm.entries[4:])
         return dataclasses.replace(full, visibility=new_vm)
 
     def test_compile_does_not_refuse_a_role_claim(self) -> None:

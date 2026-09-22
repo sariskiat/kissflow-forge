@@ -3,6 +3,7 @@
 Mirrors the structural difficulty of a real build: a 3-way Parallel, a section co-owned by
 Start, and an unowned trailing section. Deterministic (engine ids are name-hashed).
 """
+
 from __future__ import annotations
 
 import copy
@@ -10,8 +11,8 @@ import json
 import pathlib
 from typing import Any
 
-from kfforge.graph import apply_changes, build_workflow, regroup_into_sections
-from kfforge.types import FieldSpec, FieldType
+from app.domain.graph import apply_changes, build_workflow, regroup_into_sections
+from app.domain.types import FieldSpec, FieldType
 
 Draft = dict[str, Any]
 
@@ -44,7 +45,7 @@ FIELDS: list[tuple[str, FieldType, bool, str | None]] = [
     ("Wrap Summary", FieldType.TEXTAREA, True, None),
     ("Outcome", FieldType.SELECT, False, LIST_OUTCOME),
     ("Handoff Owner", FieldType.TEXT, False, None),
-    ("Extra Note", FieldType.TEXT, False, None),          # deliberately unowned -> "Other"
+    ("Extra Note", FieldType.TEXT, False, None),  # deliberately unowned -> "Other"
 ]
 
 SECTIONS: list[tuple[str, list[str]]] = [
@@ -57,13 +58,23 @@ SECTIONS: list[tuple[str, list[str]]] = [
     ("Wrap-up", ["Wrap Summary", "Outcome", "Handoff Owner"]),
 ]
 
-STEPS = [("Ticket arrives", ROLE_FRONT), ("Assess unit", ROLE_TECH),
-         ("Route to path", ROLE_TECH), ("Wrap-up report", ROLE_LEAD)]
-BRANCHES = [
+STEPS: list[tuple[str, str | None]] = [
+    ("Ticket arrives", ROLE_FRONT),
+    ("Assess unit", ROLE_TECH),
+    ("Route to path", ROLE_TECH),
+    ("Wrap-up report", ROLE_LEAD),
+]
+BRANCHES: list[tuple[str, list[tuple[str, str | None]]]] = [
     ("Path A", [("Self-help guide", ROLE_FRONT), ("Verify fix", ROLE_TECH)]),
     ("Path B", [("Quick bench review", ROLE_TECH), ("Bench work", ROLE_TECH)]),
-    ("Path C", [("Assign specialist", ROLE_LEAD), ("Book bench slot", ROLE_LEAD),
-                ("Deep repair session", ROLE_TECH)]),
+    (
+        "Path C",
+        [
+            ("Assign specialist", ROLE_LEAD),
+            ("Book bench slot", ROLE_LEAD),
+            ("Deep repair session", ROLE_TECH),
+        ],
+    ),
 ]
 
 OWNERS: dict[str, list[str]] = {
@@ -81,13 +92,17 @@ OWNERS: dict[str, list[str]] = {
 
 def synthetic_process_draft() -> Draft:
     draft: Draft = json.loads(BASE.read_text())
-    draft = apply_changes(draft, [FieldSpec(name=n, type=t, required=r, referred_list=l)
-                                  for n, t, r, l in FIELDS])
+    draft = apply_changes(
+        draft, [FieldSpec(name=n, type=t, required=r, referred_list=rl) for n, t, r, rl in FIELDS]
+    )
     draft = regroup_into_sections(draft, SECTIONS)
-    draft = build_workflow(draft, STEPS, parallel=("Repair paths", BRANCHES),
-                           parallel_after=3,
-                           roles={ROLE_FRONT: "Front Desk", ROLE_TECH: "Technician",
-                                  ROLE_LEAD: "Lead"})
+    draft = build_workflow(
+        draft,
+        STEPS,
+        parallel=("Repair paths", BRANCHES),
+        parallel_after=3,
+        roles={ROLE_FRONT: "Front Desk", ROLE_TECH: "Technician", ROLE_LEAD: "Lead"},
+    )
     return draft
 
 
@@ -100,7 +115,7 @@ def with_goto_and_event(draft: Draft) -> Draft:
     `Activity::Expression` loop condition testing a Boolean field against the zero-arg `false()`
     literal, and an Event node whose script references the gate field by its own
     (platform-prefixed) id — the smallest shape that is genuinely CLEAN under
-    kfforge.verify.doctor, so seeded-defect tests can mutate a deep copy of it to break exactly
+    app.application.verify.doctor, so seeded-defect tests can mutate a deep copy of it to break exactly
     one thing.
 
     Ids are deliberately neutral (`Activity_Sample01` style — no app-specific names). Applied
@@ -116,39 +131,71 @@ def with_goto_and_event(draft: Draft) -> Draft:
     chain = list(pd["ProcessDef::Activity"])
     if len(chain) < 2:
         raise ValueError("draft's workflow needs Start + at least one real step to loop back to")
-    target_id = chain[1]                          # loop back to the first real step after Start
+    target_id = chain[1]  # loop back to the first real step after Start
 
     gate_id = "Field_SampleGate01"
     new[gate_id] = {
-        "Id": gate_id, "Kind": "Field", "Type": "Boolean", "Name": "Sample Gate",
-        "Model": root, "CreatedAt": "2026-01-01T00:00:00.000Z", "Required": False,
+        "Id": gate_id,
+        "Kind": "Field",
+        "Type": "Boolean",
+        "Name": "Sample Gate",
+        "Model": root,
+        "CreatedAt": "2026-01-01T00:00:00.000Z",
+        "Required": False,
     }
     model.setdefault("Model::Field", []).append(gate_id)
 
     goto_id = "Activity_SampleGoto01"
     new[goto_id] = {
-        "Id": goto_id, "Kind": "Activity", "NodeType": "GotoTask", "Name": "Goto-Sample",
-        "ProcessDef": pd_id, "CreatedAt": "2026-01-01T00:00:00.000Z", "Goto": target_id,
+        "Id": goto_id,
+        "Kind": "Activity",
+        "NodeType": "GotoTask",
+        "Name": "Goto-Sample",
+        "ProcessDef": pd_id,
+        "CreatedAt": "2026-01-01T00:00:00.000Z",
+        "Goto": target_id,
     }
     new[target_id].setdefault("Goto::Activity", []).append(goto_id)
-    pd["ProcessDef::Activity"] = [*chain, goto_id]      # GotoTask sits LAST
+    pd["ProcessDef::Activity"] = [*chain, goto_id]  # GotoTask sits LAST
 
     # loop condition: Sample Gate = false()
     lhs_id, rhs_id, cond_root_id, expr_id = (
-        "Node_SampleLhs01", "Node_SampleRhs01", "Node_SampleRoot01", "Expression_SampleCond01",
+        "Node_SampleLhs01",
+        "Node_SampleRhs01",
+        "Node_SampleRoot01",
+        "Expression_SampleCond01",
     )
-    new[lhs_id] = {"Id": lhs_id, "Type": "Field", "Field": gate_id,
-                   "DataType": "Boolean", "Node": cond_root_id}
-    new[rhs_id] = {"Id": rhs_id, "Type": "Function", "Value": "false",
-                   "DataType": "Boolean", "Category": "Boolean", "Node": cond_root_id}
+    new[lhs_id] = {
+        "Id": lhs_id,
+        "Type": "Field",
+        "Field": gate_id,
+        "DataType": "Boolean",
+        "Node": cond_root_id,
+    }
+    new[rhs_id] = {
+        "Id": rhs_id,
+        "Type": "Function",
+        "Value": "false",
+        "DataType": "Boolean",
+        "Category": "Boolean",
+        "Node": cond_root_id,
+    }
     new[cond_root_id] = {
-        "Id": cond_root_id, "Type": "Function", "Value": "=", "Syntax": "Infix",
-        "DataType": "Boolean", "Category": "Boolean", "FieldRefCount": 1,
+        "Id": cond_root_id,
+        "Type": "Function",
+        "Value": "=",
+        "Syntax": "Infix",
+        "DataType": "Boolean",
+        "Category": "Boolean",
+        "FieldRefCount": 1,
         "Node::Node": [lhs_id, rhs_id],
     }
     new[expr_id] = {
-        "Id": expr_id, "Kind": "Expression", "ExpressionStr": f"{gate_id} = false()",
-        "Activity": goto_id, "Expression::Node": [cond_root_id],
+        "Id": expr_id,
+        "Kind": "Expression",
+        "ExpressionStr": f"{gate_id} = false()",
+        "Activity": goto_id,
+        "Expression::Node": [cond_root_id],
     }
     new[goto_id]["Activity::Expression"] = [expr_id]
     new[gate_id]["Field::Node"] = [lhs_id]
@@ -157,7 +204,10 @@ def with_goto_and_event(draft: Draft) -> Draft:
     # prefixed id, so this baseline shape is provably clean (nothing it references is missing).
     event_id = "Event_SampleSet01"
     new[event_id] = {
-        "Id": event_id, "Kind": "Event", "Field": gate_id, "Trigger": "onChange",
+        "Id": event_id,
+        "Kind": "Event",
+        "Field": gate_id,
+        "Trigger": "onChange",
         "Script": f"(async () => {{ kf.form.setFieldValue('{gate_id}', false); }})();",
     }
     new[gate_id]["Field::Event"] = [event_id]

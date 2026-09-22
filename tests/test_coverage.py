@@ -1,4 +1,4 @@
-"""Contract test over the coverage contract (kfforge/coverage.py) — the backbone
+"""Contract test over the coverage contract (src/app/coverage.py) — the backbone
 table every capability ticket wires a row into. Same pattern as the engine-manual
 contract test (test_engine_doc.py): it guards the table's own integrity, not any
 one build.
@@ -8,6 +8,7 @@ and that unbuilt capabilities are marked pending their ticket. It does NOT yet
 require pending rows to be wired to a real refusal — that assertion is added by the
 closing gate B2 (#36) as rows flip from pending to wired.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -21,9 +22,8 @@ import pytest
 # factory with no import-time side effects.
 from test_intake import _branch_local_loop_spec, _full_spec
 
-from kfforge.coverage import ROWS, Bucket, CoverageRow, get
-from kfforge.intake.compile import compile_spec
-from kfforge.intake.schema import (
+from app.application.intake.compile import compile_spec
+from app.application.intake.schema import (
     START_STAGE,
     AppSpec,
     CaseWalk,
@@ -51,7 +51,8 @@ from kfforge.intake.schema import (
     VisibilityMatrix,
     WidgetIntent,
 )
-from kfforge.types import FieldType, Visibility
+from app.domain.coverage import ROWS, Bucket, CoverageRow, get
+from app.domain.types import FieldType, Visibility
 
 TICKET_RE = re.compile(r"^#\d+$")
 KEY_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -59,37 +60,62 @@ KEY_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # Faithfulness anchor: these shapes MUST have a row, so a transcription of #26 +
 # the API-impossible set absorbed from #7 can't silently lose one. Every #26 row +
 # absorbed-#7 row is pinned by name (buckets are asserted structurally below).
-REQUIRED_KEYS = frozenset({
-    # captured-live (#26 "yes/yes/n-a" rows)
-    "straight-line", "one-split", "branch-local-loop", "suspended-step",
-    "auto-numbered-id", "child-table", "computed-field-event", "per-step-visibility",
-    # buildable
-    "sequential-splits",          # #26's bold "several splits"
-    # refuses-loudly (#26's bold refusals + word-list/section/report gaps)
-    "nested-split", "auto-step", "cross-branch-jump", "unclaimed-value",
-    "duplicate-branch-step",      # S3 (#34): same step name in two branches
-    "word-list-dropdown", "section-styling", "report-widget",
-    # absorbed #7 API-impossible set
-    "report-creation", "custom-component", "role-scoped-visibility",
-})
+REQUIRED_KEYS = frozenset(
+    {
+        # captured-live (#26 "yes/yes/n-a" rows)
+        "straight-line",
+        "one-split",
+        "branch-local-loop",
+        "suspended-step",
+        "auto-numbered-id",
+        "child-table",
+        "computed-field-event",
+        "per-step-visibility",
+        # buildable
+        "sequential-splits",  # #26's bold "several splits"
+        # refuses-loudly (#26's bold refusals + word-list/section/report gaps)
+        "nested-split",
+        "auto-step",
+        "cross-branch-jump",
+        "unclaimed-value",
+        "duplicate-branch-step",  # S3 (#34): same step name in two branches
+        "word-list-dropdown",
+        "section-styling",
+        "report-widget",
+        # absorbed #7 API-impossible set
+        "report-creation",
+        "custom-component",
+        "role-scoped-visibility",
+    }
+)
 
 # The only refuses-loudly rows that legitimately carry NO ticket — permanent Known
 # Exclusions, not unbuilt capabilities. Pinning this set is what tests AC4: any
 # pending refuse-row that loses its ticket would fall into this set and fail, and a
 # Known Exclusion that accidentally gains one would too.
-KNOWN_EXCLUSION_KEYS = frozenset({
-    "cross-branch-jump", "auto-step", "unclaimed-value", "nested-split", "duplicate-branch-step",
-    # B2 (#36): the API-impossible set, flipped from pending #36 to permanent Known Exclusions —
-    # each is now wired to a compile refusal (ADR-0004), no capability ticket left to wait on.
-    "custom-component", "report-creation",
-    # #20 page layer: permanent Known Exclusions (a written reason, no ticket). The two live-value
-    # tiles (#23, proven live 2026-08-11), the native-rendered status pill, and the multi-pane
-    # tabbed interface (D6: no silent downgrade, no composition builder, no build ticket scoped yet).
-    "kpi-tile-live-number", "delta-pill", "status-pill", "page-tabs",
-    # #6: wired to the DOCTOR-gate refusal (verify.doctor's visibility_role_claims rule), the one
-    # Known Exclusion enforced at the doctor rather than compile (ADR-0003/0004).
-    "role-scoped-visibility",
-})
+KNOWN_EXCLUSION_KEYS = frozenset(
+    {
+        "cross-branch-jump",
+        "auto-step",
+        "unclaimed-value",
+        "nested-split",
+        "duplicate-branch-step",
+        # B2 (#36): the API-impossible set, flipped from pending #36 to permanent Known Exclusions —
+        # each is now wired to a compile refusal (ADR-0004), no capability ticket left to wait on.
+        "custom-component",
+        "report-creation",
+        # #20 page layer: permanent Known Exclusions (a written reason, no ticket). The two live-value
+        # tiles (#23, proven live 2026-08-11), the native-rendered status pill, and the multi-pane
+        # tabbed interface (D6: no silent downgrade, no composition builder, no build ticket scoped yet).
+        "kpi-tile-live-number",
+        "delta-pill",
+        "status-pill",
+        "page-tabs",
+        # #6: wired to the DOCTOR-gate refusal (verify.doctor's visibility_role_claims rule), the one
+        # Known Exclusion enforced at the doctor rather than compile (ADR-0003/0004).
+        "role-scoped-visibility",
+    }
+)
 
 
 def test_table_exists_as_data() -> None:
@@ -127,10 +153,7 @@ def test_required_shapes_present() -> None:
 def test_not_captured_names_ticket_or_known_exclusion() -> None:
     # Acceptance: every not-captured shape names a capture/wiring ticket OR a
     # written Known Exclusion (a reason).
-    orphans = [
-        r.key for r in ROWS
-        if not r.captured and r.ticket is None and not r.reason
-    ]
+    orphans = [r.key for r in ROWS if not r.captured and r.ticket is None and not r.reason]
     assert not orphans, f"not-captured rows with no ticket and no Known Exclusion: {orphans}"
 
 
@@ -162,15 +185,14 @@ def test_refuses_loudly_rows_state_a_reason() -> None:
 def test_captured_live_rows_carry_no_pending_marker() -> None:
     # A captured-live shape is done: no pending ticket, no refusal reason. Keeps the
     # `pending` marker meaningful (ticket set ⟺ not-yet-in-code).
-    dirty = [
-        r.key for r in ROWS
-        if r.captured and (r.ticket is not None or r.reason is not None)
-    ]
+    dirty = [r.key for r in ROWS if r.captured and (r.ticket is not None or r.reason is not None)]
     assert not dirty, f"captured-live rows carrying a ticket/reason: {dirty}"
 
 
 def test_tickets_are_well_formed_issue_refs() -> None:
-    bad = [(r.key, r.ticket) for r in ROWS if r.ticket is not None and not TICKET_RE.match(r.ticket)]
+    bad = [
+        (r.key, r.ticket) for r in ROWS if r.ticket is not None and not TICKET_RE.match(r.ticket)
+    ]
     assert not bad, f"tickets must look like '#<number>': {bad}"
 
 
@@ -190,6 +212,7 @@ def test_get_returns_row_and_rejects_unknown_key() -> None:
 # The coverage table's claim that a shape builds must be backed by real code, or the table drifts
 # into fiction (spec #29 D13/D14: builder and contract read the same source). B1 classified
 # `one-split` as CAPTURED_LIVE; S1 is the autonomous-compiler path that makes that claim true.
+
 
 def test_one_split_row_is_wired_not_pending() -> None:
     """The `one-split` row is CAPTURED_LIVE with no pending ticket — the shape is built, not
@@ -215,6 +238,7 @@ def test_one_split_row_is_wired_to_a_real_parallel_build() -> None:
 
 # ---- S4 (#35): the "unclaimed-value" row is WIRED — not aspirational --------------------------
 
+
 def test_unclaimed_value_row_is_wired_to_a_real_refusal() -> None:
     """The enforcement behind AC4 for this row: compiling a spec whose deciding field's list has
     a value ("Maybe") claimed by no branch option actually raises, naming the `unclaimed-value`
@@ -222,8 +246,8 @@ def test_unclaimed_value_row_is_wired_to_a_real_refusal() -> None:
     `_check_all_deciding_values_claimed`, not just a table entry with no code behind it."""
     full = _full_spec()
     bad_lists = tuple(
-        dataclasses.replace(l, values=("Yes", "No", "Maybe")) if l.name == "Yes No" else l
-        for l in full.master_data.lists
+        dataclasses.replace(lst, values=("Yes", "No", "Maybe")) if lst.name == "Yes No" else lst
+        for lst in full.master_data.lists
     )
     bad = dataclasses.replace(full, master_data=MasterData(lists=bad_lists))
     with pytest.raises(ValueError, match="unclaimed-value"):
@@ -238,6 +262,7 @@ def test_unclaimed_value_row_is_wired_to_a_real_refusal() -> None:
 # hard cap of one lifts). The coverage row moves from "waiting on #33" to "waiting on #16" (the
 # live built-app-vs-input comparator) — it stays BUILDABLE, not captured-live, since no live
 # capture of several sequential splits exists yet.
+
 
 def _two_split_spec() -> AppSpec:
     """A fresh, minimal AppSpec with TWO sequential decision splits: Triage (Severity: High/Low)
@@ -256,79 +281,147 @@ def _two_split_spec() -> AppSpec:
             terminal_states=("Closed",),
             result_values=("Resolved",),
         ),
-        roles=Roles(roles=(
-            RoleSpec("Front Desk", is_admin=False),
-            RoleSpec("Manager", is_admin=True),
-        )),
-        stages=Stages(stages=(
-            StageSpec("Log", "Front Desk", "log the request", "a request comes in",
-                      "request logged"),
-            StageSpec("Triage", "Manager", "assess severity", "request logged",
-                      "severity recorded"),
-            StageSpec("Escalate", "Manager", "handle an escalated request", "severity is High",
-                      "escalation handled"),
-            StageSpec("Standard Review", "Manager", "handle a routine request", "severity is Low",
-                      "review complete"),
-            StageSpec("Approve", "Manager", "decide who approves", "triage complete",
-                      "approval route recorded"),
-            StageSpec("Manager Review", "Manager", "manager reviews the request",
-                      "approval route is Manager Approval", "manager reviewed"),
-            StageSpec("Finalize", "Manager", "auto-finalize the request",
-                      "approval route is Auto Approve", "finalized"),
-            StageSpec("Close", "Front Desk", "close the request", "review or finalize complete",
-                      "request closed"),
-        )),
-        routing=Routing(points=(
-            DecisionPoint(at_stage="Triage", field_name="Severity", options=("High", "Low"),
-                          route_per_option=(("High", ("Escalate",)), ("Low", ("Standard Review",)))),
-            DecisionPoint(at_stage="Approve", field_name="Approval Type",
-                          options=("Manager Approval", "Auto Approve"),
-                          route_per_option=(("Manager Approval", ("Manager Review",)),
-                                            ("Auto Approve", ("Finalize",)))),
-        )),
+        roles=Roles(
+            roles=(
+                RoleSpec("Front Desk", is_admin=False),
+                RoleSpec("Manager", is_admin=True),
+            )
+        ),
+        stages=Stages(
+            stages=(
+                StageSpec(
+                    "Log", "Front Desk", "log the request", "a request comes in", "request logged"
+                ),
+                StageSpec(
+                    "Triage", "Manager", "assess severity", "request logged", "severity recorded"
+                ),
+                StageSpec(
+                    "Escalate",
+                    "Manager",
+                    "handle an escalated request",
+                    "severity is High",
+                    "escalation handled",
+                ),
+                StageSpec(
+                    "Standard Review",
+                    "Manager",
+                    "handle a routine request",
+                    "severity is Low",
+                    "review complete",
+                ),
+                StageSpec(
+                    "Approve",
+                    "Manager",
+                    "decide who approves",
+                    "triage complete",
+                    "approval route recorded",
+                ),
+                StageSpec(
+                    "Manager Review",
+                    "Manager",
+                    "manager reviews the request",
+                    "approval route is Manager Approval",
+                    "manager reviewed",
+                ),
+                StageSpec(
+                    "Finalize",
+                    "Manager",
+                    "auto-finalize the request",
+                    "approval route is Auto Approve",
+                    "finalized",
+                ),
+                StageSpec(
+                    "Close",
+                    "Front Desk",
+                    "close the request",
+                    "review or finalize complete",
+                    "request closed",
+                ),
+            )
+        ),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Triage",
+                    field_name="Severity",
+                    options=("High", "Low"),
+                    route_per_option=(("High", ("Escalate",)), ("Low", ("Standard Review",))),
+                ),
+                DecisionPoint(
+                    at_stage="Approve",
+                    field_name="Approval Type",
+                    options=("Manager Approval", "Auto Approve"),
+                    route_per_option=(
+                        ("Manager Approval", ("Manager Review",)),
+                        ("Auto Approve", ("Finalize",)),
+                    ),
+                ),
+            )
+        ),
         rework_loops=ReworkLoops(loops=(), confirmed_none=True),
         data_model=DataModel(
             fields=(
                 FieldReq("Request Text", FieldType.TEXT, True, "Log"),
                 FieldReq("Severity", FieldType.SELECT, True, "Triage", list_name="Severity Levels"),
-                FieldReq("Approval Type", FieldType.SELECT, True, "Approve",
-                         list_name="Approval Types"),
+                FieldReq(
+                    "Approval Type", FieldType.SELECT, True, "Approve", list_name="Approval Types"
+                ),
             ),
             tables=(),
             computed=(),
         ),
-        master_data=MasterData(lists=(
-            ListSpec("Severity Levels", ("High", "Low"), "Manager"),
-            ListSpec("Approval Types", ("Manager Approval", "Auto Approve"), "Manager"),
-        )),
-        visibility=VisibilityMatrix(entries=(
-            VisibilityEntry("Log", START_STAGE, Visibility.EDITABLE),
-            VisibilityEntry("Log", "Log", Visibility.EDITABLE),
-            VisibilityEntry("Triage", "Triage", Visibility.EDITABLE),
-            VisibilityEntry("Approve", "Approve", Visibility.EDITABLE),
-        )),
+        master_data=MasterData(
+            lists=(
+                ListSpec("Severity Levels", ("High", "Low"), "Manager"),
+                ListSpec("Approval Types", ("Manager Approval", "Auto Approve"), "Manager"),
+            )
+        ),
+        visibility=VisibilityMatrix(
+            entries=(
+                VisibilityEntry("Log", START_STAGE, Visibility.EDITABLE),
+                VisibilityEntry("Log", "Log", Visibility.EDITABLE),
+                VisibilityEntry("Triage", "Triage", Visibility.EDITABLE),
+                VisibilityEntry("Approve", "Approve", Visibility.EDITABLE),
+            )
+        ),
         timing=Timing(sla_notes="", batch_days=(), reminders=()),
-        personas=Personas(views=(
-            PersonaView("Manager", pages=(PageIntent("Dashboard", (WidgetIntent("general/label"),)),),
-                        kpis=(), actions=()),
-        )),
-        test_cases=TestCases(cases=(
-            CaseWalk(
-                "Escalated, manager-approved",
-                fills=(
-                    StepFill("Log", (("Request Text", "Server down"),)),
-                    StepFill("Triage", (("Severity", "High"),)),
-                    StepFill("Approve", (("Approval Type", "Manager Approval"),)),
+        personas=Personas(
+            views=(
+                PersonaView(
+                    "Manager",
+                    pages=(PageIntent("Dashboard", (WidgetIntent("general/label"),)),),
+                    kpis=(),
+                    actions=(),
                 ),
-                expected_path=("Log", "Triage", "Escalate", "Approve", "Manager Review", "Close"),
-                expected_result="Resolved",
-            ),
-        )),
+            )
+        ),
+        test_cases=TestCases(
+            cases=(
+                CaseWalk(
+                    "Escalated, manager-approved",
+                    fills=(
+                        StepFill("Log", (("Request Text", "Server down"),)),
+                        StepFill("Triage", (("Severity", "High"),)),
+                        StepFill("Approve", (("Approval Type", "Manager Approval"),)),
+                    ),
+                    expected_path=(
+                        "Log",
+                        "Triage",
+                        "Escalate",
+                        "Approve",
+                        "Manager Review",
+                        "Close",
+                    ),
+                    expected_result="Resolved",
+                ),
+            )
+        ),
         approved=True,
     )
 
 
 # ---- S3 (#34): the branch-local-loop, cross-branch-jump, and duplicate-branch-step rows are WIRED
+
 
 def test_branch_local_loop_row_is_wired_to_a_real_build() -> None:
     """The `branch-local-loop` row is CAPTURED_LIVE and the autonomous compiler really builds it:
@@ -345,9 +438,14 @@ def test_branch_local_loop_row_is_wired_to_a_real_build() -> None:
 def test_cross_branch_jump_row_is_wired_to_a_real_refusal() -> None:
     """The `cross-branch-jump` row refuses in real code: a loop from one branch into another raises
     at compile, naming the row. `_check_loop_not_cross_branch` backs the table's claim."""
-    spec = dataclasses.replace(_branch_local_loop_spec(), rework_loops=ReworkLoops(loops=(
-        LoopSpec(from_stage="Verify", to_stage="Quick Close", gate_field="Fix Approved"),
-    )))
+    spec = dataclasses.replace(
+        _branch_local_loop_spec(),
+        rework_loops=ReworkLoops(
+            loops=(
+                LoopSpec(from_stage="Verify", to_stage="Quick Close", gate_field="Fix Approved"),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="cross-branch-jump"):
         compile_spec(spec)
     assert get("cross-branch-jump").bucket is Bucket.REFUSES_LOUDLY
@@ -356,11 +454,22 @@ def test_cross_branch_jump_row_is_wired_to_a_real_refusal() -> None:
 def test_duplicate_branch_step_row_is_wired_to_a_real_refusal() -> None:
     """The `duplicate-branch-step` row refuses in real code: the same step name in two branches
     raises at compile, naming the row. `_check_no_duplicate_step_across_branches` backs the claim."""
-    spec = dataclasses.replace(_branch_local_loop_spec(), routing=Routing(points=(
-        DecisionPoint(at_stage="Triage", field_name="Path", options=("Simple", "Complex"),
-                      route_per_option=(("Simple", ("Quick Close", "Fix")),
-                                        ("Complex", ("Deep Review", "Fix", "Verify")))),
-    )))
+    spec = dataclasses.replace(
+        _branch_local_loop_spec(),
+        routing=Routing(
+            points=(
+                DecisionPoint(
+                    at_stage="Triage",
+                    field_name="Path",
+                    options=("Simple", "Complex"),
+                    route_per_option=(
+                        ("Simple", ("Quick Close", "Fix")),
+                        ("Complex", ("Deep Review", "Fix", "Verify")),
+                    ),
+                ),
+            )
+        ),
+    )
     with pytest.raises(ValueError, match="duplicate-branch-step"):
         compile_spec(spec)
     row = get("duplicate-branch-step")
@@ -393,9 +502,12 @@ def test_sequential_splits_row_wired_to_a_real_build() -> None:
 # visibility is the FOURTH API-impossible capability but stays the DOCTOR's refusal (ADR-0003, #6),
 # not re-implemented at compile here.
 
-API_IMPOSSIBLE_COMPILE_KEYS = frozenset({
-    "custom-component", "report-creation",
-})
+API_IMPOSSIBLE_COMPILE_KEYS = frozenset(
+    {
+        "custom-component",
+        "report-creation",
+    }
+)
 
 # The refuse-rows that legitimately remain pending after B2 closes the contract: three future BUILD
 # capabilities (a word-list-backed dropdown #13, section colour-styling #11, wiring an EXISTING
@@ -403,12 +515,16 @@ API_IMPOSSIBLE_COMPILE_KEYS = frozenset({
 # refusal (verify.doctor's visibility_role_claims rule). Pinning this set is what makes "no
 # refuse-row is left pending" provable: any NEW pending refuse-row, or a B2 row that regressed to
 # pending, breaks the equality.
-PENDING_REFUSE_ALLOWLIST = frozenset({
-    "word-list-dropdown", "section-styling", "report-widget",
-    # #20 page layer: the donut chart + its legend-with-counts are a report widget's own rendering,
-    # covered by report-widget (#23) — pending the same wire-an-existing-report capability.
-    "chart-legend",
-})
+PENDING_REFUSE_ALLOWLIST = frozenset(
+    {
+        "word-list-dropdown",
+        "section-styling",
+        "report-widget",
+        # #20 page layer: the donut chart + its legend-with-counts are a report widget's own rendering,
+        # covered by report-widget (#23) — pending the same wire-an-existing-report capability.
+        "chart-legend",
+    }
+)
 
 
 def _spec_with_widget(widget: WidgetIntent) -> AppSpec:
@@ -419,9 +535,7 @@ def _spec_with_widget(widget: WidgetIntent) -> AppSpec:
     page = view.pages[0]
     new_page = dataclasses.replace(page, widgets=page.widgets + (widget,))
     new_view = dataclasses.replace(view, pages=(new_page,) + view.pages[1:])
-    return dataclasses.replace(
-        full, personas=Personas(views=(new_view,) + full.personas.views[1:])
-    )
+    return dataclasses.replace(full, personas=Personas(views=(new_view,) + full.personas.views[1:]))
 
 
 def test_no_api_impossible_refuse_row_is_pending() -> None:
@@ -430,7 +544,9 @@ def test_no_api_impossible_refuse_row_is_pending() -> None:
     for key in API_IMPOSSIBLE_COMPILE_KEYS:
         row = get(key)
         assert row.bucket is Bucket.REFUSES_LOUDLY
-        assert not row.pending, f"{key!r} is API-impossible — refused at compile, must not be pending"
+        assert not row.pending, (
+            f"{key!r} is API-impossible — refused at compile, must not be pending"
+        )
         assert row.ticket is None
 
 
@@ -470,10 +586,12 @@ def test_report_creation_row_is_wired_to_a_real_refusal() -> None:
     API path (ADR-0004). Config is deliberately VALID (the full report trio) so this proves the
     API-impossible refusal fires on the slug itself, not a missing-config error. Distinct from
     wiring an existing report (report-widget #23, still pending)."""
-    spec = _spec_with_widget(WidgetIntent(
-        "report/chart",
-        config=(("flow_type", "process"), ("flow_id", "RepairJobs"), ("report_id", "R1")),
-    ))
+    spec = _spec_with_widget(
+        WidgetIntent(
+            "report/chart",
+            config=(("flow_type", "process"), ("flow_id", "RepairJobs"), ("report_id", "R1")),
+        )
+    )
     with pytest.raises(ValueError, match="report-creation"):
         compile_spec(spec)
     assert get("report-creation").bucket is Bucket.REFUSES_LOUDLY
@@ -498,20 +616,41 @@ def test_role_scoped_visibility_stays_a_doctor_refusal() -> None:
 # (#38) the governed page plan carries CONTENT + BEHAVIOR; layout/exact-styling parity is eval-only
 # (#16/#28), never a build gate. Buckets are justified inline in coverage.py's ROWS.
 
-PAGE_LAYER_KEYS = frozenset({
-    "page-layout", "page-typography", "page-colour-styling", "kpi-tile-static",
-    "kpi-tile-live-number", "delta-pill", "status-pill",
-    "page-popup", "on-click-action", "page-tabs", "chart-legend",
-})
+PAGE_LAYER_KEYS = frozenset(
+    {
+        "page-layout",
+        "page-typography",
+        "page-colour-styling",
+        "kpi-tile-static",
+        "kpi-tile-live-number",
+        "delta-pill",
+        "status-pill",
+        "page-popup",
+        "on-click-action",
+        "page-tabs",
+        "chart-legend",
+    }
+)
 
 # The bucket #20 assigns each page-layer row. Union must equal PAGE_LAYER_KEYS (a real partition).
-PAGE_CAPTURED_LIVE = frozenset({
-    "page-layout", "page-typography", "page-colour-styling", "kpi-tile-static",
-})
+PAGE_CAPTURED_LIVE = frozenset(
+    {
+        "page-layout",
+        "page-typography",
+        "page-colour-styling",
+        "kpi-tile-static",
+    }
+)
 PAGE_BUILDABLE = frozenset({"page-popup", "on-click-action"})
-PAGE_REFUSED = frozenset({
-    "kpi-tile-live-number", "delta-pill", "status-pill", "page-tabs", "chart-legend",
-})
+PAGE_REFUSED = frozenset(
+    {
+        "kpi-tile-live-number",
+        "delta-pill",
+        "status-pill",
+        "page-tabs",
+        "chart-legend",
+    }
+)
 
 
 def test_page_layer_rows_present() -> None:
@@ -614,6 +753,7 @@ def test_chart_legend_points_at_report_widget_ticket() -> None:
 # assertion to the newly-expressible popup path (AC6): a popup-hosted API-impossible widget is
 # refused at compile naming its coverage row, never escaping just because it sits in a popup.
 
+
 def _spec_with_popup_widget(widget: WidgetIntent) -> AppSpec:
     """`_full_spec()` with `widget` hosted INSIDE a popup on its first page — the popup path B2's
     `_spec_with_widget` (a top-level widget) never exercised."""
@@ -622,8 +762,7 @@ def _spec_with_popup_widget(widget: WidgetIntent) -> AppSpec:
     page = view.pages[0]
     new_page = dataclasses.replace(page, popups=(PopupIntent("Detail", (widget,)),))
     new_view = dataclasses.replace(view, pages=(new_page,) + view.pages[1:])
-    return dataclasses.replace(
-        full, personas=Personas(views=(new_view,) + full.personas.views[1:]))
+    return dataclasses.replace(full, personas=Personas(views=(new_view,) + full.personas.views[1:]))
 
 
 def test_api_impossible_widget_inside_popup_is_wired_to_a_real_refusal() -> None:

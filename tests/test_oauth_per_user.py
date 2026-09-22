@@ -1,4 +1,5 @@
 """Deterministic two-gate OAuth tests over FastMCP 3.4.7's local ASGI routes."""
+
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +22,7 @@ from key_value.aio.stores.memory import MemoryStore
 from mcp.server.auth.provider import construct_redirect_uri
 from starlette.middleware import Middleware as ASGIMiddleware
 
-from kfforge import auth
+from app.infrastructure.kissflow import auth
 
 SIGNING_KEY = "insecure-test-signing-key-not-a-secret-value"  # gitleaks:allow
 GOOD_ID, GOOD_SECRET = "KEY_ALICE", "SECRET_ALICE"  # gitleaks:allow
@@ -155,7 +156,12 @@ class _FakeIdentityProvider(auth.KissflowOAuthProvider):
 
 
 class _Harness:
-    def __init__(self, provider: _FakeIdentityProvider, app: Any, pair_calls: list[tuple[str, str]]) -> None:
+    def __init__(
+        self,
+        provider: _FakeIdentityProvider,
+        app: Any,
+        pair_calls: list[tuple[str, str]],
+    ) -> None:
         self.provider = provider
         self.app = app
         self.pair_calls = pair_calls
@@ -169,9 +175,11 @@ class _Harness:
 
     async def authorize(self, client_id: str = GOOD_ID) -> tuple[httpx.Response, str, str]:
         verifier = secrets.token_urlsafe(48)
-        challenge = base64.urlsafe_b64encode(
-            hashlib.sha256(verifier.encode()).digest()
-        ).decode().rstrip("=")
+        challenge = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+            .decode()
+            .rstrip("=")
+        )
         response = await self.request(
             "GET",
             "/authorize",
@@ -354,7 +362,12 @@ def test_http_provider_requires_entra_gate(monkeypatch: pytest.MonkeyPatch) -> N
     """HTTP startup cannot fall back to the old Kissflow-only provider."""
     monkeypatch.setenv("MCP_OAUTH_BASE_URL", "https://mcp.example.test")
     monkeypatch.setenv(auth.SIGNING_KEY_ENV, SIGNING_KEY)
-    for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_REQUIRED_SCOPES"):
+    for name in (
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_REQUIRED_SCOPES",
+    ):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(RuntimeError, match="AZURE_TENANT_ID"):
         auth.provider_from_env()
@@ -382,9 +395,13 @@ def test_azure_authorize_and_callback_use_real_transaction_path(
         async def fetch_token(self, **kwargs: Any) -> dict[str, Any]:
             upstream_calls.append(kwargs)
             return {
-                "access_token": _jwt_payload({
-                    "sub": "sub-alice", "oid": "oid-alice", "preferred_username": "alice@example.com"
-                }),
+                "access_token": _jwt_payload(
+                    {
+                        "sub": "sub-alice",
+                        "oid": "oid-alice",
+                        "preferred_username": "alice@example.com",
+                    }
+                ),
                 "refresh_token": "upstream-refresh",
                 "expires_in": 3600,
                 "scope": "api://azure-client/mcp-access",
@@ -396,7 +413,9 @@ def test_azure_authorize_and_callback_use_real_transaction_path(
     monkeypatch.setattr(provider, "_create_upstream_oauth_client", lambda: _OfflineUpstream())
     mcp = FastMCP("oauth-real-azure-test", auth=provider)
     app = mcp.http_app(transport="streamable-http")
-    harness = _Harness(provider, app, [])
+    # this one test drives the REAL provider through the harness (it asserts on published
+    # metadata, which the fake does not override); every other test passes the fake.
+    harness = _Harness(provider, app, [])  # ty: ignore[invalid-argument-type]
 
     response, _, _ = _run(harness.authorize)
     assert response.status_code == 302
@@ -579,11 +598,13 @@ def test_refresh_revalidates_pair_rotates_refresh_and_rebinds_access(harness: _H
     first_payload = harness.provider.jwt_issuer.verify_token(first["access_token"])
     refreshed_payload = harness.provider.jwt_issuer.verify_token(refreshed["access_token"])
     assert refreshed_payload["jti"] != first_payload["jti"]
-    assert auth._open(
+    reopened = auth._open(
         auth.KISSFLOW_CREDENTIALS_KIND,
         refreshed_payload["upstream_claims"][auth.KISSFLOW_CREDENTIALS_CLAIM],
         None,
-    )["sec"] == GOOD_SECRET
+    )
+    assert reopened is not None, "refreshed credentials did not survive reopening"
+    assert reopened["sec"] == GOOD_SECRET
 
     old_again = _run(
         harness.token,
@@ -664,7 +685,10 @@ def test_invalid_entra_result_cannot_make_usable_token(harness: _Harness) -> Non
         harness.request,
         "POST",
         "/mcp",
-        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
         json={
             "jsonrpc": "2.0",
             "id": 1,
@@ -803,6 +827,7 @@ def test_concurrent_refresh_replay_rotates_once(disk_harness: _Harness) -> None:
 
 def test_metadata_disables_dcr_and_cimd(harness: _Harness) -> None:
     assert harness.provider._cimd_manager is None
+    assert harness.provider.client_registration_options is not None
     assert not harness.provider.client_registration_options.enabled
     response = _run(harness.request, "GET", "/.well-known/oauth-authorization-server")
     assert response.status_code == 200
@@ -810,10 +835,14 @@ def test_metadata_disables_dcr_and_cimd(harness: _Harness) -> None:
     assert "registration_endpoint" not in metadata
     assert "client_id_metadata_document_supported" not in metadata
     assert metadata["scopes_supported"] == ["mcp-access"]
-    assert set(metadata["token_endpoint_auth_methods_supported"]) == {
-        "client_secret_post",
-        "client_secret_basic",
-    }
+    # fastmcp 4 advertises the methods the proxy ACTUALLY supports. Every client it
+    # authenticates at the token endpoint is public — DCR-registered and synthesized clients
+    # are stored with token_endpoint_auth_method="none" — so the SDK default of
+    # client_secret_post/client_secret_basic was advertising a confidential method the proxy
+    # never enforced. "none" is the truthful advertisement, not a weakened one: nothing about
+    # what is enforced changed. private_key_jwt would join it only if CIMD were enabled, and
+    # the assertion above proves it is not.
+    assert set(metadata["token_endpoint_auth_methods_supported"]) == {"none"}
     register = _run(harness.request, "POST", "/register", content=b"{}")
     assert register.status_code == 404
 
@@ -898,7 +927,7 @@ def test_capture_token_body_is_bounded_and_does_not_replay_oversize() -> None:
 
 
 def test_http_client_does_not_fall_back_to_process_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    from kfforge import server
+    from app.infrastructure.mcp import server
 
     monkeypatch.setenv("MCP_HTTP", "1")
     monkeypatch.setenv("KF_DEV_DOMAIN", "dev-kissflow.example.com")

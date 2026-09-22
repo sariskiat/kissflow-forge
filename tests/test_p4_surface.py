@@ -1,15 +1,17 @@
 """Offline unit tests for the issue #55 tracer-bullet surface — new/extended forge_* tools.
 
 Same NO-NETWORK contract as tests/test_client.py: KfClient's HTTP verb is intercepted by a Fake
-subclass, so the real read-verify-write orchestration logic in kfforge.client runs for real.
+subclass, so the real read-verify-write orchestration logic in app.infrastructure.kissflow.client runs for real.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
-from test_client import DEV, FakeClient, _bare_process_draft
+from test_client import FakeClient, _bare_process_draft
 
-from kfforge.client import (
+from app.domain.types import FieldSpec, FieldType
+from app.infrastructure.kissflow.client import (
     CopilotAskReport,
     CopilotCheckReport,
     Err,
@@ -30,7 +32,6 @@ from kfforge.client import (
     publish_application_verified,
     run_sweep,
 )
-from kfforge.types import FieldSpec, FieldType
 
 
 def _bare_draft(version: str = "v1") -> dict[str, Any]:
@@ -80,8 +81,16 @@ def test_add_role_users_by_query_grants_and_verifies() -> None:
 
 
 def test_add_role_users_existing_member_is_already_present_no_write() -> None:
-    c = RoleUsersClient([{"_id": "R1", "Name": "Reviewer",
-                          "Members": [{"_id": "U1", "Kind": "User", "Name": "Ann"}], "UserCount": 1}])
+    c = RoleUsersClient(
+        [
+            {
+                "_id": "R1",
+                "Name": "Reviewer",
+                "Members": [{"_id": "U1", "Kind": "User", "Name": "Ann"}],
+                "UserCount": 1,
+            }
+        ]
+    )
     rep = apply_add_role_users(c, "R1", user_ids=[{"_id": "U1", "Kind": "User", "Name": "Ann"}])
     assert isinstance(rep, RoleUsersReport)
     assert rep.added == () and rep.already_present == ("U1",) and rep.not_found == ()
@@ -104,8 +113,16 @@ def test_add_role_users_requires_query_or_ids() -> None:
 
 
 def test_add_role_users_existing_members_carried_over_never_dropped() -> None:
-    c = RoleUsersClient([{"_id": "R1", "Name": "Reviewer",
-                          "Members": [{"_id": "U0", "Kind": "User", "Name": "Old"}], "UserCount": 1}])
+    c = RoleUsersClient(
+        [
+            {
+                "_id": "R1",
+                "Name": "Reviewer",
+                "Members": [{"_id": "U0", "Kind": "User", "Name": "Old"}],
+                "UserCount": 1,
+            }
+        ]
+    )
     c.assignee_results["ann"] = [{"_id": "U1", "Kind": "User", "Name": "Ann"}]
     rep = apply_add_role_users(c, "R1", user_query="ann")
     assert isinstance(rep, RoleUsersReport)
@@ -150,7 +167,9 @@ def test_grant_tier_process_initiate_is_member_with_empty_permission() -> None:
 
 def test_grant_tier_no_access_deletes_the_member_route() -> None:
     c = TierClient([{"_id": "R1", "Name": "Reviewer"}])
-    c.members[("process", "F1")] = [{"_id": "R1", "Role": "DataAdmin", "Permission": ["InitiateItems"]}]
+    c.members[("process", "F1")] = [
+        {"_id": "R1", "Role": "DataAdmin", "Permission": ["InitiateItems"]}
+    ]
     rep = apply_grant_tier(c, "process", "F1", "R1", "No access")
     assert isinstance(rep, TierReport) and rep.verified is True
     assert c.deleted_members == [("process", "F1", "R1")]
@@ -201,8 +220,14 @@ class CreateFlowClient(FakeClient):
         return {"_id": self._next_id("Dataset"), "Type": "Dataset", "Status": "Live", "Name": name}
 
     def create_case(self, name, item_type, prefix):  # type: ignore[override]
-        return {"_id": self._next_id("Case"), "Type": "Case", "Status": "Live", "Name": name,
-                "ItemType": item_type, "Prefix": prefix}
+        return {
+            "_id": self._next_id("Case"),
+            "Type": "Case",
+            "Status": "Live",
+            "Name": name,
+            "ItemType": item_type,
+            "Prefix": prefix,
+        }
 
 
 def test_create_flow_process_starts_draft() -> None:
@@ -247,8 +272,9 @@ def test_create_flow_case_requires_item_type_and_prefix() -> None:
 
 def test_create_flow_case_with_extra_succeeds() -> None:
     c = CreateFlowClient()
-    rep = create_flow_any(c, "case", "Support Tickets",
-                          extra={"item_type": "Board", "prefix": "SUP"})
+    rep = create_flow_any(
+        c, "case", "Support Tickets", extra={"item_type": "Board", "prefix": "SUP"}
+    )
     assert isinstance(rep, FlowCreateReport)
     assert rep.status == "Live" and rep.born_live is True
 
@@ -279,6 +305,7 @@ class PublishAppClient(FakeClient):
 def test_publish_app_reads_back_meta_version_no_runtime_node() -> None:
     c = PublishAppClient({"Root": "M1", "_meta_version": "v9", "M1": {"Id": "M1"}})
     rep = publish_application_verified(c, "App1")
+    assert not isinstance(rep, Err), rep
     assert rep["published"] is True and rep["isError"] is False
     assert rep["meta_version"] == "v9"
     assert rep["runtime_id"] is None and rep["note"]
@@ -286,9 +313,16 @@ def test_publish_app_reads_back_meta_version_no_runtime_node() -> None:
 
 
 def test_publish_app_surfaces_a_runtime_node_when_present() -> None:
-    c = PublishAppClient({"Root": "M1", "_meta_version": "v9", "M1": {"Id": "M1"},
-                          "Runtime_abc123": {"Id": "Runtime_abc123"}})
+    c = PublishAppClient(
+        {
+            "Root": "M1",
+            "_meta_version": "v9",
+            "M1": {"Id": "M1"},
+            "Runtime_abc123": {"Id": "Runtime_abc123"},
+        }
+    )
     rep = publish_application_verified(c, "App1")
+    assert not isinstance(rep, Err), rep
     assert rep["runtime_id"] == "Runtime_abc123"
     assert "note" not in rep or rep.get("note") is None
 
@@ -327,6 +361,7 @@ class DatasetRecordClient(FakeClient):
 def test_dataset_records_create_lands_and_counts() -> None:
     c = DatasetRecordClient()
     rep = apply_dataset_records(c, "F1", "create", record={"Name": "Acme Corp"})
+    assert not isinstance(rep, Err), rep
     assert rep["isError"] is False
     assert rep["created"] == 1 and rep["listed"] == 0 and rep["failed"] == 0
 
@@ -349,6 +384,7 @@ def test_dataset_records_list_returns_columns_and_rows() -> None:
     c = DatasetRecordClient()
     apply_dataset_records(c, "F1", "create", record={"Name": "Acme Corp"})
     rep = apply_dataset_records(c, "F1", "list")
+    assert not isinstance(rep, Err), rep
     assert rep["isError"] is False
     assert rep["listed"] == 1 and rep["columns"] == ["Name"]
 
@@ -364,8 +400,9 @@ def test_dataset_records_unknown_op_rejected() -> None:
 
 def test_set_role_preference_writes_default_page_and_navigation() -> None:
     c = RoleUsersClient([{"_id": "R1", "Name": "Reviewer", "Members": [], "UserCount": 0}])
-    rep = apply_set_role_preference(c, "R1", default_page="Page_123",
-                                    default_navigation="Navigation001")
+    rep = apply_set_role_preference(
+        c, "R1", default_page="Page_123", default_navigation="Navigation001"
+    )
     assert isinstance(rep, RolePreferenceReport)
     assert rep.verified is True
     live = c.app_roles[0]["Preference"]
@@ -380,8 +417,16 @@ def test_set_role_preference_default_sentinel_is_accepted() -> None:
 
 
 def test_set_role_preference_never_drops_existing_members() -> None:
-    c = RoleUsersClient([{"_id": "R1", "Name": "Reviewer",
-                          "Members": [{"_id": "U0", "Kind": "User", "Name": "Old"}], "UserCount": 1}])
+    c = RoleUsersClient(
+        [
+            {
+                "_id": "R1",
+                "Name": "Reviewer",
+                "Members": [{"_id": "U0", "Kind": "User", "Name": "Old"}],
+                "UserCount": 1,
+            }
+        ]
+    )
     apply_set_role_preference(c, "R1", default_page="Page_1")
     assert c.app_roles[0]["Members"] == [{"_id": "U0", "Kind": "User", "Name": "Old"}]
 
@@ -400,8 +445,12 @@ def test_sweep_apps_reads_the_application_inventory() -> None:
     c.applications = {"App_1": {"_id": "App_1", "Name": "Demo"}}
     out = run_sweep(c, "apps")
     assert out["isError"] is False
-    assert out["results"]["apps"] == {"status": "read", "count": 1,
-                                      "items": [{"_id": "App_1", "Name": "Demo"}], "error": None}
+    assert out["results"]["apps"] == {
+        "status": "read",
+        "count": 1,
+        "items": [{"_id": "App_1", "Name": "Demo"}],
+        "error": None,
+    }
 
 
 def test_sweep_flows_covers_every_kind_and_stays_scoped() -> None:
@@ -411,12 +460,16 @@ def test_sweep_flows_covers_every_kind_and_stays_scoped() -> None:
     assert out["isError"] is False
     assert out["results"]["flows"]["process"]["count"] == 1
     assert out["results"]["flows"]["case"]["count"] == 2
-    assert out["results"]["flows"]["form"]["count"] == 0  # never in `c.flows` -> still "read", empty
+    assert (
+        out["results"]["flows"]["form"]["count"] == 0
+    )  # never in `c.flows` -> still "read", empty
 
 
 def test_sweep_pages_skipped_when_no_app_id_anywhere() -> None:
     c = FakeClient(_bare_draft())
-    c._cfg = KfConfig(key_id="k", key_secret="s", account="Acc", domain="dev-x.example.com", app_id="")
+    c._cfg = KfConfig(
+        key_id="k", key_secret="s", account="Acc", domain="dev-x.example.com", app_id=""
+    )
     out = run_sweep(c, "pages")
     assert out["results"]["pages"]["status"] == "skipped"
     assert out["isError"] is False  # skipped is not an error
@@ -424,8 +477,9 @@ def test_sweep_pages_skipped_when_no_app_id_anywhere() -> None:
 
 def test_sweep_roles_and_lists() -> None:
     c = FakeClient(_bare_draft())
-    c.app_roles = [{"_id": "R1", "Name": "Reviewer",
-                    "Applications": [{"_id": "App", "Type": "Application"}]}]
+    c.app_roles = [
+        {"_id": "R1", "Name": "Reviewer", "Applications": [{"_id": "App", "Type": "Application"}]}
+    ]
     c.word_lists = {"Priority": "List_1"}
     out = run_sweep(c, "all", app_id="App")
     assert out["results"]["roles"]["count"] == 1
@@ -469,8 +523,9 @@ class CopilotClient(FakeClient):
 
 def test_copilot_ask_sends_and_reads_back_the_paired_reply() -> None:
     c = CopilotClient()
-    c.conversations = [{"ConversationId": "C1", "UserMessage": "add a field",
-                        "SystemMessage": "which step?"}]
+    c.conversations = [
+        {"ConversationId": "C1", "UserMessage": "add a field", "SystemMessage": "which step?"}
+    ]
     rep = apply_copilot_ask(c, "App1", "add a field")
     assert isinstance(rep, CopilotAskReport)
     assert rep.conversation_id == "C1" and rep.immediate_reply == "which step?"
@@ -492,7 +547,7 @@ def test_copilot_ask_no_match_yet_is_not_an_error() -> None:
 def test_copilot_ask_surfaces_a_read_failure_instead_of_a_silent_null() -> None:
     """A copilot_conversations READ error must not read back identical to 'not registered yet' —
     both were null/null before, which made a caller conclude the tool was broken. Fail loud."""
-    from kfforge.client import Err
+    from app.infrastructure.kissflow.client import Err
 
     class _ReadFails(CopilotClient):
         def copilot_conversations(self, app_id):  # type: ignore[override]
@@ -557,13 +612,22 @@ def test_apply_fields_full_lands_field_validation_computed_and_conditional_toget
         FieldSpec(name="Details", type=FieldType.TEXT),
     ]
     rep = apply_fields_full(
-        c, "process", "F1", specs,
-        validations={"Notes": [{"operator": "MAX_LENGTH", "rhs": "10",
-                                "error_message": "Too long"}]},
-        computed={"Computed Sample": {"fn": "concatenate",
-                                      "args": [{"static": "BR-"}, {"field": "Source Number"}]}},
-        conditional={"Details": {"trigger_field": "Show Details", "operator": "EQUAL_TO",
-                                 "rhs": "true"}},
+        c,
+        "process",
+        "F1",
+        specs,
+        validations={
+            "Notes": [{"operator": "MAX_LENGTH", "rhs": "10", "error_message": "Too long"}]
+        },
+        computed={
+            "Computed Sample": {
+                "fn": "concatenate",
+                "args": [{"static": "BR-"}, {"field": "Source Number"}],
+            }
+        },
+        conditional={
+            "Details": {"trigger_field": "Show Details", "operator": "EQUAL_TO", "rhs": "true"}
+        },
     )
     assert isinstance(rep, FullFieldsReport)
     assert set(rep.verified) == {s.name for s in specs}
@@ -577,15 +641,21 @@ def test_apply_fields_full_lands_field_validation_computed_and_conditional_toget
     assert rep.as_tool_result()["isError"] is False
 
     # DefaultValue landed via the field's own options
-    notes = next(v for v in c.draft.values()
-                if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Notes")
+    notes = next(
+        v
+        for v in c.draft.values()
+        if isinstance(v, dict) and v.get("Kind") == "Field" and v.get("Name") == "Notes"
+    )
     assert notes["DefaultValue"] == "N/A"
 
 
 def test_apply_fields_full_offline_rejection_never_reaches_put() -> None:
     c = FakeClient(_bare_draft())
     got = apply_fields_full(
-        c, "process", "F1", [FieldSpec(name="Details", type=FieldType.TEXT)],
+        c,
+        "process",
+        "F1",
+        [FieldSpec(name="Details", type=FieldType.TEXT)],
         conditional={"Details": {"trigger_field": "Nope", "operator": "EQUAL_TO", "rhs": "true"}},
     )
     assert isinstance(got, Err) and got.kind == "verify"
@@ -600,7 +670,10 @@ def test_apply_fields_full_missing_layer_marks_iserror_without_blocking_others()
 
     c = Dropping(_bare_draft())
     rep = apply_fields_full(
-        c, "process", "F1", [FieldSpec(name="Notes", type=FieldType.TEXT)],
+        c,
+        "process",
+        "F1",
+        [FieldSpec(name="Notes", type=FieldType.TEXT)],
         validations={"Notes": [{"operator": "MAX_LENGTH", "rhs": "10"}]},
     )
     assert isinstance(rep, FullFieldsReport)

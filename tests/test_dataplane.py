@@ -8,12 +8,13 @@ real implementation builds the documented URLs — in particular the admin-vs-no
 
 Blindness: neutral flow id "Flow_Sample01", field ids "sample_field_a" etc. — no real app identity.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
-from kfforge.client import Err, KfClient, KfConfig
-from kfforge.dataplane import (
+from app.infrastructure.kissflow.client import Err, KfClient, KfConfig
+from app.infrastructure.kissflow.dataplane import (
     FillReport,
     LiveDataPlane,
     StepPlan,
@@ -37,8 +38,12 @@ LIVE_AIID = "LIVE-AIID-1"
 
 
 def _detail(iid: str, step: str = "Start", *, with_context: bool = True) -> dict[str, Any]:
-    d: dict[str, Any] = {"_id": iid, "_current_step": step, "_status": "Draft",
-                          "_activity_instance_id": DECOY_AIID}  # myitems-style decoy field
+    d: dict[str, Any] = {
+        "_id": iid,
+        "_current_step": step,
+        "_status": "Draft",
+        "_activity_instance_id": DECOY_AIID,
+    }  # myitems-style decoy field
     if with_context:
         d["_current_context"] = [{"_context_activity_instance_id": LIVE_AIID}]
     return d
@@ -128,6 +133,7 @@ def test_live_aiid_never_returns_the_myitems_decoy() -> None:
 # for THAT submit is the one create_item's own response returned. usable_aiid is live_aiid plus
 # exactly that one documented fallback, supplied by the caller, never inferred.
 
+
 def test_usable_aiid_prefers_live_context_over_the_create_fallback() -> None:
     """Context wins whenever it's present -- the fallback is a last resort, not a first choice."""
     got = usable_aiid(_detail("ITEM-1"), create_aiid="SOME-CREATE-AIID")
@@ -162,8 +168,9 @@ def test_usable_aiid_fallback_never_shadows_the_myitems_decoy_check() -> None:
 def test_fill_and_verify_all_landed() -> None:
     fake = FakeClient()
     fake.create_item(FLOW)
-    rep = fill_and_verify(fake, flow_id=FLOW, iid="ITEM-1",
-                          values={"sample_field_a": "x", "sample_field_b": 3})
+    rep = fill_and_verify(
+        fake, flow_id=FLOW, iid="ITEM-1", values={"sample_field_a": "x", "sample_field_b": 3}
+    )
     assert isinstance(rep, FillReport)
     assert set(rep.landed) == {"sample_field_a", "sample_field_b"}
     assert rep.discarded == () and rep.mismatched == ()
@@ -175,8 +182,12 @@ def test_fill_and_verify_silently_discarded_select_like_value() -> None:
     fake = FakeClient()
     fake.create_item(FLOW)
     fake.discard_keys = {"sample_select_field"}
-    rep = fill_and_verify(fake, flow_id=FLOW, iid="ITEM-1",
-                          values={"sample_field_a": "x", "sample_select_field": "Not An Option"})
+    rep = fill_and_verify(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        values={"sample_field_a": "x", "sample_select_field": "Not An Option"},
+    )
     assert isinstance(rep, FillReport)
     assert rep.landed == ("sample_field_a",)
     assert rep.discarded == ("sample_select_field",)
@@ -201,8 +212,9 @@ def test_fill_and_verify_propagates_put_err_without_reading_detail() -> None:
     fake.put_fails = True
     got = fill_and_verify(fake, flow_id=FLOW, iid="ITEM-1", values={"sample_field_a": "x"})
     assert isinstance(got, Err)
-    assert not any(name == "get_detail" for name, _ in fake.calls), \
+    assert not any(name == "get_detail" for name, _ in fake.calls), (
         "a failed PUT must never be followed by a read-back GET"
+    )
 
 
 # ------------------------------------------------------------------------------------ advance
@@ -222,8 +234,9 @@ def test_advance_propagates_missing_context_as_err() -> None:
     fake.items["ITEM-1"].pop("_current_context")
     got = advance(fake, flow_id=FLOW, iid="ITEM-1")
     assert isinstance(got, Err)
-    assert not any(name == "submit" for name, _ in fake.calls), \
+    assert not any(name == "submit" for name, _ in fake.calls), (
         "must never submit without a live aiid"
+    )
 
 
 def test_advance_uses_the_create_aiid_fallback_when_context_missing() -> None:
@@ -336,6 +349,7 @@ def test_walk_empty_step_list_still_creates() -> None:
 # what stranded `forge_simulate_case` before the fix -- live_aiid alone can never derive hop 1's
 # aiid from a Draft item's detail, only from the create response.
 
+
 class _TwoPhaseFakeClient:
     """No _current_context until the first submit lands; every submitted aiid is recorded so a
     test can assert exactly which source (create-response vs. context) each hop actually used."""
@@ -381,8 +395,9 @@ def test_walk_from_draft_uses_create_response_aiid_for_hop_one_then_context_afte
     rep = walk(fake, flow_id=FLOW, steps=steps)
     assert rep.ok() is True
     assert rep.advanced == ("Step One", "Step Two")
-    assert fake.submit_calls == ["CREATE-AIID", "CONTEXT-AIID-1"], \
+    assert fake.submit_calls == ["CREATE-AIID", "CONTEXT-AIID-1"], (
         "hop 1 must use the create-response aiid (no context yet); hop 2 must use the live context"
+    )
 
 
 class _NeverRolloverFakeClient:
@@ -421,8 +436,9 @@ def test_walk_never_reuses_create_aiid_past_the_first_hop_even_if_context_stays_
     ]
     rep = walk(fake, flow_id=FLOW, steps=steps)
     assert rep.advanced == ("Step One",), "hop 1 succeeds via the create-response fallback"
-    assert rep.failed == ("Step Two",), \
+    assert rep.failed == ("Step Two",), (
         "hop 2 has no context and gets NO fallback -- it must fail, never reuse hop 1's aiid"
+    )
     assert rep.ok() is False
     assert fake.submit_calls == ["CREATE-AIID"], "only the one hop-1 submit ever happened"
 
@@ -436,8 +452,11 @@ class _RouteAwareTransport(KfClient):
     """
 
     def __init__(self) -> None:
-        super().__init__(KfConfig(key_id="k", key_secret="s", account="Acc",
-                                  domain="dev-x.example.com", app_id="App"))
+        super().__init__(
+            KfConfig(
+                key_id="k", key_secret="s", account="Acc", domain="dev-x.example.com", app_id="App"
+            )
+        )
         self.requested_urls: list[str] = []
 
     def _req(self, method: str, url: str, data: Any | None = None) -> tuple[int, str]:  # type: ignore[override]
@@ -484,9 +503,11 @@ def test_live_data_plane_builds_every_documented_route() -> None:
 # wait_new_aiid actually makes — returning a STALE aiid for the first `stale_calls` reads, then a
 # NEW one, so the retry loop's own behavior is what gets proven, not live network timing.
 
+
 class _StepTransitionFake:
-    def __init__(self, *, stale_calls: int, old_aiid: str, new_aiid: str,
-                 fail_first: bool = False) -> None:
+    def __init__(
+        self, *, stale_calls: int, old_aiid: str, new_aiid: str, fail_first: bool = False
+    ) -> None:
         self.stale_calls = stale_calls
         self.old_aiid = old_aiid
         self.new_aiid = new_aiid
@@ -498,15 +519,25 @@ class _StepTransitionFake:
         if self.fail_first and self.get_detail_calls == 1:
             return Err("http", "transient get_detail failure")
         aiid = self.old_aiid if self.get_detail_calls <= self.stale_calls else self.new_aiid
-        return {"_id": iid, "_current_step": "Whatever",
-                "_current_context": [{"_context_activity_instance_id": aiid}]}
+        return {
+            "_id": iid,
+            "_current_step": "Whatever",
+            "_current_context": [{"_context_activity_instance_id": aiid}],
+        }
 
 
 def test_wait_new_aiid_returns_as_soon_as_the_aiid_changes() -> None:
     fake = _StepTransitionFake(stale_calls=3, old_aiid="AIID-OLD", new_aiid="AIID-NEW")
     sleeps: list[float] = []
-    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
-                        tries=8, delay=0.5, sleep_fn=sleeps.append)
+    got = wait_new_aiid(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        prev_aiid="AIID-OLD",
+        tries=8,
+        delay=0.5,
+        sleep_fn=sleeps.append,
+    )
     assert got == "AIID-NEW"
     assert fake.get_detail_calls == 4, "3 stale reads + 1 that finally showed the new aiid"
     assert sleeps == [0.5, 0.5, 0.5], "slept BETWEEN attempts, never before the first"
@@ -515,8 +546,15 @@ def test_wait_new_aiid_returns_as_soon_as_the_aiid_changes() -> None:
 def test_wait_new_aiid_first_read_succeeding_needs_no_sleep_at_all() -> None:
     fake = _StepTransitionFake(stale_calls=0, old_aiid="AIID-OLD", new_aiid="AIID-NEW")
     sleeps: list[float] = []
-    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
-                        tries=8, delay=1.0, sleep_fn=sleeps.append)
+    got = wait_new_aiid(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        prev_aiid="AIID-OLD",
+        tries=8,
+        delay=1.0,
+        sleep_fn=sleeps.append,
+    )
     assert got == "AIID-NEW"
     assert fake.get_detail_calls == 1
     assert sleeps == [], "no need to ever sleep if the very first read already shows the new aiid"
@@ -525,8 +563,15 @@ def test_wait_new_aiid_first_read_succeeding_needs_no_sleep_at_all() -> None:
 def test_wait_new_aiid_gives_up_after_tries_exhausted() -> None:
     fake = _StepTransitionFake(stale_calls=999, old_aiid="AIID-OLD", new_aiid="AIID-NEW")
     sleeps: list[float] = []
-    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
-                        tries=3, delay=0.1, sleep_fn=sleeps.append)
+    got = wait_new_aiid(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        prev_aiid="AIID-OLD",
+        tries=3,
+        delay=0.1,
+        sleep_fn=sleeps.append,
+    )
     assert isinstance(got, Err) and got.kind == "verify"
     assert "AIID-OLD" in got.message
     assert fake.get_detail_calls == 3, "never more reads than the tries budget allows"
@@ -535,8 +580,15 @@ def test_wait_new_aiid_gives_up_after_tries_exhausted() -> None:
 
 def test_wait_new_aiid_never_returns_prev_aiid_as_if_it_were_success() -> None:
     fake = _StepTransitionFake(stale_calls=999, old_aiid="AIID-OLD", new_aiid="AIID-NEW")
-    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
-                        tries=2, delay=0, sleep_fn=lambda s: None)
+    got = wait_new_aiid(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        prev_aiid="AIID-OLD",
+        tries=2,
+        delay=0,
+        sleep_fn=lambda s: None,
+    )
     assert got != "AIID-OLD"
     assert isinstance(got, Err)
 
@@ -544,10 +596,18 @@ def test_wait_new_aiid_never_returns_prev_aiid_as_if_it_were_success() -> None:
 def test_wait_new_aiid_retries_through_a_transient_get_detail_error() -> None:
     """A transport Err from get_detail is treated as "not ready yet", not a hard failure —
     exactly the class of transient state a bounded poll exists to absorb."""
-    fake = _StepTransitionFake(stale_calls=0, old_aiid="AIID-OLD", new_aiid="AIID-NEW",
-                               fail_first=True)
-    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
-                        tries=8, delay=0, sleep_fn=lambda s: None)
+    fake = _StepTransitionFake(
+        stale_calls=0, old_aiid="AIID-OLD", new_aiid="AIID-NEW", fail_first=True
+    )
+    got = wait_new_aiid(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        prev_aiid="AIID-OLD",
+        tries=8,
+        delay=0,
+        sleep_fn=lambda s: None,
+    )
     assert got == "AIID-NEW"
     assert fake.get_detail_calls == 2
 
@@ -557,6 +617,7 @@ def test_wait_new_aiid_retries_through_a_transient_get_detail_error() -> None:
 # WHOLE workflow leaves NO _current_context at all -- there is no next step to roll over INTO.
 # Before this fix that read exactly like "not rolled over yet" and the poll spun until `tries`
 # ran out, reporting a false failure on a submit that had, in fact, fully succeeded.
+
 
 class _TerminalStatusFake:
     """Reports a non-terminal status (with a stale _current_context, matching a real "still
@@ -572,37 +633,63 @@ class _TerminalStatusFake:
     def get_detail(self, flow_id: str, iid: str) -> dict[str, Any]:
         self.get_detail_calls += 1
         if self.get_detail_calls <= self.stale_calls:
-            return {"_id": iid, "_status": "InProgress", "_current_step": "Whatever",
-                    "_current_context": [{"_context_activity_instance_id": self.old_aiid}]}
+            return {
+                "_id": iid,
+                "_status": "InProgress",
+                "_current_step": "Whatever",
+                "_current_context": [{"_context_activity_instance_id": self.old_aiid}],
+            }
         return {"_id": iid, "_status": self.terminal_status, "_current_step": None}
 
 
 def test_wait_new_aiid_returns_immediately_on_a_terminal_status_no_context_needed() -> None:
     fake = _TerminalStatusFake(stale_calls=0, terminal_status="Completed", old_aiid="AIID-OLD")
-    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
-                        tries=8, delay=0, sleep_fn=lambda s: None)
+    got = wait_new_aiid(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        prev_aiid="AIID-OLD",
+        tries=8,
+        delay=0,
+        sleep_fn=lambda s: None,
+    )
     assert got == "Completed"
     assert fake.get_detail_calls == 1
 
 
 def test_wait_new_aiid_recognizes_terminal_status_after_some_stale_reads() -> None:
     fake = _TerminalStatusFake(stale_calls=2, terminal_status="Completed", old_aiid="AIID-OLD")
-    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
-                        tries=8, delay=0, sleep_fn=lambda s: None)
+    got = wait_new_aiid(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        prev_aiid="AIID-OLD",
+        tries=8,
+        delay=0,
+        sleep_fn=lambda s: None,
+    )
     assert got == "Completed"
     assert fake.get_detail_calls == 3
 
 
 def test_wait_new_aiid_treats_rejected_as_terminal_too() -> None:
     fake = _TerminalStatusFake(stale_calls=0, terminal_status="Rejected", old_aiid="AIID-OLD")
-    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
-                        tries=8, delay=0, sleep_fn=lambda s: None)
+    got = wait_new_aiid(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        prev_aiid="AIID-OLD",
+        tries=8,
+        delay=0,
+        sleep_fn=lambda s: None,
+    )
     assert got == "Rejected"
 
 
 def test_wait_new_aiid_explicit_non_terminal_status_falls_through_to_aiid_check() -> None:
     """An explicit non-terminal _status (InProgress) must NOT short-circuit -- only a status in
     _TERMINAL_STATUSES does. Regression guard against the terminal check over-firing."""
+
     class _InProgressWithNewAiid:
         def __init__(self) -> None:
             self.calls = 0
@@ -610,12 +697,23 @@ def test_wait_new_aiid_explicit_non_terminal_status_falls_through_to_aiid_check(
         def get_detail(self, flow_id: str, iid: str) -> dict[str, Any]:
             self.calls += 1
             aiid = "AIID-OLD" if self.calls == 1 else "AIID-NEW"
-            return {"_id": iid, "_status": "InProgress", "_current_step": "Whatever",
-                    "_current_context": [{"_context_activity_instance_id": aiid}]}
+            return {
+                "_id": iid,
+                "_status": "InProgress",
+                "_current_step": "Whatever",
+                "_current_context": [{"_context_activity_instance_id": aiid}],
+            }
 
     fake = _InProgressWithNewAiid()
-    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
-                        tries=8, delay=0, sleep_fn=lambda s: None)
+    got = wait_new_aiid(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        prev_aiid="AIID-OLD",
+        tries=8,
+        delay=0,
+        sleep_fn=lambda s: None,
+    )
     assert got == "AIID-NEW"
     assert fake.calls == 2
 
@@ -624,6 +722,7 @@ def test_wait_new_aiid_explicit_non_terminal_status_falls_through_to_aiid_check(
 # Node G addition: extending walk() itself with an OPTIONAL poll hook, rather than the Robot/
 # caller layer polling between steps — forge_simulate_case wraps the ENTIRE walk in one atomic MCP
 # call, so there is no seam outside walk() to inject a poll between its internal steps.
+
 
 class _DelayedTransitionFakeClient(FakeClient):
     """Same as FakeClient, but get_detail's aiid goes stale for `stale_reads_per_submit` calls
@@ -662,8 +761,15 @@ def test_walk_poll_retries_until_the_aiid_changes_then_succeeds() -> None:
     fake = _DelayedTransitionFakeClient(stale_reads_per_submit=2)
     sleeps: list[float] = []
     steps = [_plan("step-1", values={"sample_field_a": "a1"})]
-    rep = walk(fake, flow_id=FLOW, steps=steps, poll_after_transition=True, poll_tries=8,
-              poll_delay=0.5, poll_sleep_fn=sleeps.append)
+    rep = walk(
+        fake,
+        flow_id=FLOW,
+        steps=steps,
+        poll_after_transition=True,
+        poll_tries=8,
+        poll_delay=0.5,
+        poll_sleep_fn=sleeps.append,
+    )
     assert rep.ok() is True
     assert rep.advanced == ("step-1",)
     assert sleeps == [0.5, 0.5], "exactly the 2 sleeps the one delayed transition needed"
@@ -675,10 +781,19 @@ def test_walk_poll_lets_the_next_step_submit_with_the_fresh_aiid_not_a_stale_one
     slow-to-transition server, could still be step-1's. With polling, step-1's loop iteration does
     not move on until the NEW aiid is confirmed, so step-2 submits with it."""
     fake = _DelayedTransitionFakeClient(stale_reads_per_submit=2)
-    steps = [_plan("step-1", values={"sample_field_a": "a1"}),
-            _plan("step-2", values={"sample_field_b": "b2"})]
-    rep = walk(fake, flow_id=FLOW, steps=steps, poll_after_transition=True, poll_tries=8,
-              poll_delay=0, poll_sleep_fn=lambda s: None)
+    steps = [
+        _plan("step-1", values={"sample_field_a": "a1"}),
+        _plan("step-2", values={"sample_field_b": "b2"}),
+    ]
+    rep = walk(
+        fake,
+        flow_id=FLOW,
+        steps=steps,
+        poll_after_transition=True,
+        poll_tries=8,
+        poll_delay=0,
+        poll_sleep_fn=lambda s: None,
+    )
     assert rep.ok() is True
     submit_calls = [args for name, args in fake.calls if name == "submit"]
     assert submit_calls[0] == (FLOW, "ITEM-1", LIVE_AIID)
@@ -689,8 +804,10 @@ def test_walk_poll_disabled_by_default_makes_no_extra_calls() -> None:
     """poll_after_transition defaults False -- every EXISTING caller/test (a fake with no such
     latency) must see IDENTICAL behavior to before this hook existed."""
     fake = FakeClient()
-    steps = [_plan("step-1", values={"sample_field_a": "a1"}),
-            _plan("step-2", values={"sample_field_b": "b2"})]
+    steps = [
+        _plan("step-1", values={"sample_field_a": "a1"}),
+        _plan("step-2", values={"sample_field_b": "b2"}),
+    ]
     rep = walk(fake, flow_id=FLOW, steps=steps)
     assert rep.ok() is True
     get_detail_calls = sum(1 for name, _ in fake.calls if name == "get_detail")
@@ -699,16 +816,28 @@ def test_walk_poll_disabled_by_default_makes_no_extra_calls() -> None:
 
 def test_walk_poll_failure_is_reported_as_the_failed_step_not_a_false_success() -> None:
     fake = FakeClient()  # constant aiid -- the poll can never see a change
-    steps = [_plan("step-1", values={"sample_field_a": "a1"}),
-            _plan("step-2", values={"sample_field_b": "b2"})]
-    rep = walk(fake, flow_id=FLOW, steps=steps, poll_after_transition=True, poll_tries=2,
-              poll_delay=0, poll_sleep_fn=lambda s: None)
+    steps = [
+        _plan("step-1", values={"sample_field_a": "a1"}),
+        _plan("step-2", values={"sample_field_b": "b2"}),
+    ]
+    rep = walk(
+        fake,
+        flow_id=FLOW,
+        steps=steps,
+        poll_after_transition=True,
+        poll_tries=2,
+        poll_delay=0,
+        poll_sleep_fn=lambda s: None,
+    )
     assert rep.ok() is False
-    assert rep.advanced == ("step-1",), "step-1 itself DID advance -- only the post-transition poll failed"
+    assert rep.advanced == ("step-1",), (
+        "step-1 itself DID advance -- only the post-transition poll failed"
+    )
     assert rep.failed == ("step-1",)
     assert rep.error is not None and "poll failed" in rep.error
-    assert not any("sample_field_b" in args[2] for name, args in fake.calls if name == "put_fields"), \
-        "step-2 must never be attempted once the poll fails"
+    assert not any(
+        "sample_field_b" in args[2] for name, args in fake.calls if name == "put_fields"
+    ), "step-2 must never be attempted once the poll fails"
 
 
 class _CompletesOnLastSubmitFakeClient(FakeClient):
@@ -742,7 +871,9 @@ class _CompletesOnLastSubmitFakeClient(FakeClient):
         if self._completed:
             item.pop("_current_context", None)
         else:
-            item["_current_context"] = [{"_context_activity_instance_id": f"AIID-GEN-{self._generation}"}]
+            item["_current_context"] = [
+                {"_context_activity_instance_id": f"AIID-GEN-{self._generation}"}
+            ]
         return item
 
 
@@ -752,10 +883,19 @@ def test_walk_poll_treats_final_submit_completion_as_success_not_a_false_failure
     context left to poll for. Before the fix, this exact shape reported step-2 as failed with
     "post-advance transition poll failed" even though the item had, in fact, fully completed."""
     fake = _CompletesOnLastSubmitFakeClient(total_steps=2)
-    steps = [_plan("step-1", values={"sample_field_a": "a1"}),
-            _plan("step-2", values={"sample_field_b": "b2"})]
-    rep = walk(fake, flow_id=FLOW, steps=steps, poll_after_transition=True, poll_tries=8,
-              poll_delay=0, poll_sleep_fn=lambda s: None)
+    steps = [
+        _plan("step-1", values={"sample_field_a": "a1"}),
+        _plan("step-2", values={"sample_field_b": "b2"}),
+    ]
+    rep = walk(
+        fake,
+        flow_id=FLOW,
+        steps=steps,
+        poll_after_transition=True,
+        poll_tries=8,
+        poll_delay=0,
+        poll_sleep_fn=lambda s: None,
+    )
     assert rep.ok() is True
     assert rep.advanced == ("step-1", "step-2")
     assert rep.failed == ()
@@ -765,6 +905,7 @@ def test_walk_poll_treats_final_submit_completion_as_success_not_a_false_failure
 def test_wait_new_aiid_missing_current_context_is_treated_as_not_ready_yet() -> None:
     """live_aiid's own trap-guard (no _current_context yet) must not be a hard failure here — it
     is exactly the "not rolled over yet" state this poll exists to wait out."""
+
     class _SlowRollover:
         def __init__(self) -> None:
             self.calls = 0
@@ -773,12 +914,22 @@ def test_wait_new_aiid_missing_current_context_is_treated_as_not_ready_yet() -> 
             self.calls += 1
             if self.calls < 3:
                 return {"_id": iid, "_current_step": "Whatever"}  # no _current_context yet
-            return {"_id": iid, "_current_step": "Whatever",
-                    "_current_context": [{"_context_activity_instance_id": "AIID-NEW"}]}
+            return {
+                "_id": iid,
+                "_current_step": "Whatever",
+                "_current_context": [{"_context_activity_instance_id": "AIID-NEW"}],
+            }
 
     fake = _SlowRollover()
-    got = wait_new_aiid(fake, flow_id=FLOW, iid="ITEM-1", prev_aiid="AIID-OLD",
-                        tries=8, delay=0, sleep_fn=lambda s: None)
+    got = wait_new_aiid(
+        fake,
+        flow_id=FLOW,
+        iid="ITEM-1",
+        prev_aiid="AIID-OLD",
+        tries=8,
+        delay=0,
+        sleep_fn=lambda s: None,
+    )
     assert got == "AIID-NEW"
     assert fake.calls == 3
 
@@ -788,14 +939,29 @@ def test_wait_new_aiid_missing_current_context_is_treated_as_not_ready_yet() -> 
 # war story), plus a child TABLE whose field shares a name with a root field — proving root-scoping.
 _DRAFT_WITH_TABLE: dict[str, Any] = {
     "Model_root": {"Id": "Model_root", "Kind": "Model", "RootProcessDef": "ProcessDef_1"},
-    "Field_bu": {"Id": "Field_bu", "Kind": "Field", "Name": "Business Unit ID",
-                 "Type": "Text", "Model": "Model_root"},
-    "Field_sev": {"Id": "Field_sev", "Kind": "Field", "Name": "Severity",
-                  "Type": "Select", "Model": "Model_root"},
+    "Field_bu": {
+        "Id": "Field_bu",
+        "Kind": "Field",
+        "Name": "Business Unit ID",
+        "Type": "Text",
+        "Model": "Model_root",
+    },
+    "Field_sev": {
+        "Id": "Field_sev",
+        "Kind": "Field",
+        "Name": "Severity",
+        "Type": "Select",
+        "Model": "Model_root",
+    },
     "Model_table": {"Id": "Model_table", "Kind": "Model", "Column": "Column_host"},
     # a child-table field named identically to a root field — must NOT leak into the root index
-    "Field_tbl_sev": {"Id": "Field_tbl_sev", "Kind": "Field", "Name": "Severity",
-                      "Type": "Text", "Model": "Model_table"},
+    "Field_tbl_sev": {
+        "Id": "Field_tbl_sev",
+        "Kind": "Field",
+        "Name": "Severity",
+        "Type": "Text",
+        "Model": "Model_table",
+    },
 }
 
 
@@ -844,7 +1010,7 @@ def test_walk_unknown_field_name_fails_loud_listing_available_names() -> None:
     assert rep.ok() is False
     assert rep.failed == ("step-1",)
     assert rep.error is not None
-    assert "Buisness Unit" in rep.error                      # names the unresolved key
+    assert "Buisness Unit" in rep.error  # names the unresolved key
     assert "Business Unit ID" in rep.error and "Severity" in rep.error  # lists the vocabulary
     # failed BEFORE any fill PUT — never silently dropped
     assert not any(name == "put_fields" for name, _ in fake.calls)

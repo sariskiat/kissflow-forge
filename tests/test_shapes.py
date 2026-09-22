@@ -5,6 +5,7 @@ template/notes). These tests hold the manifest of required shapes and check ever
 contract — they do NOT re-derive Kissflow's own builder rules; those live in each file's own
 "notes" and in the shape's `template`.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,12 +25,46 @@ SHAPES_DIR = ROOT / "shapes"
 # report graph (GET /metadata/2/{acct}/process/{flow}/report/{rid}/draft), captured live and
 # recorded in docs/capabilities/report.all-items.md.
 CORE_ID_PREFIXES = (
-    "Field", "Column", "Row", "Model", "Activity", "Event", "Permission", "Resource",
-    "Expression", "Node", "Property", "Style", "Appearance", "Page", "Container", "Component",
-    "Popup", "Tabs", "Tab", "Menu", "Navigation", "Variable", "VariableRef", "EventMapping",
-    "Criteria", "Condition", "StartEvent", "ProcessDef", "Button", "User", "QueryDefinition",
+    "Field",
+    "Column",
+    "Row",
+    "Model",
+    "Activity",
+    "Event",
+    "Permission",
+    "Resource",
+    "Expression",
+    "Node",
+    "Property",
+    "Style",
+    "Appearance",
+    "Page",
+    "Container",
+    "Component",
+    "Popup",
+    "Tabs",
+    "Tab",
+    "Menu",
+    "Navigation",
+    "Variable",
+    "VariableRef",
+    "EventMapping",
+    "Criteria",
+    "Condition",
+    "StartEvent",
+    "ProcessDef",
+    "Button",
+    "User",
+    "QueryDefinition",
 )
-EXTRA_ID_PREFIXES = ("Breadcrumbs", "BreadcrumbItem", "MasterDetail", "Repeater", "Report", "ReportField")
+EXTRA_ID_PREFIXES = (
+    "Breadcrumbs",
+    "BreadcrumbItem",
+    "MasterDetail",
+    "Repeater",
+    "Report",
+    "ReportField",
+)
 
 CORE_ID_RE = re.compile(r"^(" + "|".join(CORE_ID_PREFIXES) + r")[_A-Za-z0-9]*$")
 EXTRA_ID_RE = re.compile(r"^(" + "|".join(EXTRA_ID_PREFIXES) + r")[_A-Za-z0-9]*$")
@@ -41,24 +76,65 @@ ENVELOPE_KEYS = ("kind", "description", "source_capture", "template", "notes")
 # widget_repeater.json — it counts once.
 REQUIRED_SHAPES = {
     # -- process side --
-    "field_text", "field_textarea", "field_number", "field_select", "field_boolean",
-    "field_attachment", "field_sequence_number", "field_star_rating",
-    "table", "row_grid", "section",
-    "expression_branch", "expression_goto_condition", "goto_task", "event",
-    "permission_field", "permission_section", "appearance_style_section", "process_skeleton",
+    "field_text",
+    "field_textarea",
+    "field_number",
+    "field_select",
+    "field_boolean",
+    "field_attachment",
+    "field_sequence_number",
+    "field_star_rating",
+    "table",
+    "row_grid",
+    "section",
+    "expression_branch",
+    "expression_goto_condition",
+    "goto_task",
+    "event",
+    "permission_field",
+    "permission_section",
+    "appearance_style_section",
+    "process_skeleton",
     # -- page side --
-    "page_virgin", "container", "page_style", "variable", "variable_ref", "event_mapping",
-    "criteria_condition", "popup", "tabs", "menu_navigation",
+    "page_virgin",
+    "container",
+    "page_style",
+    "variable",
+    "variable_ref",
+    "event_mapping",
+    "criteria_condition",
+    "popup",
+    "tabs",
+    "menu_navigation",
     # -- widgets (28 scripts; slash -> underscore; repeater counts once) --
-    "widget_general_label", "widget_general_icon", "widget_general_button",
-    "widget_general_divider", "widget_general_progressbar", "widget_general_breadcrumbs",
-    "widget_general_card", "widget_general_image", "widget_general_hyperlink",
-    "widget_general_rich_text", "widget_general_iframe", "widget_general_tab",
-    "widget_general_masterdetail", "widget_custom",
-    "widget_view_form", "widget_view_table", "widget_view_gallery", "widget_view_sheet",
-    "widget_view_kanban", "widget_view_matrix", "widget_view_list", "widget_view_timeline",
-    "widget_report_chart", "widget_report_table", "widget_report_card", "widget_report_pivot",
-    "widget_metrics", "widget_repeater",
+    "widget_general_label",
+    "widget_general_icon",
+    "widget_general_button",
+    "widget_general_divider",
+    "widget_general_progressbar",
+    "widget_general_breadcrumbs",
+    "widget_general_card",
+    "widget_general_image",
+    "widget_general_hyperlink",
+    "widget_general_rich_text",
+    "widget_general_iframe",
+    "widget_general_tab",
+    "widget_general_masterdetail",
+    "widget_custom",
+    "widget_view_form",
+    "widget_view_table",
+    "widget_view_gallery",
+    "widget_view_sheet",
+    "widget_view_kanban",
+    "widget_view_matrix",
+    "widget_view_list",
+    "widget_view_timeline",
+    "widget_report_chart",
+    "widget_report_table",
+    "widget_report_card",
+    "widget_report_pivot",
+    "widget_metrics",
+    "widget_repeater",
 }
 
 
@@ -79,6 +155,7 @@ def _id_ok(node_id: str) -> bool:
 #    empty dir otherwise)
 # ---------------------------------------------------------------------------------------------
 
+
 def test_shapes_dir_exists_and_nonempty():
     assert SHAPES_DIR.is_dir(), "shapes/ directory is missing"
     files = _shape_files()
@@ -90,6 +167,7 @@ def test_shapes_dir_exists_and_nonempty():
 #    a bare filename
 # ---------------------------------------------------------------------------------------------
 
+
 def test_every_shape_parses_and_has_envelope():
     for p in _shape_files():
         data = _load(p)  # raises json.JSONDecodeError -> pytest failure with file context if bad
@@ -98,28 +176,36 @@ def test_every_shape_parses_and_has_envelope():
         missing = [k for k in ENVELOPE_KEYS if k not in data]
         assert not missing, f"{p.name}: missing envelope key(s) {missing}"
 
-        assert isinstance(data["kind"], str) and data["kind"].strip(), \
+        assert isinstance(data["kind"], str) and data["kind"].strip(), (
             f"{p.name}: kind must be a non-empty string"
+        )
 
-        assert isinstance(data["description"], str) and data["description"].strip(), \
+        assert isinstance(data["description"], str) and data["description"].strip(), (
             f"{p.name}: description must be non-empty"
+        )
 
         sc = data["source_capture"]
-        assert isinstance(sc, str) and sc.strip(), f"{p.name}: source_capture must be a non-empty string"
-        assert sc == pathlib.Path(sc).name, \
+        assert isinstance(sc, str) and sc.strip(), (
+            f"{p.name}: source_capture must be a non-empty string"
+        )
+        assert sc == pathlib.Path(sc).name, (
             f"{p.name}: source_capture must be a bare filename (no path separators), got {sc!r}"
+        )
 
-        assert isinstance(data["template"], dict) and data["template"], \
+        assert isinstance(data["template"], dict) and data["template"], (
             f"{p.name}: template must be a non-empty object"
+        )
 
-        assert isinstance(data["notes"], list) and all(isinstance(n, str) for n in data["notes"]), \
+        assert isinstance(data["notes"], list) and all(isinstance(n, str) for n in data["notes"]), (
             f"{p.name}: notes must be a list of strings"
+        )
 
 
 # ---------------------------------------------------------------------------------------------
 # 2) manifest coverage: all required shape names exist as files (by stem, e.g. shapes/table.json
 #    covers "table")
 # ---------------------------------------------------------------------------------------------
+
 
 def test_manifest_coverage():
     have = {p.stem for p in _shape_files()}
@@ -141,6 +227,7 @@ def test_manifest_coverage():
 # that IS used is the EXTRA_ID_PREFIXES allowlist above, for real Kind names outside the core list.
 # ---------------------------------------------------------------------------------------------
 
+
 def test_every_template_key_is_a_minted_platform_id():
     bad_prefix = []
     bad_mint = []
@@ -154,7 +241,9 @@ def test_every_template_key_is_a_minted_platform_id():
                 bad_mint.append(f"{p.name}:{node_id!r}")
             if not isinstance(node, dict):
                 bad_node_shape.append(f"{p.name}:{node_id!r} (not an object)")
-    assert not bad_prefix, "template keys not matching the platform-prefix vocabulary:\n" + "\n".join(bad_prefix)
+    assert not bad_prefix, (
+        "template keys not matching the platform-prefix vocabulary:\n" + "\n".join(bad_prefix)
+    )
     assert not bad_mint, "minted ids must contain the mint marker 'Sample':\n" + "\n".join(bad_mint)
     assert not bad_node_shape, "template values must be node objects:\n" + "\n".join(bad_node_shape)
 
@@ -171,6 +260,7 @@ def test_every_template_key_is_a_minted_platform_id():
 # means self-contained with respect to `::`-list back-refs only, not every reference in the file.
 # ---------------------------------------------------------------------------------------------
 
+
 def test_backrefs_resolve_within_same_template():
     problems = []
     for p in _shape_files():
@@ -184,7 +274,9 @@ def test_backrefs_resolve_within_same_template():
                 for target in val:
                     if isinstance(target, str) and target not in template:
                         problems.append(f"{p.name}: {node_id}.{key} -> missing {target!r}")
-    assert not problems, "dangling back-refs (target not minted in the same template):\n" + "\n".join(problems)
+    assert not problems, (
+        "dangling back-refs (target not minted in the same template):\n" + "\n".join(problems)
+    )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -193,6 +285,7 @@ def test_backrefs_resolve_within_same_template():
 # near-zero cost, which is exactly the kind of silent corruption this manifest is meant to prevent.
 # ---------------------------------------------------------------------------------------------
 
+
 def test_node_id_field_matches_its_template_key():
     mismatches = []
     for p in _shape_files():
@@ -200,7 +293,9 @@ def test_node_id_field_matches_its_template_key():
         for node_id, node in template.items():
             if isinstance(node, dict) and "Id" in node and node["Id"] != node_id:
                 mismatches.append(f"{p.name}: key {node_id!r} has Id={node['Id']!r}")
-    assert not mismatches, "node Id field disagrees with its template key:\n" + "\n".join(mismatches)
+    assert not mismatches, "node Id field disagrees with its template key:\n" + "\n".join(
+        mismatches
+    )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -209,7 +304,10 @@ def test_node_id_field_matches_its_template_key():
 # shapes citing each other as if that were grounding evidence.
 # ---------------------------------------------------------------------------------------------
 
+
 def test_source_capture_does_not_point_at_another_shape():
     shape_names = {p.name for p in _shape_files()}
     offenders = [p.name for p in _shape_files() if _load(p)["source_capture"] in shape_names]
-    assert not offenders, f"source_capture citing a sibling shape file instead of a real capture: {offenders}"
+    assert not offenders, (
+        f"source_capture citing a sibling shape file instead of a real capture: {offenders}"
+    )

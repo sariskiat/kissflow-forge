@@ -5,6 +5,7 @@ single 82KB CLAUDE.md reloads on every message. Verifies structure (mandatory
 section headings), substance (marker phrases per section), size, and blindness
 (no leaked identity from the app-specific source repo) across the whole corpus.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -43,9 +44,24 @@ SECTION_MARKERS: dict[str, list[str]] = {
     "## Gate polarity": ["fail closed", "escapes the loop", "stays in the loop"],
     "## Tables": ["nested model", "maxrow", "cannot live inside a section"],
     "## Field events": ["async () =>", "kfsdk", "source field"],
-    "## Visibility": ["section-level lever", "precedence between", "renders empty", "required is scoped"],
-    "## Members first": ["member/batch", "zero members", "approle", "err rather than ever reaching"],
-    "## Write path": ["_meta_version", "snapshot the draft", "archive before deleting", "tokens are not validated"],
+    "## Visibility": [
+        "section-level lever",
+        "precedence between",
+        "renders empty",
+        "required is scoped",
+    ],
+    "## Members first": [
+        "member/batch",
+        "zero members",
+        "approle",
+        "err rather than ever reaching",
+    ],
+    "## Write path": [
+        "_meta_version",
+        "snapshot the draft",
+        "archive before deleting",
+        "tokens are not validated",
+    ],
     "## Item data plane": ["read back", "aiid trap", "clears nothing"],
     "## Pages": ["raw hex", "viewing as", "only truth surface", "stepmetrics"],
     "## Build order": ["output-invariant audit", "403/500", "only 404 means wrong door", "dry-run"],

@@ -42,9 +42,9 @@ a bare single-placeholder-step scaffold: an identity/initiate field block
 (requestor/manager/department/branch-style fields), the section/row/column
 layout that hosts them, the mandatory `Model::Appearance -> Appearance ->
 Style` chain, a single `"Manager Approve"` UserTask, and `Button::Row`.
-`kfforge.graph.clone_template_shell` grafts the shell onto a freshly created
+`app.domain.graph.clone_template_shell` grafts the shell onto a freshly created
 process draft's own root Model (fresh Sample ids re-minted via
-`kfforge.pages._instantiate` — the same clone machinery `nav.py` already
+`app.domain.pages._instantiate` — the same clone machinery `nav.py` already
 reuses from `pages.py`), then the caller adds their own fields/workflow on
 top. `from_template=False` still yields the original bare
 `ensure_process_def` scaffold for callers that want to start from nothing.
@@ -65,8 +65,8 @@ identity shell. See `shapes/process_template_identity_shell.json`'s own
 
 ## Where
 
-Engine-side only — `kfforge.graph.clone_template_shell`, wired into
-`create_process` and `create_flow_any(kind="process")` in `kfforge/client.py`,
+Engine-side only — `app.domain.graph.clone_template_shell`, wired into
+`create_process` and `create_flow_any(kind="process")` in `src/app/infrastructure/kissflow/client.py`,
 exposed through the `forge_create_process` / `kf_create_process` /
 `forge_create_flow` MCP tools. There is no builder UI surface for this; it is
 what those tools write BEFORE a human ever opens the draft.
