@@ -1,6 +1,7 @@
-# kissflow-forge MCP — HTTP transport. HTTP mode requires Entra + per-user Kissflow
-# authentication; incomplete auth configuration aborts startup rather than falling back to a
-# shared process key. Stdio remains the local process-env mode.
+# kissflow-forge MCP — HTTP transport. This server carries no auth provider of its own
+# (D1): the SRE gateway in front of it authenticates the caller, and each caller's own
+# Kissflow key pair arrives on the request as the X-Access-Key-Id / X-Access-Key-Secret
+# headers. Stdio remains the local process-env mode.
 #
 # The engine's only runtime data are the repo dirs read by path — shapes/, docs/capabilities/,
 # skills/ — all resolved through src/app/resources.py, which anchors on the package's own
@@ -32,6 +33,11 @@ COPY skills/ ./skills/
 # image default. Proven by tests/test_proxy_headers.py; asserted present by tests/test_p0_scaffold.py.
 ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH=/app/src
 ENV MCP_HTTP=1 PORT=8080 FORWARDED_ALLOW_IPS=*
+# HTTP_TIMEOUT_SECONDS: the old urllib transport hardcoded TIMEOUT_S=30
+# (client.py); Settings' own code default is 10 (the clone's), so this is set
+# explicitly here to keep the deployed outbound timeout unchanged once the
+# httpx adapters (G8) take over the live traffic this image serves (spec G5).
+ENV HTTP_TIMEOUT_SECONDS=30
 EXPOSE 8080
 
 CMD ["mcp-server"]

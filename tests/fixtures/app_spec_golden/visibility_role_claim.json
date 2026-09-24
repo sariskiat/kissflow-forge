@@ -1,0 +1,639 @@
+{
+  "app_name": "Equipment Repair Tracker",
+  "approved": true,
+  "data_model": {
+    "computed": [
+      {
+        "formula_intent": "quantity times unit cost, summed across every row",
+        "source_fields": [
+          "Quantity",
+          "Unit Cost"
+        ],
+        "target_field": "Total Parts Cost",
+        "trigger": null
+      }
+    ],
+    "fields": [
+      {
+        "list_name": null,
+        "name": "Unit Name",
+        "options": [],
+        "required": true,
+        "section": "Intake Basics",
+        "stage": "Intake",
+        "type": "Text"
+      },
+      {
+        "list_name": null,
+        "name": "Customer Name",
+        "options": [],
+        "required": true,
+        "section": "Intake Basics",
+        "stage": "Intake",
+        "type": "Text"
+      },
+      {
+        "list_name": "Urgency Levels",
+        "name": "Urgency",
+        "options": [],
+        "required": true,
+        "section": "Intake Priority",
+        "stage": "Intake",
+        "type": "Select"
+      },
+      {
+        "list_name": "Yes No",
+        "name": "Repairable",
+        "options": [],
+        "required": true,
+        "section": null,
+        "stage": "Diagnose",
+        "type": "Select"
+      },
+      {
+        "list_name": null,
+        "name": "Diagnosis Notes",
+        "options": [
+          [
+            "AllowFormatting",
+            "true"
+          ]
+        ],
+        "required": false,
+        "section": null,
+        "stage": "Diagnose",
+        "type": "Textarea"
+      },
+      {
+        "list_name": null,
+        "name": "Quality Passed",
+        "options": [],
+        "required": false,
+        "section": null,
+        "stage": "Quality Check",
+        "type": "Boolean"
+      },
+      {
+        "list_name": null,
+        "name": "Repair Cost",
+        "options": [
+          [
+            "Decimalpoint",
+            "2"
+          ]
+        ],
+        "required": false,
+        "section": null,
+        "stage": "Repair",
+        "type": "Number"
+      },
+      {
+        "list_name": null,
+        "name": "Total Parts Cost",
+        "options": [],
+        "required": false,
+        "section": null,
+        "stage": "Repair",
+        "type": "Number"
+      }
+    ],
+    "sections": [
+      {
+        "description": "the customer/unit identifying fields",
+        "name": "Intake Basics",
+        "stage": "Intake"
+      },
+      {
+        "description": "urgency and scheduling fields",
+        "name": "Intake Priority",
+        "stage": "Intake"
+      }
+    ],
+    "sequence": {
+      "padding": "0001",
+      "prefix": "RPR"
+    },
+    "tables": [
+      {
+        "columns": [
+          {
+            "name": "Part Name",
+            "required": true,
+            "type": "Text"
+          },
+          {
+            "name": "Quantity",
+            "required": true,
+            "type": "Number"
+          },
+          {
+            "name": "Unit Cost",
+            "required": true,
+            "type": "Number"
+          }
+        ],
+        "max_rows": 20,
+        "name": "Parts Used",
+        "stage": "Repair"
+      }
+    ]
+  },
+  "master_data": {
+    "confirmed_none": false,
+    "lists": [
+      {
+        "name": "Urgency Levels",
+        "owner_role": "Service Manager",
+        "personal_data": false,
+        "values": [
+          "High",
+          "Medium",
+          "Low"
+        ]
+      },
+      {
+        "name": "Yes No",
+        "owner_role": "Service Manager",
+        "personal_data": false,
+        "values": [
+          "Yes",
+          "No"
+        ]
+      }
+    ]
+  },
+  "personas": {
+    "views": [
+      {
+        "actions": [
+          "reassign job",
+          "approve quality check"
+        ],
+        "kpis": [
+          "open jobs",
+          "overdue jobs"
+        ],
+        "pages": [
+          {
+            "design": null,
+            "name": "Manager Dashboard",
+            "on_click": [],
+            "popups": [],
+            "widgets": [
+              {
+                "config": [
+                  [
+                    "flow_type",
+                    "process"
+                  ],
+                  [
+                    "flow_id",
+                    "RepairJobs"
+                  ]
+                ],
+                "row_fields": [],
+                "slug": "metrics"
+              },
+              {
+                "config": [
+                  [
+                    "flow_type",
+                    "process"
+                  ],
+                  [
+                    "flow_id",
+                    "RepairJobs"
+                  ],
+                  [
+                    "view_id",
+                    "myitems"
+                  ]
+                ],
+                "row_fields": [],
+                "slug": "view/table"
+              }
+            ]
+          }
+        ],
+        "role": "Service Manager"
+      },
+      {
+        "actions": [
+          "submit diagnosis",
+          "mark repaired"
+        ],
+        "kpis": [
+          "jobs assigned to me"
+        ],
+        "pages": [
+          {
+            "design": null,
+            "name": "My Jobs",
+            "on_click": [],
+            "popups": [],
+            "widgets": [
+              {
+                "config": [
+                  [
+                    "flow_type",
+                    "process"
+                  ],
+                  [
+                    "flow_id",
+                    "RepairJobs"
+                  ],
+                  [
+                    "view_id",
+                    "assigned"
+                  ]
+                ],
+                "row_fields": [],
+                "slug": "view/table"
+              }
+            ]
+          }
+        ],
+        "role": "Technician"
+      },
+      {
+        "actions": [
+          "log new unit",
+          "notify customer"
+        ],
+        "kpis": [
+          "jobs awaiting pickup"
+        ],
+        "pages": [
+          {
+            "design": null,
+            "name": "Manager Dashboard",
+            "on_click": [],
+            "popups": [],
+            "widgets": [
+              {
+                "config": [
+                  [
+                    "flow_type",
+                    "process"
+                  ],
+                  [
+                    "flow_id",
+                    "RepairJobs"
+                  ]
+                ],
+                "row_fields": [],
+                "slug": "metrics"
+              },
+              {
+                "config": [
+                  [
+                    "flow_type",
+                    "process"
+                  ],
+                  [
+                    "flow_id",
+                    "RepairJobs"
+                  ],
+                  [
+                    "view_id",
+                    "myitems"
+                  ]
+                ],
+                "row_fields": [],
+                "slug": "view/table"
+              },
+              {
+                "config": [],
+                "row_fields": [],
+                "slug": "general/label"
+              }
+            ]
+          }
+        ],
+        "role": "Front Desk"
+      }
+    ]
+  },
+  "problem_goal": {
+    "done_definition": "the unit is repaired or declared unrepairable, and the customer has been notified",
+    "goal": "every repair job is trackable from intake to return, with a clear owner at each step",
+    "pain": "technicians and customers cannot see which repair job is stuck or with whom",
+    "result_values": [
+      "Repaired",
+      "Beyond repair",
+      "Cancelled by customer"
+    ],
+    "terminal_states": [
+      "Completed",
+      "Cancelled"
+    ]
+  },
+  "rework_loops": {
+    "confirmed_none": false,
+    "loops": [
+      {
+        "from_stage": "Quality Check",
+        "gate_field": "Quality Passed",
+        "max_rounds": 3,
+        "to_stage": "Repair"
+      }
+    ]
+  },
+  "roles": {
+    "roles": [
+      {
+        "is_admin": false,
+        "members_hint": "2 front-desk staff",
+        "name": "Front Desk"
+      },
+      {
+        "is_admin": false,
+        "members_hint": "5 technicians",
+        "name": "Technician"
+      },
+      {
+        "is_admin": true,
+        "members_hint": "1 manager",
+        "name": "Service Manager"
+      }
+    ]
+  },
+  "routing": {
+    "confirmed_none": false,
+    "points": [
+      {
+        "at_stage": "Diagnose",
+        "field_name": "Repairable",
+        "options": [
+          "Yes",
+          "No"
+        ],
+        "route_per_option": [
+          [
+            "Yes",
+            [
+              "Repair"
+            ]
+          ],
+          [
+            "No",
+            [
+              "Return to Customer"
+            ]
+          ]
+        ]
+      }
+    ]
+  },
+  "stages": {
+    "stages": [
+      {
+        "entry_criteria": "customer drops off a unit",
+        "exit_criteria": "unit logged with a case number",
+        "name": "Intake",
+        "owner_role": "Front Desk",
+        "what_happens": "log the unit and customer details"
+      },
+      {
+        "entry_criteria": "unit logged",
+        "exit_criteria": "repairable decision recorded",
+        "name": "Diagnose",
+        "owner_role": "Technician",
+        "what_happens": "assess whether the unit is repairable"
+      },
+      {
+        "entry_criteria": "marked repairable",
+        "exit_criteria": "repair work finished",
+        "name": "Repair",
+        "owner_role": "Technician",
+        "what_happens": "perform the repair"
+      },
+      {
+        "entry_criteria": "repair marked finished",
+        "exit_criteria": "quality check passed",
+        "name": "Quality Check",
+        "owner_role": "Service Manager",
+        "what_happens": "verify the repair meets standard"
+      },
+      {
+        "entry_criteria": "quality check passed, or unit deemed unrepairable",
+        "exit_criteria": "customer notified and job closed",
+        "name": "Return to Customer",
+        "owner_role": "Front Desk",
+        "what_happens": "notify customer and close the job"
+      }
+    ]
+  },
+  "test_cases": {
+    "cases": [
+      {
+        "expected_path": [
+          "Intake",
+          "Diagnose",
+          "Repair",
+          "Quality Check",
+          "Return to Customer"
+        ],
+        "expected_result": "Repaired",
+        "fills": [
+          {
+            "stage": "Intake",
+            "values": [
+              [
+                "Unit Name",
+                "Printer"
+              ],
+              [
+                "Urgency",
+                "Medium"
+              ]
+            ]
+          },
+          {
+            "stage": "Diagnose",
+            "values": [
+              [
+                "Repairable",
+                "Yes"
+              ]
+            ]
+          },
+          {
+            "stage": "Quality Check",
+            "values": [
+              [
+                "Quality Passed",
+                "true"
+              ]
+            ]
+          }
+        ],
+        "name": "Straightforward repair"
+      },
+      {
+        "expected_path": [
+          "Intake",
+          "Diagnose",
+          "Return to Customer"
+        ],
+        "expected_result": "Beyond repair",
+        "fills": [
+          {
+            "stage": "Intake",
+            "values": [
+              [
+                "Unit Name",
+                "Old Fax Machine"
+              ],
+              [
+                "Urgency",
+                "Low"
+              ]
+            ]
+          },
+          {
+            "stage": "Diagnose",
+            "values": [
+              [
+                "Repairable",
+                "No"
+              ]
+            ]
+          }
+        ],
+        "name": "Beyond repair"
+      },
+      {
+        "expected_path": [
+          "Intake",
+          "Diagnose",
+          "Repair",
+          "Quality Check",
+          "Repair",
+          "Quality Check",
+          "Return to Customer"
+        ],
+        "expected_result": "Repaired",
+        "fills": [
+          {
+            "stage": "Intake",
+            "values": [
+              [
+                "Unit Name",
+                "Blender"
+              ],
+              [
+                "Urgency",
+                "High"
+              ]
+            ]
+          },
+          {
+            "stage": "Diagnose",
+            "values": [
+              [
+                "Repairable",
+                "Yes"
+              ]
+            ]
+          },
+          {
+            "stage": "Quality Check",
+            "values": [
+              [
+                "Quality Passed",
+                "false"
+              ]
+            ]
+          },
+          {
+            "stage": "Quality Check",
+            "values": [
+              [
+                "Quality Passed",
+                "true"
+              ]
+            ]
+          }
+        ],
+        "name": "Rework then pass"
+      }
+    ]
+  },
+  "timing": {
+    "batch_days": [
+      "Friday"
+    ],
+    "reminders": [
+      "remind the technician if a job sits over 3 days"
+    ],
+    "sla_notes": "Diagnose must finish within 1 business day of intake"
+  },
+  "visibility": {
+    "entries": [
+      {
+        "field": null,
+        "permission": "Editable",
+        "role": "Finance",
+        "section": "Intake Basics",
+        "stage": "Start"
+      },
+      {
+        "field": null,
+        "permission": "Editable",
+        "role": null,
+        "section": "Intake Basics",
+        "stage": "Intake"
+      },
+      {
+        "field": null,
+        "permission": "Editable",
+        "role": null,
+        "section": "Intake Priority",
+        "stage": "Intake"
+      },
+      {
+        "field": null,
+        "permission": "ReadOnly",
+        "role": null,
+        "section": "Intake Basics",
+        "stage": "Diagnose"
+      },
+      {
+        "field": null,
+        "permission": "Editable",
+        "role": null,
+        "section": "Diagnose",
+        "stage": "Diagnose"
+      },
+      {
+        "field": null,
+        "permission": "Editable",
+        "role": null,
+        "section": "Parts Used",
+        "stage": "Repair"
+      },
+      {
+        "field": null,
+        "permission": "ReadOnly",
+        "role": null,
+        "section": "Parts Used",
+        "stage": "Quality Check"
+      },
+      {
+        "field": null,
+        "permission": "Editable",
+        "role": null,
+        "section": "Quality Check",
+        "stage": "Quality Check"
+      },
+      {
+        "field": "Repair Cost",
+        "permission": "ReadOnly",
+        "role": null,
+        "section": "Repair",
+        "stage": "Quality Check"
+      }
+    ]
+  }
+}

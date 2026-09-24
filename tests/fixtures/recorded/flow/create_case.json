@@ -1,0 +1,24 @@
+{
+  "new": [
+    {
+      "body": {
+        "ItemType": "Case",
+        "Name": "Cases",
+        "Prefix": "CS"
+      },
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/case?_application_id=A1"
+    }
+  ],
+  "old": [
+    {
+      "body": {
+        "ItemType": "Case",
+        "Name": "Cases",
+        "Prefix": "CS"
+      },
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/case?_application_id=A1"
+    }
+  ]
+}

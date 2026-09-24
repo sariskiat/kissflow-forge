@@ -1,0 +1,25 @@
+"""A compliant adapter: FlowAdapter implements FlowRepository, so every one of its public
+methods matches a port method name -- adapter_methods_without_port must not report it. The port
+import is relative (three dots, app.infrastructure.kissflow -> app), proving the scan resolves a
+relative import to its port module, not just an absolute one."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ...application.interfaces.flow import FlowRepository
+
+
+class FlowAdapter(FlowRepository):
+    """Implements FlowRepository against an in-memory store, for the fixture only."""
+
+    def __init__(self) -> None:
+        self._store: dict[str, dict[str, Any]] = {}
+
+    def get_draft(self, flow_id: str) -> dict[str, Any]:
+        """Matches the port method get_draft."""
+        return self._store.get(flow_id, {})
+
+    def publish(self, flow_id: str) -> None:
+        """Matches the port method publish."""
+        self._store.pop(flow_id, None)

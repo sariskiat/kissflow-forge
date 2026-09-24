@@ -8,6 +8,15 @@ Permission { Id, Kind:"Permission", Column:<column id>, Activity:<activity id>,
              Permission:"Editable"|"ReadOnly"|"Hidden" }
 ```
 
+⚠️ **A field inside a Grid carries its own Permission; the Grid carries none
+(captured live 2026-09-24).** The production process template lays fields out as
+Section → Row → Grid column → Row → field column. In the builder's Permission tab, a
+field inside a Grid has its own Editable / Read-only / Hidden menu. Setting one to
+Read-only at Start and saving wrote one `Permission` whose `Column` is that FIELD
+column, and none on the Grid. So a section's members include every field column
+reached through its Grids. Two sections can also share one Name (the template has two
+"Request Info"); an owner keyed by that name covers both.
+
 Back-references are bidirectional (`Column::Permission[]` and
 `Activity::Permission[]`). Neither `GotoTask` nor a `Parallel` gateway nor
 `SendBackToInitiator` carries any Permissions — they render no form, so there

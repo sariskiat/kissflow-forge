@@ -1,0 +1,11 @@
+"""A module that reads the environment directly. Real code may not do this once G2 lands; kept
+here as the fixture's violation case for env_reads_outside_settings."""
+
+from __future__ import annotations
+
+import os
+
+
+def read_domain_from_env() -> str:
+    """VIOLATION: env_reads_outside_settings -- an env read outside settings.py."""
+    return os.environ.get("KF_DEV_DOMAIN", "")

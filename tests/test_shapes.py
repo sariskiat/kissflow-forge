@@ -170,7 +170,9 @@ def test_shapes_dir_exists_and_nonempty():
 
 def test_every_shape_parses_and_has_envelope():
     for p in _shape_files():
-        data = _load(p)  # raises json.JSONDecodeError -> pytest failure with file context if bad
+        data = _load(
+            p
+        )  # raises json.JSONDecodeError -> pytest failure with file context if bad
         assert isinstance(data, dict), f"{p.name}: top level must be a JSON object"
 
         missing = [k for k in ENVELOPE_KEYS if k not in data]
@@ -196,9 +198,9 @@ def test_every_shape_parses_and_has_envelope():
             f"{p.name}: template must be a non-empty object"
         )
 
-        assert isinstance(data["notes"], list) and all(isinstance(n, str) for n in data["notes"]), (
-            f"{p.name}: notes must be a list of strings"
-        )
+        assert isinstance(data["notes"], list) and all(
+            isinstance(n, str) for n in data["notes"]
+        ), f"{p.name}: notes must be a list of strings"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -228,6 +230,12 @@ def test_manifest_coverage():
 # ---------------------------------------------------------------------------------------------
 
 
+# The one shape that keeps the source's real field ids and platform-reserved keys: its
+# formulas name fields and system fields (`_is_public_form`) inside text, and the builder
+# re-creates the "SendBackToInitiator" activity under that exact key.
+REAL_FIELD_ID_SHAPES = frozenset({"process_template_full.json"})
+
+
 def test_every_template_key_is_a_minted_platform_id():
     bad_prefix = []
     bad_mint = []
@@ -235,6 +243,14 @@ def test_every_template_key_is_a_minted_platform_id():
     for p in _shape_files():
         template = _load(p)["template"]
         for node_id, node in template.items():
+            if p.name in REAL_FIELD_ID_SHAPES and (
+                node.get("Kind") == "Field"
+                or not node_id.startswith(f"{node.get('Kind')}_")
+            ):
+                # Real field ids (named inside formula text) and platform-reserved keys
+                # such as "SendBackToInitiator" stay verbatim in this shape
+                # (scripts/deidentify_template.py).
+                continue
             if not _id_ok(node_id):
                 bad_prefix.append(f"{p.name}:{node_id!r}")
             if "Sample" not in node_id:
@@ -242,10 +258,15 @@ def test_every_template_key_is_a_minted_platform_id():
             if not isinstance(node, dict):
                 bad_node_shape.append(f"{p.name}:{node_id!r} (not an object)")
     assert not bad_prefix, (
-        "template keys not matching the platform-prefix vocabulary:\n" + "\n".join(bad_prefix)
+        "template keys not matching the platform-prefix vocabulary:\n"
+        + "\n".join(bad_prefix)
     )
-    assert not bad_mint, "minted ids must contain the mint marker 'Sample':\n" + "\n".join(bad_mint)
-    assert not bad_node_shape, "template values must be node objects:\n" + "\n".join(bad_node_shape)
+    assert not bad_mint, (
+        "minted ids must contain the mint marker 'Sample':\n" + "\n".join(bad_mint)
+    )
+    assert not bad_node_shape, "template values must be node objects:\n" + "\n".join(
+        bad_node_shape
+    )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -273,9 +294,12 @@ def test_backrefs_resolve_within_same_template():
                     continue
                 for target in val:
                     if isinstance(target, str) and target not in template:
-                        problems.append(f"{p.name}: {node_id}.{key} -> missing {target!r}")
+                        problems.append(
+                            f"{p.name}: {node_id}.{key} -> missing {target!r}"
+                        )
     assert not problems, (
-        "dangling back-refs (target not minted in the same template):\n" + "\n".join(problems)
+        "dangling back-refs (target not minted in the same template):\n"
+        + "\n".join(problems)
     )
 
 
@@ -293,8 +317,8 @@ def test_node_id_field_matches_its_template_key():
         for node_id, node in template.items():
             if isinstance(node, dict) and "Id" in node and node["Id"] != node_id:
                 mismatches.append(f"{p.name}: key {node_id!r} has Id={node['Id']!r}")
-    assert not mismatches, "node Id field disagrees with its template key:\n" + "\n".join(
-        mismatches
+    assert not mismatches, (
+        "node Id field disagrees with its template key:\n" + "\n".join(mismatches)
     )
 
 
@@ -307,7 +331,9 @@ def test_node_id_field_matches_its_template_key():
 
 def test_source_capture_does_not_point_at_another_shape():
     shape_names = {p.name for p in _shape_files()}
-    offenders = [p.name for p in _shape_files() if _load(p)["source_capture"] in shape_names]
+    offenders = [
+        p.name for p in _shape_files() if _load(p)["source_capture"] in shape_names
+    ]
     assert not offenders, (
         f"source_capture citing a sibling shape file instead of a real capture: {offenders}"
     )

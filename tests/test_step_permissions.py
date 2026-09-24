@@ -12,14 +12,12 @@ from typing import Any
 import pytest
 from synthetic import OWNERS, synthetic_process_draft
 
-from app.domain.graph import (
+from app.domain.entities.flow_draft import (
     NO_PERMISSION_NODETYPES,
-    add_sequence_number,
-    add_table,
+    FlowDraft,
     progressive_matrix,
-    set_step_permissions,
 )
-from app.domain.types import FieldType, Visibility
+from app.domain.value_objects.field_type import FieldType, Visibility
 
 Draft = dict[str, Any]
 
@@ -31,12 +29,12 @@ def draft() -> Draft:
 
 @pytest.fixture(scope="module")
 def matrix(draft: Draft):
-    return progressive_matrix(draft, OWNERS)
+    return progressive_matrix(FlowDraft.from_wire(draft), OWNERS)
 
 
 @pytest.fixture(scope="module")
 def applied(draft: Draft, matrix) -> Draft:
-    return set_step_permissions(draft, matrix)
+    return FlowDraft.from_wire(draft).set_step_permissions(matrix).to_wire()
 
 
 def _nodes(d: Draft, kind: str) -> dict[str, Any]:
@@ -145,15 +143,15 @@ def test_no_permissions_on_structural_nodes(applied):
 
 
 def test_apply_is_idempotent(draft, matrix):
-    once = set_step_permissions(draft, matrix)
-    twice = set_step_permissions(once, matrix)
+    once = FlowDraft.from_wire(draft).set_step_permissions(matrix).to_wire()
+    twice = FlowDraft.from_wire(once).set_step_permissions(matrix).to_wire()
     assert len(_nodes(once, "Permission")) == len(_nodes(twice, "Permission"))
 
 
 def test_sparse_matrix_raises(draft, matrix):
     incomplete = {k: v for k, v in matrix.items() if k != "Intake"}
     with pytest.raises(ValueError):
-        set_step_permissions(draft, incomplete)
+        FlowDraft.from_wire(draft).set_step_permissions(incomplete)
 
 
 # ---- hidden / SequenceNumber columns take no Permissions (#9) --------------
@@ -163,19 +161,27 @@ def test_sparse_matrix_raises(draft, matrix):
 
 @pytest.fixture(scope="module")
 def seq_draft(draft: Draft) -> Draft:
-    return add_sequence_number(draft, "Running No", "Intake", "TCK-", "0001", "Ticket arrives")
+    return (
+        FlowDraft.from_wire(draft)
+        .add_sequence_number("Running No", "Intake", "TCK-", "0001", "Ticket arrives")
+        .to_wire()
+    )
 
 
 def _seq_col(d: Draft) -> str:
     return next(
-        v["Column"] for v in _nodes(d, "Field").values() if v.get("Type") == "SequenceNumber"
+        v["Column"]
+        for v in _nodes(d, "Field").values()
+        if v.get("Type") == "SequenceNumber"
     )
 
 
 def test_sequence_column_gets_no_permissions(seq_draft, matrix):
-    applied = set_step_permissions(seq_draft, matrix)
+    applied = FlowDraft.from_wire(seq_draft).set_step_permissions(matrix).to_wire()
     col = _seq_col(applied)
-    assert [p for p in _nodes(applied, "Permission").values() if p["Column"] == col] == []
+    assert [
+        p for p in _nodes(applied, "Permission").values() if p["Column"] == col
+    ] == []
     assert not (_nodes(applied, "Column")[col].get("Column::Permission") or [])
 
 
@@ -184,26 +190,28 @@ def test_plain_hidden_column_gets_no_permissions(draft, matrix):
     f = next(v for v in _nodes(d, "Field").values() if v.get("Name") == "Extra Note")
     col = f["Column"]
     d[col]["IsHidden"] = True
-    applied = set_step_permissions(d, matrix)
-    assert [p for p in _nodes(applied, "Permission").values() if p["Column"] == col] == []
+    applied = FlowDraft.from_wire(d).set_step_permissions(matrix).to_wire()
+    assert [
+        p for p in _nodes(applied, "Permission").values() if p["Column"] == col
+    ] == []
 
 
 def test_field_matrix_on_excluded_column_raises(seq_draft, matrix):
     row = next(iter(matrix.values()))
     with pytest.raises(ValueError, match="no Permissions"):
-        set_step_permissions(seq_draft, matrix, field_matrix={"Running No": dict(row)})
+        FlowDraft.from_wire(seq_draft).set_step_permissions(
+            matrix, field_matrix={"Running No": dict(row)}
+        )
 
 
 def test_sequence_exclusion_is_call_order_independent(draft, seq_draft, matrix):
     # the ticket's requirement: seq-then-visibility and visibility-then-seq give the same graph
-    seq_first = set_step_permissions(seq_draft, matrix)
-    vis_first = add_sequence_number(
-        set_step_permissions(draft, matrix),
-        "Running No",
-        "Intake",
-        "TCK-",
-        "0001",
-        "Ticket arrives",
+    seq_first = FlowDraft.from_wire(seq_draft).set_step_permissions(matrix).to_wire()
+    vis_first = (
+        FlowDraft.from_wire(draft)
+        .set_step_permissions(matrix)
+        .add_sequence_number("Running No", "Intake", "TCK-", "0001", "Ticket arrives")
+        .to_wire()
     )
     assert len(_nodes(seq_first, "Permission")) == len(_nodes(vis_first, "Permission"))
     for d in (seq_first, vis_first):
@@ -215,9 +223,11 @@ def test_sequence_exclusion_does_not_ride_on_ishidden(seq_draft, matrix):
     # exercise the SequenceNumber clause on its own: a seq column that is NOT IsHidden
     d = copy.deepcopy(seq_draft)
     del d[_seq_col(d)]["IsHidden"]
-    applied = set_step_permissions(d, matrix)
+    applied = FlowDraft.from_wire(d).set_step_permissions(matrix).to_wire()
     assert [
-        p for p in _nodes(applied, "Permission").values() if p["Column"] == _seq_col(applied)
+        p
+        for p in _nodes(applied, "Permission").values()
+        if p["Column"] == _seq_col(applied)
     ] == []
 
 
@@ -231,14 +241,23 @@ def test_sequence_exclusion_does_not_ride_on_ishidden(seq_draft, matrix):
 def _table_cols(d: Draft) -> tuple[str, set[str]]:
     """(host column id, {child column ids}) for the single table in the draft."""
     host = next(k for k, v in _nodes(d, "Column").items() if v.get("Type") == "Model")
-    children = {v["Column"] for v in _nodes(d, "Field").values() if v.get("Name") in ("SKU", "Qty")}
+    children = {
+        v["Column"]
+        for v in _nodes(d, "Field").values()
+        if v.get("Name") in ("SKU", "Qty")
+    }
     return host, children
 
 
 def test_table_host_and_child_columns_take_no_permission(draft, matrix):
-    d = add_table(draft, "Line Items", [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER)])
+    d_flow = FlowDraft.from_wire(draft).add_table(
+        "Line Items", [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER)]
+    )
+    d = d_flow.to_wire()
     host, children = _table_cols(d)
-    applied = set_step_permissions(d, progressive_matrix(d, OWNERS))  # no rejection
+    applied = d_flow.set_step_permissions(  # no rejection
+        progressive_matrix(d_flow, OWNERS)
+    ).to_wire()
     perms = _nodes(applied, "Permission")
     assert [p for p in perms.values() if p["Column"] == host] == []
     assert [p for p in perms.values() if p["Column"] in children] == []
@@ -249,12 +268,21 @@ def test_section_owner_name_binds_section_not_same_named_table_host(draft):
     # same-named table). The section-owner name must bind the SECTION node, never the empty
     # table-host Model column. Before the fix, a last-wins name map bound the host, left the real
     # section's field column covered by nothing, and set_step_permissions hard-rejected the flow.
-    collide = "Intake"  # an existing Section that OWNS field columns in the synthetic draft
+    collide = (
+        "Intake"  # an existing Section that OWNS field columns in the synthetic draft
+    )
     section_cols = _section_cols(draft)[collide]
-    assert section_cols, "precondition: the colliding section must hold at least one field"
-    d = add_table(draft, collide, [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER)])
+    assert section_cols, (
+        "precondition: the colliding section must hold at least one field"
+    )
+    d_flow = FlowDraft.from_wire(draft).add_table(
+        collide, [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER)]
+    )
+    d = d_flow.to_wire()
     host, children = _table_cols(d)
-    applied = set_step_permissions(d, progressive_matrix(d, OWNERS))  # must NOT raise
+    applied = d_flow.set_step_permissions(  # must NOT raise
+        progressive_matrix(d_flow, OWNERS)
+    ).to_wire()
     perms = _nodes(applied, "Permission")
     # the banner section's own field columns ARE covered (permissions emitted for them)...
     for cid in section_cols:
@@ -264,15 +292,26 @@ def test_section_owner_name_binds_section_not_same_named_table_host(draft):
     assert [p for p in perms.values() if p["Column"] in children] == []
 
 
-def test_table_child_columns_excluded_even_when_nested_model_backref_missing(draft, matrix):
+def test_table_child_columns_excluded_even_when_nested_model_backref_missing(
+    draft, matrix
+):
     # A live read-back can drop the nested table Model's `Column` back-ref; the host column's own
     # `Column::Model` must still let the coverage check resolve (and exclude) the table's columns,
     # or a table-bearing flow can never get a visibility matrix. This is the real live break.
-    d = add_table(draft, "Line Items", [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER)])
-    tbl = next(k for k, v in _nodes(d, "Model").items() if v.get("Name") == "Line Items")
+    d = (
+        FlowDraft.from_wire(draft)
+        .add_table("Line Items", [("SKU", FieldType.TEXT), ("Qty", FieldType.NUMBER)])
+        .to_wire()
+    )
+    tbl = next(
+        k for k, v in _nodes(d, "Model").items() if v.get("Name") == "Line Items"
+    )
     del d[tbl]["Column"]  # simulate the read-back that dropped the back-ref
     host, children = _table_cols(d)
-    applied = set_step_permissions(d, progressive_matrix(d, OWNERS))  # must NOT raise
+    d_flow = FlowDraft.from_wire(d)
+    applied = d_flow.set_step_permissions(  # must NOT raise
+        progressive_matrix(d_flow, OWNERS)
+    ).to_wire()
     perms = _nodes(applied, "Permission")
     assert [p for p in perms.values() if p["Column"] == host] == []
     assert [p for p in perms.values() if p["Column"] in children] == []

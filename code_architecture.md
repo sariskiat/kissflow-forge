@@ -1,81 +1,65 @@
-# Code Architecture
+# Code architecture
 
-Adapted from the AI-CoE `mcp-server-python-boilerplate`. Where this repo deviates from that
-template, the deviation is written down here with its reason — an undocumented deviation is
-just drift.
-
-## 1. Architecture goal
-
-Keep the Kissflow build logic independent of FastMCP, of the builder HTTP API, and of the
-filesystem.
+The reference is `mcp-server-python-boilerplate`. The dependency direction is
+checked by `make architecture`:
 
 ```text
-Infrastructure  --->  Application  --->  Domain
+MCP tools and Kissflow adapters -> application use cases -> domain
 ```
 
-Dependencies point inward. This is **enforced**, not asserted: `make architecture` runs
-import-linter over the contracts in `pyproject.toml` and fails the build when an edge turns
-around.
+## Domain
 
-## 2. Layers
+`src/app/domain/entities/` holds flow, page, and navigation drafts.
+`src/app/domain/value_objects/` holds field, style, expression, kind, and
+coverage rules. Domain code makes no network or filesystem call. The import
+contracts forbid FastMCP, httpx, Pydantic, and other outer-layer libraries.
 
-### Domain — `src/app/domain/`
+## Application
 
-The normalized Kissflow node-graph and pure operations on it: `types` (frozen structs, closed
-enums), `graph`, `expr`, `pages`, `nav`, `coverage`.
+`src/app/application/interfaces/` defines ports for each outside service:
+flow, app, page, dataset, item, copilot, docs, and artifact files.
+`models/requests/` and `models/responses/` hold typed tool data.
+`use_cases/<family>/` holds one use case per tool. A use case receives ports,
+performs the step order, and raises `ApplicationError` for a refused or failed
+operation. It does not import a concrete adapter.
 
-**Should** be plain Python and stdlib, independently testable, and free of any notion that a
-Kissflow tenant exists over a network.
+## Infrastructure
 
-**Should not** import `fastmcp`, `mcp`, `starlette`, `httpx`, `pydantic`, `cryptography`, or
-`yaml` — contract-enforced.
+`src/app/infrastructure/kissflow/` has one httpx adapter per API family. The
+shared `_http.py` sends requests to the validated dev host. The adapters get
+the caller's key pair for each call; the pair is not stored in `AppResources`.
+`config/settings.py` alone reads the environment and refuses a host that does
+not meet the dev-tenant rule.
 
-### Application — `src/app/application/`
+`mcp/tools/` has nine thin tool modules: flow, app, page, dataset, item,
+copilot, intake, design, and meta. Each tool builds a request model, calls one
+use case, and turns `ApplicationError` into `ToolError`. `mcp/server.py`
+registers them with `create_server()`. `mcp/lifespan.py` opens one shared
+`httpx.AsyncClient` and builds the ports. `artifact_writer.py`,
+`docs_reader.py`, `playbook.py`, and `capabilities.py` handle filesystem work.
 
-Use cases over the domain: `engine` (offline planning), `tools` (framework-agnostic dict-in/
-dict-out logic), `verify` (the health check), `compare`, `querybank`, `intake/` (the
-11-dimension AppSpec, the grilling script, and the AppSpec→BuildPlan compiler), and `design/`
-(the confirm-before-you-build diagrams and mockups).
+`src/app/main.py` loads settings, starts the lifespan, and chooses stdio or
+HTTP. `resources.py` is the one anchor for runtime files at the repo root.
 
-**Should** depend on the domain and on nothing outward.
+## Deliberate differences from the reference
 
-**Should not** import `fastmcp`, `mcp`, `starlette`, `httpx`, `cryptography`, or `yaml` —
-contract-enforced. `pydantic` is permitted for DTOs, matching the boilerplate.
-
-### Infrastructure — `src/app/infrastructure/`
-
-Everything that touches an external system: `kissflow/client.py` (THE WRITE PATH),
-`kissflow/auth.py` (Entra + per-user OAuth), `kissflow/dataplane.py` (the documented
-`/process` item API), `kissflow/pages_live.py`, `capabilities.py` and `playbook.py` (filesystem
-readers), and `mcp/server.py` (the FastMCP adapter).
-
-The MCP adapter stays **thin**: it declares the tool surface and delegates. Business rules
-belong in the application layer, wire shapes in the domain.
-
-### Composition root — `src/app/main.py`
-
-Chooses the transport and binds the port. That is a deployment decision, so it lives outside
-the adapter. Entry points: `mcp-server` and `python -m app.main`.
-
-## 3. Deviations from the boilerplate, and why
-
-| Boilerplate | Here | Why |
+| Reference | Kissflow Forge | Reason |
 |---|---|---|
-| `ty check .` with no rule overrides | same, plus two rules off for `tests/**` | Every one of the 440 diagnostics was fixed except two classes, both stated once in `pyproject.toml`: `too-many-positional-arguments` (32, all `pytest.skip(...)` — ty cannot see through pytest's `@_with_exception` decorator, and NEITHER the positional nor the keyword spelling type-checks) and `invalid-assignment` (35, instance-level method stubbing on test doubles — 27 already carried mypy's own ignore). Every other rule stays live in tests. |
-| `E501` enforced | `ignore = ["E501"]` | Measured: p95=98, p99=106 — the code is already written to ~100. The 594-line tail is captured Kissflow wire strings, copilot prompt text, and long explanatory comments; 128 of those cannot be split without mangling a literal. `ruff format` owns layout instead, and IS gated. |
-| `asyncpg` / PostgreSQL | none | This engine has no database. Its state lives in the Kissflow tenant. |
-| `httpx` as a runtime dep | dev-only | The builder client uses `urllib` from the stdlib. `httpx` only drives the ASGI app in tests. |
-| FastMCP lifespan holding resources | module-level `mcp` | The builder client is constructed per call from per-user credentials, not held open across the process. There is no pool to manage, so there is no lifespan to manage it. |
-| Package is self-contained | `src/app/resources.py` | `shapes/`, `docs/capabilities/` and `skills/` are runtime data at the repo root, because `docs/capabilities/*.md` cross-references its captures as repo-relative `shapes/...` strings. One module anchors them; it sits outside the three layers, so importing it crosses no boundary. |
+| One example tool | 61 tools in nine family modules | The existing tool surface must stay the same. |
+| One example service | Separate API ports and adapters | Each Kissflow API family has its own wire calls. |
+| HTTP only | HTTP with `MCP_HTTP=1`, stdio otherwise | Local work and the live regression use stdio. |
+| Database port | No database | The dev tenant holds the app state. |
+| No repo-root runtime captures | `src/app/resources.py` anchors `shapes/` and capability docs | Captures and docs refer to repo-relative paths. |
+| No artifact writer | `ArtifactWriter` port and `FileArtifactWriter` adapter | Design tools write files without importing the filesystem into use cases. |
 
-## 4. Error handling
+Tool names, input schemas, and descriptions are frozen by
+`tests/test_tool_surface_snapshot.py`. `scripts/arch_scan.py` checks the layer
+seams and the test mirror. `tests/test_boilerplate_conformance.py` checks the
+reference layout and recorded differences in `tests/fixtures/tooling_deltas.toml`.
 
-Technical failures stay inside infrastructure until translated. Nothing below the MCP boundary
-raises a raw `urllib` error at a caller, and no tool returns a Kissflow credential, a token, or
-a stack trace to an MCP client.
+## Evidence boundary
 
-## 5. The rule that outranks all of this
-
-An HTTP 200 and a clean publish prove nothing about whether the flow actually works — see
-`CLAUDE.md > THE RULE`. Clean layering does not make a wrong wire shape right. The only
-reliable oracle is a UI-built artifact to diff against.
+`make verify` checks the local code and offline behavior. `make test-live`
+runs against the real dev tenant and is separate from CI. A publish response
+alone does not prove the flow works in Kissflow's builder UI; see
+`CLAUDE.md > THE RULE`.

@@ -25,22 +25,44 @@ The tests below are the standing guard. `CLAIMS` pairs a description PHRASE with
 that must actually produce the refusal, and `test_every_refusal_claiming_tool_is_accounted_for`
 makes sure no future tool can add a refusal claim and stay out of the table.
 
-Everything here is OFFLINE: `_client` is monkeypatched to a FakeClient over the engine's own
-synthetic draft, so every refusal is proven to fire BEFORE any PUT (`puts == 0`), which is what
-"refused" means in this codebase's voice.
+Stage E switch: every tool call below goes through `create_server(lifespan)` and an in-process
+`fastmcp.Client` (the old plain-function calls `getattr(srv, name)(**kwargs)` and the monolithic
+`FakeClient` are both gone with the rest of `app.infrastructure.mcp.server`'s module-level `mcp`
+and `app.infrastructure.kissflow.client`). `offline_resources` wires one `FakeFlowRepository`/
+`FakeAppRepository` pair, primed with the engine's own synthetic process draft, shared by every
+family's use case the table exercises; every refusal under test is still supposed to fire before
+the first WRITE call, which is what "refused" means in this codebase's voice -- proven now by
+scanning every fake's own `.calls` log for a write-shaped method name, rather than one `FakeClient.
+puts` counter. A raised `ApplicationError` reaches the caller as a `ToolError`; the claimed
+fragment is checked against `str(exc.value)`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any, cast
 
 import pytest
+from fastmcp import Client, FastMCP
+from fastmcp.exceptions import ToolError
 from synthetic import synthetic_process_draft
-from test_client import FakeClient
+from tests.fakes.app import FakeAppRepository
+from tests.fakes.artifacts import FakeArtifactWriter
+from tests.fakes.copilot import FakeCopilotService
+from tests.fakes.dataset import FakeDatasetRepository
+from tests.fakes.docs import FakeDocsReader
+from tests.fakes.flow import FakeFlowRepository
+from tests.fakes.intake_specs import full_spec
+from tests.fakes.item import FakeItemService
+from tests.fakes.page import FakePageRepository
 
-import app.infrastructure.mcp.server as srv
+from app.domain.entities.flow_draft import FlowDraft
+from app.infrastructure.config.settings import Settings
+from app.infrastructure.mcp.lifespan import AppResources
+from app.infrastructure.mcp.server import create_server
 
 # --------------------------------------------------------------------------------------------
 # The table. Each row: tool -> (a phrase that must appear in the LIVE description,
@@ -97,7 +119,11 @@ CLAIMS: dict[str, tuple[str, dict[str, Any], str]] = {
     ),
     "forge_add_goto_gate": (
         "rejected offline, before any write",
-        {"flow_id": "F1", "target_activity_name": "Assess unit", "field_name": "Ticket No"},
+        {
+            "flow_id": "F1",
+            "target_activity_name": "Assess unit",
+            "field_name": "Ticket No",
+        },
         "not Boolean",
     ),
     "forge_set_events": (
@@ -118,14 +144,23 @@ CLAIMS: dict[str, tuple[str, dict[str, Any], str]] = {
     "kf_plan_field_change": (
         "a malformed entry is refused by index",
         {"draft": {}, "changes": [{"name": "x", "type": "Nope"}]},
-        "changes[0]['type']",
+        # Stage D moved this check into the request DTO's own closed `type` enum (spec G10:
+        # "the same bad inputs fail with ValidationError") -- Pydantic's own loc-path notation
+        # replaces the old hand-built "changes[0]['type']" bracket string, but the claim (a
+        # malformed entry is refused BY INDEX, before any write) still holds.
+        "changes.0.type",
     ),
     "kf_list_field_types": (
         "a wrong type is refused offline",
         # the claim is ABOUT the four tools whose `type` key it backstops — triggered on one of
         # them, since kf_list_field_types itself takes no arguments to get wrong
-        {"__via__": "forge_add_table", "flow_id": "F1", "name": "T", "columns": [["SKU", "Nope"]]},
-        "columns[0][1]",
+        {
+            "__via__": "forge_add_table",
+            "flow_id": "F1",
+            "name": "T",
+            "columns": [["SKU", "Nope"]],
+        },
+        "not a field type this engine can build",
     ),
     "forge_update_spec": (
         "a patch naming it is refused outright",
@@ -155,35 +190,102 @@ NOT_A_CLAIM_ABOUT_THIS_TOOL: dict[str, str] = {
     "forge_render_flow_diagram": "a NEGATIVE claim: 'this tool never refuses on an incomplete spec'",
     "forge_request_confirmation": "a NEGATIVE claim: 'this tool does NOT refuse to build a confirmation package'",
     "forge_build_page": "real refusals (a dangling OpenPopup, a placeholder binding on a load-bearing widget), "
-    "but they live in app.domain.pages/pages_live and need a whole page graph to trigger — "
-    "already triggered by tests/test_pages_live.py "
-    "(test_an_on_click_pointing_at_a_popup_the_op_never_declares_is_refused) and "
-    "tests/test_pages.py, not re-staged here",
+    "but they live in PageDraft/_build.py and need a whole page graph to trigger — "
+    "already triggered by tests/unit/application/use_cases/page/test__build.py "
+    "and tests/unit/domain/entities/test_page_draft.py, not re-staged here",
 }
 
 _REFUSAL_WORD = re.compile(r"\b(refus\w+|reject\w+)\b", re.IGNORECASE)
 
+# Any port method whose name starts with one of these is a WRITE -- generalised across every
+# family's fake (`tests/fakes/*.py`) rather than one family's own vocabulary, since this file
+# drives tools across flow/app/page/dataset/item/intake in one table.
+_WRITE_PREFIXES = (
+    "put_",
+    "create_",
+    "delete_",
+    "archive_",
+    "publish",
+    "post_",
+    "submit",
+    "reject",
+)
 
-def _listed() -> dict[str, Any]:
-    from fastmcp import Client
 
-    async def _run() -> Any:
-        async with Client(srv.mcp) as client:
-            return await client.list_tools()
-
-    return {t.name: t for t in asyncio.run(_run())}
+def _settings() -> Settings:
+    return Settings(
+        kf_dev_domain="dev-acme.kissflow.com",
+        kf_dev_account_id="A1",
+        kf_app="App1",  # a single-app default, so no CLAIMS row needs its own app_id
+        kf_process_template=None,
+        port=8080,
+        mcp_http=False,
+        kf_dev_access_key_id="k1",
+        kf_dev_access_key_secret="s1",
+        http_timeout_seconds=10.0,
+    )
 
 
 @pytest.fixture()
-def offline_client(monkeypatch: pytest.MonkeyPatch) -> FakeClient:
-    """A FakeClient over the engine's own synthetic process draft, in place of the live one.
+def offline_resources() -> AppResources:
+    """One `AppResources`, every fake fresh per test, `FakeFlowRepository.get_draft` primed with
+    the engine's own synthetic process draft (several claimed refusals -- an unknown field name,
+    a non-Boolean gate field -- only fire once the draft is actually read).
 
-    Every refusal under test is supposed to fire before the first PUT, so the fake's `puts`
-    counter IS the assertion — a "refusal" that already wrote is not a refusal.
+    Every refusal under test is supposed to fire before the first WRITE call, which is what
+    "refused" means in this codebase's voice -- proven by scanning `flow.calls`/`app.calls` for a
+    write-shaped method name (`_WRITE_PREFIXES`), never a live PUT.
     """
-    fake = FakeClient(synthetic_process_draft())
-    monkeypatch.setattr(srv, "_client", lambda app_id=None, require_app=True: fake)
-    return fake
+    flow = FakeFlowRepository()
+    flow.results["get_draft"] = [FlowDraft.from_wire(synthetic_process_draft())] * 5
+    return AppResources(
+        flow=flow,
+        app=FakeAppRepository(),
+        artifacts=FakeArtifactWriter(),
+        page=FakePageRepository(),
+        dataset=FakeDatasetRepository(),
+        item=FakeItemService(),
+        copilot=FakeCopilotService(),
+        docs=FakeDocsReader(),
+    )
+
+
+def _lifespan_factory(resources: AppResources):
+    @asynccontextmanager
+    async def _lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
+        del server
+        yield {"resources": resources, "settings": _settings()}
+
+    return _lifespan
+
+
+def _server(resources: AppResources) -> FastMCP:
+    return create_server(_lifespan_factory(resources))
+
+
+def _listed(resources: AppResources | None = None) -> dict[str, Any]:
+    server = (
+        _server(resources)
+        if resources is not None
+        else _server(
+            AppResources(
+                flow=FakeFlowRepository(),
+                app=FakeAppRepository(),
+                artifacts=FakeArtifactWriter(),
+                page=FakePageRepository(),
+                dataset=FakeDatasetRepository(),
+                item=FakeItemService(),
+                copilot=FakeCopilotService(),
+                docs=FakeDocsReader(),
+            )
+        )
+    )
+
+    async def _run() -> Any:
+        async with Client(server) as client:
+            return await client.list_tools()
+
+    return {t.name: t for t in asyncio.run(_run())}
 
 
 def _description(tool_name: str) -> str:
@@ -192,21 +294,26 @@ def _description(tool_name: str) -> str:
     return " ".join((_listed()[tool_name].description or "").split())
 
 
-def _call(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+async def _call_async(server: FastMCP, tool_name: str, args: dict[str, Any]) -> Any:
+    async with Client(server) as client:
+        return await client.call_tool(tool_name, args)
+
+
+def _call(tool_name: str, args: dict[str, Any], resources: AppResources) -> ToolError:
     """Materialise the two placeholders the static table cannot hold: a real draft graph, and a
     real, fully-populated AppSpec (the digest/token refusals sit BEHIND spec validation, so a
-    stub spec would prove only that the validator works)."""
-    from test_intake import _full_spec
-
-    from app.application.intake.serde import spec_to_dict
-
+    stub spec would prove only that the validator works). Returns the raised `ToolError`.
+    """
     args = dict(args)
     target = args.pop("__via__", tool_name)
     if args.get("draft", "") is None:
         args["draft"] = synthetic_process_draft()
     if args.get("spec") == "__full__":
-        args["spec"] = spec_to_dict(_full_spec())
-    return getattr(srv, target)(**args)
+        args["spec"] = full_spec().model_dump(mode="json")
+
+    with pytest.raises(ToolError) as excinfo:
+        asyncio.run(_call_async(_server(resources), target, args))
+    return excinfo.value
 
 
 @pytest.mark.parametrize("tool_name", sorted(CLAIMS))
@@ -223,32 +330,47 @@ def test_the_claimed_phrase_is_actually_in_the_live_description(tool_name: str) 
 @pytest.mark.parametrize("tool_name", sorted(CLAIMS))
 def test_every_refusal_claim_is_backed_by_a_refusal_you_can_trigger(
     tool_name: str,
-    offline_client: FakeClient,
+    offline_resources: AppResources,
 ) -> None:
-    """Half two: the promise is kept, as DATA (doctrine 7), naming what was wrong."""
+    """Half two: the promise is kept, as a `ToolError` naming what was wrong."""
     _phrase, args, fragment = CLAIMS[tool_name]
-    got = _call(tool_name, args)
-    assert isinstance(got, dict), f"{tool_name} returned {type(got).__name__}, not data"
-    assert got.get("isError") is True, f"{tool_name} did not refuse: {got}"
-    assert fragment in got.get("error", ""), (
-        f"{tool_name} refused, but not for the claimed reason — wanted {fragment!r}, got "
-        f"{got.get('error')!r}"
+    exc = _call(tool_name, args, offline_resources)
+    assert fragment in str(exc), (
+        f"{tool_name} refused, but not for the claimed reason — wanted {fragment!r}, got {exc!r}"
     )
 
 
 @pytest.mark.parametrize("tool_name", sorted(CLAIMS))
-def test_a_refusal_never_writes_first(tool_name: str, offline_client: FakeClient) -> None:
+def test_a_refusal_never_writes_first(
+    tool_name: str, offline_resources: AppResources
+) -> None:
     """ "Refused" in this codebase's voice means BEFORE any write. A tool that refuses after a PUT
     has already changed the tenant, which is the opposite of what the word promises."""
     _phrase, args, _fragment = CLAIMS[tool_name]
-    _call(tool_name, args)
-    assert offline_client.puts == 0, f"{tool_name} wrote {offline_client.puts} time(s) then refused"
+    _call(tool_name, args, offline_resources)
+    writes = [
+        (name, fake_name)
+        for fake_name, fake in (
+            ("flow", offline_resources.flow),
+            ("app", offline_resources.app),
+            ("page", offline_resources.page),
+            ("dataset", offline_resources.dataset),
+            ("item", offline_resources.item),
+        )
+        for name, _call_args, _kwargs in cast(Any, fake).calls
+        if name.startswith(_WRITE_PREFIXES)
+    ]
+    assert not writes, f"{tool_name} wrote {writes} then refused"
 
 
 def test_every_refusal_claiming_tool_is_accounted_for() -> None:
     """The drift guard. A new tool cannot add "X is refused" to its description and stay out of
     both the table and the explicitly-reasoned exemption list."""
-    claiming = {name for name, t in _listed().items() if _REFUSAL_WORD.search(t.description or "")}
+    claiming = {
+        name
+        for name, t in _listed().items()
+        if _REFUSAL_WORD.search(t.description or "")
+    }
     unaccounted = sorted(claiming - set(CLAIMS) - set(NOT_A_CLAIM_ABOUT_THIS_TOOL))
     assert not unaccounted, (
         f"{unaccounted} claim a refusal in their description with nothing proving it — add a "
@@ -268,7 +390,8 @@ def test_neither_list_carries_a_stale_entry() -> None:
         stale = sorted(
             name
             for name in table
-            if name not in listed or not _REFUSAL_WORD.search(listed[name].description or "")
+            if name not in listed
+            or not _REFUSAL_WORD.search(listed[name].description or "")
         )
         assert not stale, f"{stale} no longer claim a refusal — drop them from {label}"
 
@@ -276,7 +399,7 @@ def test_neither_list_carries_a_stale_entry() -> None:
 def test_forge_set_events_names_five_types_not_six() -> None:
     """(b) pinned on both surfaces at once: the description and the refusal message must agree
     with `types.NO_EVENT_FIELD_TYPES`, and must say why the platform's sixth is not in it."""
-    from app.domain.types import NO_EVENT_FIELD_TYPES
+    from app.domain.value_objects.field_type import NO_EVENT_FIELD_TYPES
 
     assert len(NO_EVENT_FIELD_TYPES) == 5 and "Rich text" not in NO_EVENT_FIELD_TYPES
     description = _description("forge_set_events")
@@ -287,13 +410,18 @@ def test_forge_set_events_names_five_types_not_six() -> None:
 
 
 def test_the_events_refusal_message_reads_the_engine_set_rather_than_restating_it(
-    offline_client: FakeClient,
+    offline_resources: AppResources,
 ) -> None:
     """The message used to hard-code the same wrong six. It now prints the real frozenset, so it
     cannot drift from the code it describes."""
-    from app.domain.types import NO_EVENT_FIELD_TYPES
+    from app.domain.value_objects.field_type import NO_EVENT_FIELD_TYPES
 
-    err = srv.forge_set_events(flow_id="F1", events={"Self-help Doc": [[None, "kf.x();"]]})["error"]
+    exc = _call(
+        "forge_set_events",
+        {"flow_id": "F1", "events": {"Self-help Doc": [[None, "kf.x();"]]}},
+        offline_resources,
+    )
+    err = str(exc)
     for wire_type in sorted(NO_EVENT_FIELD_TYPES):
         assert wire_type in err, f"{wire_type} missing from the refusal: {err}"
     assert "Rich text" in err and "uncaptured" in err
@@ -302,22 +430,30 @@ def test_the_events_refusal_message_reads_the_engine_set_rather_than_restating_i
 def test_forge_create_list_no_longer_claims_a_gate_the_compiler_does_not_have() -> None:
     """(c): `_op_create_list` emits a create_list op for a personal_data list like any other. The
     gate is the op's own `why`, and the description must point at THAT, not at a refusal."""
-    import dataclasses as dc
-
-    from app.application.intake.compile import compile_spec
+    from app.application.use_cases.intake._compile import compile_spec
 
     description = _description("forge_create_list")
     assert "the spec path refuses to compile" not in description
     assert "HUMAN-GATED" in description and "`why`" in description
 
-    from test_intake import _full_spec
-
-    full = _full_spec()
+    full = full_spec()
     flagged = tuple(
-        dc.replace(lst, personal_data=(lst.name == "Urgency Levels"))
+        lst.model_copy(update={"personal_data": lst.name == "Urgency Levels"})
         for lst in full.master_data.lists
     )
-    plan = compile_spec(dc.replace(full, master_data=dc.replace(full.master_data, lists=flagged)))
-    op = next(o for o in plan.ops if o.kind == "create_list" and o.args["name"] == "Urgency Levels")
+    plan = compile_spec(
+        full.model_copy(
+            update={
+                "master_data": full.master_data.model_copy(update={"lists": flagged})
+            }
+        )
+    )
+    op = next(
+        o
+        for o in plan.ops
+        if o.kind == "create_list" and o.args["name"] == "Urgency Levels"
+    )
     assert op.args["personal_data"] is True
-    assert "HUMAN-GATED" in op.why, "the op's `why` IS the gate the description now names"
+    assert "HUMAN-GATED" in op.why, (
+        "the op's `why` IS the gate the description now names"
+    )

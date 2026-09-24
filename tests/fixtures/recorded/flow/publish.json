@@ -1,0 +1,16 @@
+{
+  "new": [
+    {
+      "body": null,
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/metadata/2/ACC1/process/F1/publish?_application_id=A1"
+    }
+  ],
+  "old": [
+    {
+      "body": null,
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/metadata/2/ACC1/process/F1/publish?_application_id=A1"
+    }
+  ]
+}

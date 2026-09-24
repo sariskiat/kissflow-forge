@@ -1,7 +1,7 @@
 {
   "kind": "Model",
-  "description": "Full-fidelity deidentified capture of the production process template (source flow name and tenant account id scrubbed): all 277 Kind-bearing nodes -- fields, layout, workflow, conditional visibility (Condition/Criteria), computed formulas (Expression/Node AST), QueryDefinition, Permission, Resource, Component, Property, and the publish-audit User record -- for the Template Transplant op (ADR-0006, kissflow-forge issue #11 / spec #10).",
-  "source_capture": "template_raw.json",
+  "description": "Full-fidelity de-identified capture of the production process template: all 277 Kind-bearing nodes (fields, layout, workflow, conditional visibility, computed formulas, QueryDefinition, Permission, Resource), with real field ids and system fields kept.",
+  "source_capture": "published schema of the production process template",
   "template": {
     "Model_Sample01": {
       "Id": "Model_Sample01",
@@ -17,34 +17,34 @@
         "Row_Sample28"
       ],
       "Model::Field": [
-        "Field_Sample04",
-        "Field_Sample12",
-        "Field_Sample07",
-        "Field_Sample15",
-        "Field_Sample16",
-        "Field_Sample17",
-        "Field_Sample14",
-        "Field_Sample11",
-        "Field_Sample18",
-        "Field_Sample10",
-        "Field_Sample08",
-        "Field_Sample26",
-        "Field_Sample19",
-        "Field_Sample20",
-        "Field_Sample06",
-        "Field_Sample27",
-        "Field_Sample13",
-        "Field_Sample28",
-        "Field_Sample22",
-        "Field_Sample09",
-        "Field_Sample05",
-        "Field_Sample02",
-        "Field_Sample24",
-        "Field_Sample25",
-        "Field_Sample23",
-        "Field_Sample21",
-        "Field_Sample01",
-        "Field_Sample03"
+        "Requestor_Manager",
+        "is_public_form",
+        "final_email",
+        "pbf_email",
+        "pbf_first_name",
+        "pbf_last_name",
+        "pbf_bu_lookup",
+        "final_requestor_name",
+        "pbf_nick_name",
+        "final_nick_name",
+        "final_employee_id",
+        "requestor_id",
+        "pbf_req_id",
+        "pbf_submit_flag",
+        "department_name",
+        "requestor_manager_mail",
+        "manager_user",
+        "self_or_representative",
+        "rep_requestor_email",
+        "final_manager_email",
+        "department_head_email",
+        "Department_",
+        "requestor",
+        "requestor_email",
+        "request_number",
+        "rep_requestor",
+        "Branch",
+        "Description"
       ],
       "Model::ProcessDef": [
         "ProcessDef_Sample01"
@@ -128,12 +128,12 @@
       "End": 4,
       "Row": "Row_Sample09",
       "Column::Field": [
-        "Field_Sample04"
+        "Requestor_Manager"
       ],
       "Hint": "หากข้อมูลไม่ขึ้น กรุณาติดต่อทีม IT ETO"
     },
-    "Field_Sample04": {
-      "Id": "Field_Sample04",
+    "Requestor_Manager": {
+      "Id": "Requestor_Manager",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-07-08T11:46:36.483Z",
@@ -145,16 +145,16 @@
         "Expression_Sample11"
       ]
     },
-    "Activity_Sample05": {
-      "Id": "Activity_Sample05",
+    "SendBackToInitiator": {
+      "Id": "SendBackToInitiator",
       "Kind": "Activity",
       "NodeType": "SendBackToInitiator",
       "BaseMetadata": "Activity_Sample03"
     },
     "User_Sample01": {
-      "_id": "User_Sample01",
+      "Kind": "User",
       "Name": "Sample Publisher",
-      "Kind": "User"
+      "_id": "User_Sample01"
     },
     "Row_Sample11": {
       "Id": "Row_Sample11",
@@ -192,11 +192,11 @@
       "End": 2,
       "Row": "Row_Sample15",
       "Column::Field": [
-        "Field_Sample12"
+        "is_public_form"
       ]
     },
-    "Field_Sample12": {
-      "Id": "Field_Sample12",
+    "is_public_form": {
+      "Id": "is_public_form",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-10T14:39:50.140Z",
@@ -214,8 +214,8 @@
     "Expression_Sample05": {
       "Id": "Expression_Sample05",
       "Kind": "Expression",
-      "ExpressionStr": "if(_Field_Sample12, \"Public Form\", \"Kissflow\"",
-      "Field": "Field_Sample12",
+      "ExpressionStr": "if(_is_public_form, \"Public Form\", \"Kissflow\"",
+      "Field": "is_public_form",
       "Expression::Node": [
         "Node_Sample37"
       ]
@@ -239,7 +239,7 @@
       "Id": "Node_Sample76",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "_Field_Sample12",
+      "Field": "_is_public_form",
       "DataType": "Boolean",
       "IsSystemField": true,
       "FieldModel": "Model_Sample01",
@@ -278,7 +278,7 @@
       "RHSType": "Value",
       "RHSValue": "Public Form",
       "HasArguments": true,
-      "LHSOwnField": "Field_Sample12"
+      "LHSOwnField": "is_public_form"
     },
     "Row_Sample25": {
       "Id": "Row_Sample25",
@@ -335,7 +335,7 @@
       "End": 4,
       "Row": "Row_Sample07",
       "Column::Field": [
-        "Field_Sample07"
+        "final_email"
       ]
     },
     "Column_Sample37": {
@@ -346,12 +346,12 @@
       "End": 2,
       "Row": "Row_Sample22",
       "Column::Field": [
-        "Field_Sample15"
+        "pbf_email"
       ],
       "Hint": "Template จะบังคับใส่ตัวพิมพ์เล็กเท่านั้น ผู้ใช้งานสามารถเอา Validation ออกได้"
     },
-    "Field_Sample15": {
-      "Id": "Field_Sample15",
+    "pbf_email": {
+      "Id": "pbf_email",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-11T08:01:23.208Z",
@@ -371,7 +371,7 @@
     "Criteria_Sample12": {
       "Id": "Criteria_Sample12",
       "Kind": "Criteria",
-      "FieldValidation": "Field_Sample15",
+      "FieldValidation": "pbf_email",
       "Criteria::Condition": [
         "Condition_Sample08",
         "Condition_Sample19"
@@ -391,11 +391,11 @@
       "End": 2,
       "Row": "Row_Sample21",
       "Column::Field": [
-        "Field_Sample16"
+        "pbf_first_name"
       ]
     },
-    "Field_Sample16": {
-      "Id": "Field_Sample16",
+    "pbf_first_name": {
+      "Id": "pbf_first_name",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-11T08:02:41.478Z",
@@ -414,11 +414,11 @@
       "End": 4,
       "Row": "Row_Sample21",
       "Column::Field": [
-        "Field_Sample17"
+        "pbf_last_name"
       ]
     },
-    "Field_Sample17": {
-      "Id": "Field_Sample17",
+    "pbf_last_name": {
+      "Id": "pbf_last_name",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-11T08:02:54.632Z",
@@ -437,13 +437,13 @@
       "End": 2,
       "Row": "Row_Sample20",
       "Column::Field": [
-        "Field_Sample14"
+        "pbf_bu_lookup"
       ]
     },
     "QueryDefinition_Sample02": {
       "Id": "QueryDefinition_Sample02",
       "Kind": "QueryDefinition",
-      "Field": "Field_Sample14",
+      "Field": "pbf_bu_lookup",
       "LHSModel": "Department_Master_01",
       "LookupField": [
         {
@@ -496,8 +496,8 @@
         "Name"
       ]
     },
-    "Field_Sample14": {
-      "Id": "Field_Sample14",
+    "pbf_bu_lookup": {
+      "Id": "pbf_bu_lookup",
       "Kind": "Field",
       "Type": "Reference",
       "CreatedAt": "2025-12-11T08:33:38.009Z",
@@ -524,8 +524,8 @@
         "Column_Sample07"
       ]
     },
-    "Field_Sample07": {
-      "Id": "Field_Sample07",
+    "final_email": {
+      "Id": "final_email",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-11T08:01:02.295Z",
@@ -547,11 +547,11 @@
       "End": 2,
       "Row": "Row_Sample04",
       "Column::Field": [
-        "Field_Sample11"
+        "final_requestor_name"
       ]
     },
-    "Field_Sample11": {
-      "Id": "Field_Sample11",
+    "final_requestor_name": {
+      "Id": "final_requestor_name",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-11T08:39:16.612Z",
@@ -570,11 +570,11 @@
       "End": 5,
       "Row": "Row_Sample21",
       "Column::Field": [
-        "Field_Sample18"
+        "pbf_nick_name"
       ]
     },
-    "Field_Sample18": {
-      "Id": "Field_Sample18",
+    "pbf_nick_name": {
+      "Id": "pbf_nick_name",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-11T08:42:11.810Z",
@@ -593,11 +593,11 @@
       "End": 4,
       "Row": "Row_Sample04",
       "Column::Field": [
-        "Field_Sample10"
+        "final_nick_name"
       ]
     },
-    "Field_Sample10": {
-      "Id": "Field_Sample10",
+    "final_nick_name": {
+      "Id": "final_nick_name",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-11T08:42:30.080Z",
@@ -616,11 +616,11 @@
       "End": 2,
       "Row": "Row_Sample07",
       "Column::Field": [
-        "Field_Sample08"
+        "final_employee_id"
       ]
     },
-    "Field_Sample08": {
-      "Id": "Field_Sample08",
+    "final_employee_id": {
+      "Id": "final_employee_id",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-11T09:58:39.783Z",
@@ -649,11 +649,11 @@
       "End": 2,
       "Row": "Row_Sample09",
       "Column::Field": [
-        "Field_Sample26"
+        "requestor_id"
       ]
     },
-    "Field_Sample26": {
-      "Id": "Field_Sample26",
+    "requestor_id": {
+      "Id": "requestor_id",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-12T04:52:55.514Z",
@@ -676,12 +676,12 @@
       "End": 6,
       "Row": "Row_Sample21",
       "Column::Field": [
-        "Field_Sample19"
+        "pbf_req_id"
       ],
       "Hint": "Template บังคับ format CJG1234567 (CJ ตามด้วยตัวพิมพ์ใหญ่และเลข 7 หลัก) ผู้ใช้งานสามารถเอา Validation ออกได้"
     },
-    "Field_Sample19": {
-      "Id": "Field_Sample19",
+    "pbf_req_id": {
+      "Id": "pbf_req_id",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-12T04:57:25.282Z",
@@ -698,7 +698,7 @@
     "Criteria_Sample15": {
       "Id": "Criteria_Sample15",
       "Kind": "Criteria",
-      "FieldValidation": "Field_Sample19",
+      "FieldValidation": "pbf_req_id",
       "Criteria::Condition": [
         "Condition_Sample14"
       ]
@@ -730,12 +730,12 @@
       "End": 4,
       "Row": "Row_Sample15",
       "Column::Field": [
-        "Field_Sample20"
+        "pbf_submit_flag"
       ],
       "Hint": "0 คือ user มี kissflow account แล้ว จะไม่ให้กด submit ผ่าน Public Form"
     },
-    "Field_Sample20": {
-      "Id": "Field_Sample20",
+    "pbf_submit_flag": {
+      "Id": "pbf_submit_flag",
       "Kind": "Field",
       "Type": "Number",
       "CreatedAt": "2025-12-12T05:13:15.572Z",
@@ -759,7 +759,7 @@
     "Criteria_Sample06": {
       "Id": "Criteria_Sample06",
       "Kind": "Criteria",
-      "FieldValidation": "Field_Sample20",
+      "FieldValidation": "pbf_submit_flag",
       "Criteria::Condition": [
         "Condition_Sample09"
       ]
@@ -830,7 +830,7 @@
       "RHSType": "Value",
       "RHSValue": "0",
       "HasArguments": true,
-      "LHSOwnField": "Field_Sample20"
+      "LHSOwnField": "pbf_submit_flag"
     },
     "Criteria_Sample14": {
       "Id": "Criteria_Sample14",
@@ -850,7 +850,7 @@
       "RHSType": "Value",
       "RHSValue": "Public Form",
       "HasArguments": true,
-      "LHSOwnField": "Field_Sample12"
+      "LHSOwnField": "is_public_form"
     },
     "Column_Sample08": {
       "Id": "Column_Sample08",
@@ -887,7 +887,7 @@
       "Id": "Condition_Sample18",
       "Kind": "Condition",
       "Criteria": "Criteria_Sample03",
-      "LHSOwnField": "Field_Sample20",
+      "LHSOwnField": "pbf_submit_flag",
       "Operator": "NOT_EQUAL_TO",
       "RHSType": "Value",
       "RHSValue": "0"
@@ -895,8 +895,8 @@
     "Expression_Sample09": {
       "Id": "Expression_Sample09",
       "Kind": "Expression",
-      "ExpressionStr": "if(_Field_Sample12, Field_Sample19, Field_Sample26)",
-      "Field": "Field_Sample08",
+      "ExpressionStr": "if(_is_public_form, pbf_req_id, requestor_id)",
+      "Field": "final_employee_id",
       "Expression::Node": [
         "Node_Sample22"
       ]
@@ -920,7 +920,7 @@
       "Id": "Node_Sample73",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "_Field_Sample12",
+      "Field": "_is_public_form",
       "DataType": "Boolean",
       "IsSystemField": true,
       "FieldModel": "Model_Sample01",
@@ -930,7 +930,7 @@
       "Id": "Node_Sample47",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample19",
+      "Field": "pbf_req_id",
       "DataType": "String",
       "Node": "Node_Sample22"
     },
@@ -938,7 +938,7 @@
       "Id": "Node_Sample99",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample26",
+      "Field": "requestor_id",
       "DataType": "String",
       "Node": "Node_Sample22"
     },
@@ -955,7 +955,7 @@
       "End": 2,
       "Row": "Row_Sample14",
       "Column::Field": [
-        "Field_Sample06"
+        "department_name"
       ],
       "IsHidden": true,
       "Hint": "ชื่อสำนัก"
@@ -963,8 +963,8 @@
     "Expression_Sample10": {
       "Id": "Expression_Sample10",
       "Kind": "Expression",
-      "ExpressionStr": "Field_Sample14.Department_Name",
-      "Field": "Field_Sample06",
+      "ExpressionStr": "pbf_bu_lookup.Department_Name",
+      "Field": "department_name",
       "Expression::Node": [
         "Node_Sample27"
       ]
@@ -989,7 +989,7 @@
       "Id": "Node_Sample34",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample14",
+      "Field": "pbf_bu_lookup",
       "DataType": "Reference",
       "FlowId": "Department_Master_01",
       "FlowType": "Dataset",
@@ -1005,8 +1005,8 @@
       "RefFlowType": "Dataset",
       "Node": "Node_Sample27"
     },
-    "Field_Sample06": {
-      "Id": "Field_Sample06",
+    "department_name": {
+      "Id": "department_name",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2025-12-12T10:30:09.825Z",
@@ -1098,12 +1098,12 @@
       "End": 6,
       "Row": "Row_Sample09",
       "Column::Field": [
-        "Field_Sample27"
+        "requestor_manager_mail"
       ],
       "IsHidden": true
     },
-    "Field_Sample27": {
-      "Id": "Field_Sample27",
+    "requestor_manager_mail": {
+      "Id": "requestor_manager_mail",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2026-01-13T04:45:36.158Z",
@@ -1135,13 +1135,13 @@
       "End": 2,
       "Row": "Row_Sample23",
       "Column::Field": [
-        "Field_Sample13"
+        "manager_user"
       ]
     },
     "QueryDefinition_Sample01": {
       "Id": "QueryDefinition_Sample01",
       "Kind": "QueryDefinition",
-      "Field": "Field_Sample13",
+      "Field": "manager_user",
       "FlowType": "User",
       "LookupField": [],
       "LHSModel": "_employee",
@@ -1150,8 +1150,8 @@
         "Criteria_Sample02"
       ]
     },
-    "Field_Sample13": {
-      "Id": "Field_Sample13",
+    "manager_user": {
+      "Id": "manager_user",
       "Kind": "Field",
       "Type": "User",
       "CreatedAt": "2026-01-13T06:44:17.854Z",
@@ -1180,7 +1180,7 @@
       "Criteria": "Criteria_Sample02",
       "Operator": "EQUAL_TO",
       "RHSType": "Field",
-      "RHSField": "Field_Sample09",
+      "RHSField": "final_manager_email",
       "HasArguments": true,
       "LHSField": "Email"
     },
@@ -1223,15 +1223,15 @@
       "End": 2,
       "Row": "Row_Sample08",
       "Column::Field": [
-        "Field_Sample28"
+        "self_or_representative"
       ],
       "Hint": "Yes คือเปิดงานด้วยตัวเอง | No คือ เปิดงานแทน",
       "Column::Appearance": [
         "Appearance_Sample02"
       ]
     },
-    "Field_Sample28": {
-      "Id": "Field_Sample28",
+    "self_or_representative": {
+      "Id": "self_or_representative",
       "Kind": "Field",
       "Type": "Boolean",
       "CreatedAt": "2026-01-13T07:40:28.028Z",
@@ -1279,15 +1279,15 @@
       "End": 4,
       "Row": "Row_Sample19",
       "Column::Field": [
-        "Field_Sample22"
+        "rep_requestor_email"
       ],
       "Hint": "ผู้เปิดงานกรอก email ของผู้ที่ต้องการเปิดงานแทน โดยผู้เปิดงานแทนต้องมี Account Kissflow ด้วย",
       "Column::Appearance": [
         "Appearance_Sample01"
       ]
     },
-    "Field_Sample22": {
-      "Id": "Field_Sample22",
+    "rep_requestor_email": {
+      "Id": "rep_requestor_email",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2026-01-13T07:54:04.427Z",
@@ -1312,11 +1312,11 @@
       "End": 4,
       "Row": "Row_Sample23",
       "Column::Field": [
-        "Field_Sample09"
+        "final_manager_email"
       ]
     },
-    "Field_Sample09": {
-      "Id": "Field_Sample09",
+    "final_manager_email": {
+      "Id": "final_manager_email",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2026-01-13T08:25:20.953Z",
@@ -1338,12 +1338,12 @@
       "End": 4,
       "Row": "Row_Sample14",
       "Column::Field": [
-        "Field_Sample05"
+        "department_head_email"
       ],
       "IsHidden": true
     },
-    "Field_Sample05": {
-      "Id": "Field_Sample05",
+    "department_head_email": {
+      "Id": "department_head_email",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2026-01-13T08:27:17.821Z",
@@ -1360,8 +1360,8 @@
     "Expression_Sample03": {
       "Id": "Expression_Sample03",
       "Kind": "Expression",
-      "ExpressionStr": "Field_Sample14.Department_Head.Email",
-      "Field": "Field_Sample05",
+      "ExpressionStr": "pbf_bu_lookup.Department_Head.Email",
+      "Field": "department_head_email",
       "Expression::Node": [
         "Node_Sample49"
       ]
@@ -1401,7 +1401,7 @@
       "Id": "Node_Sample93",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample14",
+      "Field": "pbf_bu_lookup",
       "DataType": "Reference",
       "FlowId": "Department_Master_01",
       "FlowType": "Dataset",
@@ -1430,8 +1430,8 @@
     "Expression_Sample07": {
       "Id": "Expression_Sample07",
       "Kind": "Expression",
-      "ExpressionStr": "if(isBlank(Field_Sample27), Field_Sample05, Field_Sample27)",
-      "Field": "Field_Sample09",
+      "ExpressionStr": "if(isBlank(requestor_manager_mail), department_head_email, requestor_manager_mail)",
+      "Field": "final_manager_email",
       "Expression::Node": [
         "Node_Sample96"
       ]
@@ -1468,7 +1468,7 @@
       "Id": "Node_Sample58",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample27",
+      "Field": "requestor_manager_mail",
       "DataType": "String",
       "Node": "Node_Sample19"
     },
@@ -1476,7 +1476,7 @@
       "Id": "Node_Sample41",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample05",
+      "Field": "department_head_email",
       "DataType": "String",
       "Node": "Node_Sample96"
     },
@@ -1484,7 +1484,7 @@
       "Id": "Node_Sample94",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample27",
+      "Field": "requestor_manager_mail",
       "DataType": "String",
       "Node": "Node_Sample96"
     },
@@ -1494,7 +1494,7 @@
       "Type": "System",
       "Model": "Model_Sample01",
       "ComponentId": "Component_oKkCjtMhB6",
-      "Field": "Field_Sample14",
+      "Field": "pbf_bu_lookup",
       "Component::Property": [
         "Property_Sample01"
       ]
@@ -1563,7 +1563,7 @@
       "Kind": "Resource",
       "ValueType": "Field",
       "DisplayValue": "manager user",
-      "Field": "Field_Sample13",
+      "Field": "manager_user",
       "Activity": "Activity_Sample04"
     },
     "Row_Sample12": {
@@ -1601,7 +1601,7 @@
       "RHSType": "Value",
       "RHSValue": "0",
       "HasArguments": true,
-      "LHSOwnField": "Field_Sample20"
+      "LHSOwnField": "pbf_submit_flag"
     },
     "Criteria_Sample07": {
       "Id": "Criteria_Sample07",
@@ -1621,7 +1621,7 @@
       "RHSType": "Value",
       "RHSValue": "0",
       "HasArguments": true,
-      "LHSOwnField": "Field_Sample20"
+      "LHSOwnField": "pbf_submit_flag"
     },
     "Row_Sample13": {
       "Id": "Row_Sample13",
@@ -1655,12 +1655,12 @@
       "End": 2,
       "Row": "Row_Sample01",
       "Column::Field": [
-        "Field_Sample02"
+        "Department_"
       ],
       "Hint": "หากข้อมูลไม่ขึ้น กรุณาติดต่อทีม IT ETO"
     },
-    "Field_Sample02": {
-      "Id": "Field_Sample02",
+    "Department_": {
+      "Id": "Department_",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2026-01-14T07:30:00.606Z",
@@ -1690,7 +1690,7 @@
       "RHSType": "Value",
       "RHSValue": "0",
       "HasArguments": true,
-      "LHSOwnField": "Field_Sample20"
+      "LHSOwnField": "pbf_submit_flag"
     },
     "Column_Sample30": {
       "Id": "Column_Sample30",
@@ -1700,7 +1700,7 @@
       "End": 2,
       "Row": "Row_Sample12",
       "Column::Field": [
-        "Field_Sample24"
+        "requestor"
       ],
       "ColumnVisibility::Criteria": [
         "Criteria_Sample16"
@@ -1709,7 +1709,7 @@
     "QueryDefinition_Sample03": {
       "Id": "QueryDefinition_Sample03",
       "Kind": "QueryDefinition",
-      "Field": "Field_Sample24",
+      "Field": "requestor",
       "FlowType": "User",
       "LookupField": [],
       "LHSModel": "User",
@@ -1757,7 +1757,7 @@
       "End": 4,
       "Row": "Row_Sample12",
       "Column::Field": [
-        "Field_Sample25"
+        "requestor_email"
       ],
       "ColumnVisibility::Criteria": [
         "Criteria_Sample04"
@@ -1767,8 +1767,8 @@
         "Appearance_Sample03"
       ]
     },
-    "Field_Sample25": {
-      "Id": "Field_Sample25",
+    "requestor_email": {
+      "Id": "requestor_email",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2026-01-26T08:06:07.707Z",
@@ -1785,8 +1785,8 @@
         "Node_Sample50"
       ]
     },
-    "Field_Sample24": {
-      "Id": "Field_Sample24",
+    "requestor": {
+      "Id": "requestor",
       "Kind": "Field",
       "Type": "User",
       "CreatedAt": "2026-01-26T08:03:03.668Z",
@@ -1809,8 +1809,8 @@
     "Expression_Sample12": {
       "Id": "Expression_Sample12",
       "Kind": "Expression",
-      "ExpressionStr": "Field_Sample24.Staff_Id",
-      "Field": "Field_Sample26",
+      "ExpressionStr": "requestor.Staff_Id",
+      "Field": "requestor_id",
       "Expression::Node": [
         "Node_Sample46"
       ]
@@ -1835,7 +1835,7 @@
       "Id": "Node_Sample51",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample24",
+      "Field": "requestor",
       "DataType": "User",
       "FlowId": "User",
       "FlowType": "User",
@@ -1854,8 +1854,8 @@
     "Expression_Sample11": {
       "Id": "Expression_Sample11",
       "Kind": "Expression",
-      "ExpressionStr": "Field_Sample24.Manager.Name",
-      "Field": "Field_Sample04",
+      "ExpressionStr": "requestor.Manager.Name",
+      "Field": "Requestor_Manager",
       "Expression::Node": [
         "Node_Sample10"
       ]
@@ -1895,7 +1895,7 @@
       "Id": "Node_Sample23",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample24",
+      "Field": "requestor",
       "DataType": "User",
       "FlowId": "User",
       "FlowType": "User",
@@ -1924,8 +1924,8 @@
     "Expression_Sample02": {
       "Id": "Expression_Sample02",
       "Kind": "Expression",
-      "ExpressionStr": "Field_Sample24.Manager.Email",
-      "Field": "Field_Sample27",
+      "ExpressionStr": "requestor.Manager.Email",
+      "Field": "requestor_manager_mail",
       "Expression::Node": [
         "Node_Sample83"
       ]
@@ -1965,7 +1965,7 @@
       "Id": "Node_Sample78",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample24",
+      "Field": "requestor",
       "DataType": "User",
       "FlowId": "User",
       "FlowType": "User",
@@ -1994,8 +1994,8 @@
     "Expression_Sample06": {
       "Id": "Expression_Sample06",
       "Kind": "Expression",
-      "ExpressionStr": "Field_Sample24.UserDepartment",
-      "Field": "Field_Sample02",
+      "ExpressionStr": "requestor.UserDepartment",
+      "Field": "Department_",
       "Expression::Node": [
         "Node_Sample100"
       ]
@@ -2020,7 +2020,7 @@
       "Id": "Node_Sample60",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample24",
+      "Field": "requestor",
       "DataType": "User",
       "FlowId": "User",
       "FlowType": "User",
@@ -2039,7 +2039,7 @@
     "Criteria_Sample09": {
       "Id": "Criteria_Sample09",
       "Kind": "Criteria",
-      "FieldValidation": "Field_Sample25",
+      "FieldValidation": "requestor_email",
       "Criteria::Condition": [
         "Condition_Sample02"
       ]
@@ -2068,13 +2068,13 @@
       "RHSType": "Value",
       "RHSValue": "false",
       "HasArguments": true,
-      "LHSOwnField": "Field_Sample28"
+      "LHSOwnField": "self_or_representative"
     },
     "Expression_Sample01": {
       "Id": "Expression_Sample01",
       "Kind": "Expression",
-      "ExpressionStr": "if(Field_Sample28, _created_by.Email, \"\")",
-      "Field": "Field_Sample25",
+      "ExpressionStr": "if(self_or_representative, _created_by.Email, \"\")",
+      "Field": "requestor_email",
       "Expression::Node": [
         "Node_Sample67"
       ]
@@ -2098,7 +2098,7 @@
       "Id": "Node_Sample24",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample28",
+      "Field": "self_or_representative",
       "DataType": "Boolean",
       "Node": "Node_Sample67"
     },
@@ -2150,8 +2150,8 @@
     "Expression_Sample14": {
       "Id": "Expression_Sample14",
       "Kind": "Expression",
-      "ExpressionStr": "if(_Field_Sample12, concatenate(Field_Sample16, \" \", Field_Sample17), Field_Sample24.Name)",
-      "Field": "Field_Sample11",
+      "ExpressionStr": "if(_is_public_form, concatenate(pbf_first_name, \" \", pbf_last_name), requestor.Name)",
+      "Field": "final_requestor_name",
       "Expression::Node": [
         "Node_Sample57"
       ]
@@ -2175,7 +2175,7 @@
       "Id": "Node_Sample06",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "_Field_Sample12",
+      "Field": "_is_public_form",
       "DataType": "Boolean",
       "IsSystemField": true,
       "FieldModel": "Model_Sample01",
@@ -2200,7 +2200,7 @@
       "Id": "Node_Sample91",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample16",
+      "Field": "pbf_first_name",
       "DataType": "String",
       "Node": "Node_Sample90"
     },
@@ -2216,7 +2216,7 @@
       "Id": "Node_Sample101",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample17",
+      "Field": "pbf_last_name",
       "DataType": "String",
       "Node": "Node_Sample90"
     },
@@ -2240,7 +2240,7 @@
       "Id": "Node_Sample11",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample24",
+      "Field": "requestor",
       "DataType": "User",
       "FlowId": "User",
       "FlowType": "User",
@@ -2259,8 +2259,8 @@
     "Expression_Sample15": {
       "Id": "Expression_Sample15",
       "Kind": "Expression",
-      "ExpressionStr": "if(_Field_Sample12, Field_Sample18, Field_Sample24.NickName)",
-      "Field": "Field_Sample10",
+      "ExpressionStr": "if(_is_public_form, pbf_nick_name, requestor.NickName)",
+      "Field": "final_nick_name",
       "Expression::Node": [
         "Node_Sample65"
       ]
@@ -2284,7 +2284,7 @@
       "Id": "Node_Sample80",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "_Field_Sample12",
+      "Field": "_is_public_form",
       "DataType": "Boolean",
       "IsSystemField": true,
       "FieldModel": "Model_Sample01",
@@ -2294,7 +2294,7 @@
       "Id": "Node_Sample40",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample18",
+      "Field": "pbf_nick_name",
       "DataType": "String",
       "Node": "Node_Sample65"
     },
@@ -2318,7 +2318,7 @@
       "Id": "Node_Sample14",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample24",
+      "Field": "requestor",
       "DataType": "User",
       "FlowId": "User",
       "FlowType": "User",
@@ -2337,8 +2337,8 @@
     "Expression_Sample16": {
       "Id": "Expression_Sample16",
       "Kind": "Expression",
-      "ExpressionStr": "if(_Field_Sample12, Field_Sample15, if(Field_Sample28, requestor_Email, Field_Sample22))",
-      "Field": "Field_Sample07",
+      "ExpressionStr": "if(_is_public_form, pbf_email, if(self_or_representative, requestor_Email, rep_requestor_email))",
+      "Field": "final_email",
       "Expression::Node": [
         "Node_Sample44"
       ]
@@ -2362,7 +2362,7 @@
       "Id": "Node_Sample59",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "_Field_Sample12",
+      "Field": "_is_public_form",
       "DataType": "Boolean",
       "IsSystemField": true,
       "FieldModel": "Model_Sample01",
@@ -2372,7 +2372,7 @@
       "Id": "Node_Sample87",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample15",
+      "Field": "pbf_email",
       "DataType": "String",
       "Node": "Node_Sample44"
     },
@@ -2395,7 +2395,7 @@
       "Id": "Node_Sample02",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample28",
+      "Field": "self_or_representative",
       "DataType": "Boolean",
       "Node": "Node_Sample69"
     },
@@ -2403,7 +2403,7 @@
       "Id": "Node_Sample50",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample25",
+      "Field": "requestor_email",
       "DataType": "String",
       "Node": "Node_Sample69"
     },
@@ -2411,7 +2411,7 @@
       "Id": "Node_Sample70",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample22",
+      "Field": "rep_requestor_email",
       "DataType": "String",
       "Node": "Node_Sample69"
     },
@@ -2432,7 +2432,7 @@
       "Criteria": "Criteria_Sample08",
       "Operator": "EQUAL_TO",
       "RHSType": "Field",
-      "RHSField": "Field_Sample07",
+      "RHSField": "final_email",
       "HasArguments": true,
       "LHSField": "Email"
     },
@@ -2440,7 +2440,7 @@
       "Id": "Condition_Sample15",
       "Kind": "Condition",
       "Operator": "EQUAL_TO",
-      "RHSField": "Field_Sample15",
+      "RHSField": "pbf_email",
       "RHSType": "Field",
       "HasArguments": true,
       "LHSField": "Email",
@@ -2450,7 +2450,7 @@
       "Id": "Condition_Sample10",
       "Kind": "Condition",
       "Operator": "EQUAL_TO",
-      "RHSField": "Field_Sample22",
+      "RHSField": "rep_requestor_email",
       "RHSType": "Field",
       "HasArguments": true,
       "LHSField": "Email",
@@ -2459,8 +2459,8 @@
     "Expression_Sample04": {
       "Id": "Expression_Sample04",
       "Kind": "Expression",
-      "ExpressionStr": "if(not(isBlank(Field_Sample24.Email)) && _Field_Sample12, 0, 1)",
-      "Field": "Field_Sample20",
+      "ExpressionStr": "if(not(isBlank(requestor.Email)) && _is_public_form, 0, 1)",
+      "Field": "pbf_submit_flag",
       "Expression::Node": [
         "Node_Sample28"
       ]
@@ -2538,7 +2538,7 @@
       "Id": "Node_Sample29",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample24",
+      "Field": "requestor",
       "DataType": "User",
       "FlowId": "User",
       "FlowType": "User",
@@ -2558,7 +2558,7 @@
       "Id": "Node_Sample08",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "_Field_Sample12",
+      "Field": "_is_public_form",
       "DataType": "Boolean",
       "IsSystemField": true,
       "FieldModel": "Model_Sample01",
@@ -2604,11 +2604,11 @@
       "End": 2,
       "Row": "Row_Sample18",
       "Column::Field": [
-        "Field_Sample23"
+        "request_number"
       ]
     },
-    "Field_Sample23": {
-      "Id": "Field_Sample23",
+    "request_number": {
+      "Id": "request_number",
       "Kind": "Field",
       "Type": "Text",
       "CreatedAt": "2026-01-26T10:31:41.701Z",
@@ -2636,7 +2636,7 @@
       "End": 2,
       "Row": "Row_Sample19",
       "Column::Field": [
-        "Field_Sample21"
+        "rep_requestor"
       ],
       "Hint": "ผู้เปิดงานกรอก email ของผู้ที่ต้องการเปิดงานแทน โดยผู้เปิดงานแทนต้องมี Account Kissflow ด้วย",
       "Column::Appearance": [
@@ -2646,13 +2646,13 @@
     "QueryDefinition_Sample05": {
       "Id": "QueryDefinition_Sample05",
       "Kind": "QueryDefinition",
-      "Field": "Field_Sample21",
+      "Field": "rep_requestor",
       "FlowType": "User",
       "LookupField": [],
       "LHSModel": "User"
     },
-    "Field_Sample21": {
-      "Id": "Field_Sample21",
+    "rep_requestor": {
+      "Id": "rep_requestor",
       "Kind": "Field",
       "Type": "User",
       "CreatedAt": "2026-04-28T11:35:54.444Z",
@@ -2669,8 +2669,8 @@
     "Expression_Sample08": {
       "Id": "Expression_Sample08",
       "Kind": "Expression",
-      "ExpressionStr": "if(Field_Sample28, \"\", Field_Sample21.Email)",
-      "Field": "Field_Sample22",
+      "ExpressionStr": "if(self_or_representative, \"\", rep_requestor.Email)",
+      "Field": "rep_requestor_email",
       "Expression::Node": [
         "Node_Sample13"
       ]
@@ -2694,7 +2694,7 @@
       "Id": "Node_Sample43",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample28",
+      "Field": "self_or_representative",
       "DataType": "Boolean",
       "Node": "Node_Sample13"
     },
@@ -2725,7 +2725,7 @@
       "Id": "Node_Sample63",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "Field_Sample21",
+      "Field": "rep_requestor",
       "DataType": "User",
       "FlowId": "User",
       "FlowType": "User",
@@ -2758,7 +2758,7 @@
       "RHSType": "Value",
       "RHSValue": "false",
       "HasArguments": true,
-      "LHSOwnField": "Field_Sample28"
+      "LHSOwnField": "self_or_representative"
     },
     "Criteria_Sample16": {
       "Id": "Criteria_Sample16",
@@ -2778,7 +2778,7 @@
       "RHSType": "Value",
       "RHSValue": "false",
       "HasArguments": true,
-      "LHSOwnField": "Field_Sample28"
+      "LHSOwnField": "self_or_representative"
     },
     "Appearance_Sample04": {
       "Id": "Appearance_Sample04",
@@ -2822,8 +2822,8 @@
     "Expression_Sample13": {
       "Id": "Expression_Sample13",
       "Kind": "Expression",
-      "ExpressionStr": "if(AND(false(), _created_by.Email = \"sample.user@example.com\"), \"TEST\", concatenate(\"PBK_\", _submitted_at.year().toText(\"00\"), _submitted_at.month().toText(\"00\"), \"_\",  _Field_Sample23.toText(\"0000\")))",
-      "Field": "Field_Sample23",
+      "ExpressionStr": "if(AND(false(), _created_by.Email = \"sample.user@example.com\"), \"TEST\", concatenate(\"PBK_\", _submitted_at.year().toText(\"00\"), _submitted_at.month().toText(\"00\"), \"_\",  _request_number.toText(\"0000\")))",
+      "Field": "request_number",
       "Expression::Node": [
         "Node_Sample104"
       ]
@@ -3075,7 +3075,7 @@
       "Id": "Node_Sample45",
       "Kind": "Node",
       "Type": "Field",
-      "Field": "_Field_Sample23",
+      "Field": "_request_number",
       "DataType": "Number",
       "IsSystemField": true,
       "FieldModel": "Model_Sample01",
@@ -3127,13 +3127,13 @@
       "End": 2,
       "Row": "Row_Sample03",
       "Column::Field": [
-        "Field_Sample01"
+        "Branch"
       ]
     },
     "QueryDefinition_Sample04": {
       "Id": "QueryDefinition_Sample04",
       "Kind": "QueryDefinition",
-      "Field": "Field_Sample01",
+      "Field": "Branch",
       "LHSModel": "Tier1",
       "LookupField": [
         {
@@ -3156,8 +3156,8 @@
         }
       ]
     },
-    "Field_Sample01": {
-      "Id": "Field_Sample01",
+    "Branch": {
+      "Id": "Branch",
       "Kind": "Field",
       "Type": "Reference",
       "CreatedAt": "2026-08-07T04:29:03.724Z",
@@ -3185,11 +3185,11 @@
       "End": 2,
       "Row": "Row_Sample06",
       "Column::Field": [
-        "Field_Sample03"
+        "Description"
       ]
     },
-    "Field_Sample03": {
-      "Id": "Field_Sample03",
+    "Description": {
+      "Id": "Description",
       "Kind": "Field",
       "Type": "Textarea",
       "CreatedAt": "2026-08-07T04:30:30.092Z",
@@ -3200,14 +3200,12 @@
     }
   },
   "notes": [
-    "All 277 Kind-bearing draft entries kept; only the 3 bookkeeping scalars that were never Kind-bearing nodes are dropped -- Root (the draft's own flow-id pointer), PublishedAt (a timestamp), _meta_version (a version counter).",
-    "The draft's 'PublishedBy' audit record (Kind User, the capture's only User-kind node) mints as User_Sample01; its '_id' is set to that minted key and its 'Name' to the generic placeholder 'Sample Publisher' -- deidentified explicitly since its own identity field is '_id', not the generic 'Id' every other node uses.",
-    "The one personal email in this capture ('nachawon....') is replaced with 'sample.user@example.com' wherever it appears -- one Expression node's ExpressionStr, one AST Node's Static 'Value'.",
-    "KEPT verbatim on purpose: the company-domain validation regex '^[a-z.]+@cjexpress.co.th$', the employee-id regex '^CJ[A-Z]\\d{7}$', every Thai display Name/Hint/Description, the two cjexpress.kissflow.com URLs inside Column rich-text Descriptions (the process URL's real flow-name path segment genericized to Template_Flow_Sample), the duplicate 'Manager Approve' Activity, and the orphaned SendBackToInitiator activity (both dangle out of ProcessDef::Activity in the source capture itself, a real quirk, not a bug this script introduces or repairs).",
-    "UNLIKE spikes/deidentify_template.py (the identity/initiate SHELL), this script does NOT synthesize the mandatory root Model::Appearance -> Appearance -> Style chain that the source capture is missing -- full fidelity means shipping the gap. A Template Transplant consuming this shape must build that chain itself before publish, same as any process built from scratch (see kissflow-forge CLAUDE.md 'Node-graph invariants').",
-    "Ids are freshly minted <Kind>_SampleNN, numbered per-kind in sorted-original-id order -- deterministic across re-runs of this script, but NOT stable if the raw capture ever changes (re-run and re-review, don't hand-edit the output).",
-    "ExpressionStr field refs are rewritten to minted ids in BOTH forms the source mixes freely -- bare ('pbf_req_id') and underscore ('_is_public_form') -- keeping the formula text id-synced with its remapped AST (shapes/expression_branch.json's 'keep both in sync' invariant); the platform's own system-field tokens ('_created_by', '_submitted_at') are left untouched.",
-    "Component_Sample01's 'ComponentId' keeps the raw capture value Component_oKkCjtMhB6 -- a cross-graph reference to a platform widget definition OUTSIDE this draft (it resolves to no node here in the source either). A Template Transplant must resolve or re-point it on the target tenant; minting it here would fabricate a node that never existed.",
-    "15 nodes keep references to production datasets outside this shape (LHSModel/LHSRootModel/SourceFlowId values like Department_Master_01, Master_Branch, Tier1, _employee, User) -- tenant-only refs a Template Transplant must re-point at dev sources per ADR-0006; they dangle by design in the vendored shape."
+    "Built by scripts/deidentify_template.py from the published schema (GET /metadata/2/{acct}/process/{flow}/schema). Re-run it; never hand-edit.",
+    "All Kind-bearing nodes are kept. Root, PublishedAt and _meta_version are dropped.",
+    "Field ids are kept VERBATIM, and so are platform system fields (_is_public_form, _request_number, _created_by, _submitted_at): formula text refers to them by name. Every other node id is a minted <Kind>_SampleNN, numbered per kind in sorted-original-id order (deterministic for one capture); those ids only ever appear as whole values. The flow's own id is Model_Sample01 (Template_Flow_Sample inside a URL); the PublishedBy audit record is User_Sample01, 'Sample Publisher'.",
+    "Every personal email is replaced with the placeholder sample.user@example.com; validation regexes, Thai display names, hints and descriptions are kept verbatim.",
+    "The capture ships without the mandatory root Model::Appearance -> Appearance -> Style chain; the transplant synthesizes it before publish.",
+    "The duplicate suspended 'Manager Approve' Activity and the orphaned SendBackToInitiator Activity are kept: they are part of the published template.",
+    "Component nodes keep their external ComponentId, and 15 nodes keep references to tenant datasets outside this shape (Department_Master_01, Master_Branch, Tier1, _employee, User). A transplant must find them on the target tenant."
   ]
 }

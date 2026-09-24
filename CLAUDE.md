@@ -14,9 +14,8 @@ what "should" be true. Treat every shape in this file as a proven capture, not
 a spec: if the platform changes and a capture stops matching reality, recapture
 it, don't patch around the mismatch.
 
-The engine is dev-tenant by default (`KF_DEV_*` refuses any domain without
-`dev-`; the plain `KF_*` set is the explicit no-guard opt-in for another tenant,
-see `kf.env.example`) and targets one app at a time via
+The engine is dev-tenant only, by construction (`KF_DEV_*` refuses any domain
+without `dev-`, see `.env.example`) and targets one app at a time via
 config — no default app, no writing to anything that isn't the one explicitly
 configured domain. Before any destructive build, produce a confirmation artifact (a
 diagram or an HTML mockup of the intended shape) for a human to sign off on —
@@ -55,27 +54,26 @@ This is a `uv` project: `pyproject.toml` + `uv.lock` own every dependency, and
 `uv run` resolves them. There is no `requirements.txt` and no `--with` flag any
 more — the old per-run form silently dropped 1073 tests whenever the `--with
 'fastmcp'` argument was forgotten, and a lockfile removes that failure mode
-entirely. FastMCP is pinned EXACTLY (`fastmcp==4.0.2`) because the OAuth-proxy
-seam in `src/app/infrastructure/kissflow/auth.py` reaches into
-`fastmcp.server.auth` internals that semver does not cover.
+entirely. FastMCP is pinned EXACTLY (`fastmcp==4.0.2`) so the tool and
+transport behavior stays fixed for this refactor.
 
 ```bash
 uv sync                  # create/refresh .venv from uv.lock
 
-make test                # unit + integration — 2284 passed, 31 skipped (verified 2026-09-17).
-                         # The 31 skips are the live suites, excluded by default (conftest.py).
+make test                # offline tests; live suites skip by default
 make lint                # ruff format --check + ruff check + import-linter + ty check .
                          # All four are GREEN and blocking, over src/ AND tests/.
 make architecture        # import-linter alone — the layer rules, enforced
-make verify              # lint + test, the pre-push gate (coverage gate: 90%)
+make verify              # lint + offline tests with at least 90% coverage
+make test-coverage       # offline coverage; must reach 90%
 make format              # ruff --fix + ruff format
 
 # one file / one test by name
-uv run pytest tests/test_pages.py
+uv run pytest tests/unit/infrastructure/kissflow/test_page.py
 uv run pytest -k step_permissions
 
-# live acceptance — hits the REAL Kissflow dev tenant (KF_APP) via direct in-process
-# calls to app.infrastructure.mcp.server's own tool functions. Opt in, or these skip.
+# live acceptance — hits the REAL Kissflow dev tenant through create_server().
+# Requires a local dev app and key pair. A skipped suite is not a pass.
 make test-live
 
 make start               # the MCP server (= uv run mcp-server = python -m app.main)
@@ -100,31 +98,24 @@ src/app/
   main.py          # composition root: transport + port, nothing else
   resources.py     # the ONE filesystem anchor (shapes/, docs/capabilities/, skills/)
   domain/          # the node-graph model + pure ops. No HTTP, no fastmcp, no I/O clients.
-    types.py       # frozen structs, closed enums — the typed core
-    graph.py       # pure offline ops on the normalized node-graph
-    expr.py        # Expression/Node AST for branch conditions + GotoTask gates
-    pages.py       # pure offline ops on the app-PAGE graph
-    nav.py         # pure offline ops on the app-level navigation graph
-    coverage.py    # the coverage contract — which shapes may be built, refused by row
+    entities/      # flow, page and navigation drafts; pure graph operations
+    value_objects/ # fields, expressions, styles, kinds and coverage rules
   application/     # use cases over the domain. May import domain, never infrastructure.
-    engine.py      # offline planning; apply/publish orchestration lands here later
-    tools.py       # framework-agnostic tool logic (dict in / dict out)
-    verify.py      # health check: every reference that would break the form
-    compare.py     # draft-vs-draft diffing
-    querybank.py   # copilot probe-prompt catalog
-    design/        # confirm.py (approval protocol) · diagram.py (draw.io XML) ·
-                   # mockup.py (self-contained HTML for the business owner)
-    intake/        # schema.py (11-dimension AppSpec) · questions.py (grilling
-                   # script) · compile.py (AppSpec → ordered BuildPlan) · serde.py
+    interfaces/    # flow, app, page, dataset, item, copilot, docs, artifact ports
+    models/        # request and response data for each tool family
+    use_cases/     # one use case per tool, grouped by family
   infrastructure/  # adapters onto the outside world. May import anything inward.
-    kissflow/      # client.py — THE WRITE PATH (dev tenant only) · auth.py (Entra +
-                   # per-user OAuth) · dataplane.py (/process API) · pages_live.py
-    mcp/server.py  # the FastMCP adapter — thin: tool surface, no business rules
-    capabilities.py / playbook.py   # docs + vendored-skill readers (filesystem)
+    config/settings.py # the only environment reader; dev-host check
+    kissflow/      # httpx adapters by API family; shared request transport
+    mcp/tools/     # nine thin tool modules
+    mcp/server.py  # create_server() registers the tools
+    mcp/lifespan.py # one shared HTTP client and port resources
+    artifact_writer.py / docs_reader.py # filesystem adapters
+    capabilities.py / playbook.py # capability docs and playbook readers
 shapes/            # 85 captured JSON node shapes (2026-08-20) — the proven-capture reference
-tests/             # pytest suites + fixtures/ + live_helpers.py
+tests/             # unit/ mirror, integration/ live suites, fixtures/, live_helpers.py
 scripts/           # mcp-curl-probe.sh — 7-check HTTP-transport probe, run per URL and diff
-docs/adr/          # 5 ADRs (2026-08-19) — locked decisions, don't re-litigate
+docs/adr/          # recorded design decisions
 CONTEXT.md         # domain glossary
 ```
 

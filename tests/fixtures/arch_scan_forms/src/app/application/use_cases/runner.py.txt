@@ -1,0 +1,9 @@
+"""References FlowPort.get_draft from inside application/use_cases/, so
+port_methods_without_use_case must not flag it -- see application/interfaces/flow_port.py.txt."""
+
+from __future__ import annotations
+
+
+def run(repo) -> None:
+    """Compliant use: an attribute access from inside application/use_cases/."""
+    return repo.get_draft()

@@ -1,0 +1,2504 @@
+{
+  "source": "develop @ 9651283",
+  "tools": {
+    "forge_add_field_validation": {
+      "docstring_sha256": "1e35116b123da4dfee97fd49c1348459bf2b5c33b367dd61b6a4f1205eff8123",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "rules": {
+            "additionalProperties": {
+              "items": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "flow_id",
+          "rules"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_add_goto_gate": {
+      "docstring_sha256": "ccbf893c540b2227ca9266228a4fb163ace24add145a04bfa9a4c3c2d90188d2",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "field_name": {
+            "type": "string"
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "target_activity_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow_id",
+          "target_activity_name",
+          "field_name"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_add_member_roles": {
+      "docstring_sha256": "62258d88e556e08b7781f06f7e8993bb26d5407b9359bd22eb246c8d5dbf1c67",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "roles": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "target_flow_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_flow_id",
+          "roles"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_add_role_users": {
+      "docstring_sha256": "8c74c801970d0277ff60648d2bd0cf26625ec73fd1f2fce7f5cdddfb6c7841b7",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirm_group_notification": {
+            "default": false,
+            "description": "Required to be True before any `groups` grant will be written. Granting a group makes Kissflow email every member of it, and the mail cannot be recalled \u2014 on a whole-tenant group that is everyone in the account. Leave False and grant a single developer with `user_query` when testing.",
+            "type": "boolean"
+          },
+          "force_regrant_groups": {
+            "default": false,
+            "description": "Overrides the GroupCount-based duplicate-group refusal. When the role detail already reports GroupCount > 0, a repeat `groups` grant is refused and reported under `groups_refused` \u2014 this tenant exposes no group LIST, so a re-grant cannot be proven new and re-sending it would re-email every member (the 2026-08-20 fan-out). Pass True only when granting a genuinely DIFFERENT group to a role that already carries one. Still requires confirm_group_notification=True in the same call.",
+            "type": "boolean"
+          },
+          "groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Groups to grant, as assignee-shaped dicts carrying an _id, e.g. [{\"_id\": \"everyone\", \"Kind\": \"Group\", \"Name\": \"Everyone\"}] for the whole-tenant grant. Rides the same write as `user_ids` but under its own wire key: a group placed in `user_ids` is refused UserDoesNotExistError. Read-back is weaker than for users \u2014 see the tool description. REFUSED unless confirm_group_notification=True, because granting a group EMAILS every member."
+          },
+          "role_id": {
+            "type": "string"
+          },
+          "user_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "user_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "role_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_add_sequence_number": {
+      "docstring_sha256": "8decee1a112db4d6ecd6345c17be90fca222db699a353766434b75c023e4d16c",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "end": {
+            "default": 2,
+            "type": "integer"
+          },
+          "field_name": {
+            "type": "string"
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "padding": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "section_name": {
+            "type": "string"
+          },
+          "start": {
+            "default": 0,
+            "type": "integer"
+          },
+          "step_activity_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow_id",
+          "field_name",
+          "section_name",
+          "prefix",
+          "padding",
+          "step_activity_name"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_add_table": {
+      "docstring_sha256": "12411adb5ab07d84a2431fb25807d7fa158e792ecc4f3ddd9b09a71a7651e7ca",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "after_section": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "allow_import": {
+            "default": false,
+            "type": "boolean"
+          },
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "columns": {
+            "items": {
+              "items": {},
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "max_rows": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "flow_id",
+          "name",
+          "columns"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_apply_fields": {
+      "docstring_sha256": "075390940d0d9ab56d9190fe2121c37a8c632d99f476899630950fbc96222760",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "computed": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "conditional_visibility": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "fields": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case",
+              "dataset"
+            ],
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "sections": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "flow_id",
+          "fields"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_apply_layout": {
+      "docstring_sha256": "ba4c739434f0fc496ba13fa705ab8bf804fbaeb50c3b4afed5d89699e9f0a761",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "descriptions": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "layout": {
+            "additionalProperties": {
+              "items": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "flow_id",
+          "layout"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_apply_revisions": {
+      "docstring_sha256": "a0e435470fa9b40779f59da460402671235df52ba72339b740a894912e33aff4",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "revisions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec",
+          "revisions"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_approve_spec": {
+      "docstring_sha256": "8b3ca0974ad56bc72e9b76674ce881b933eec6948b47369b8db233ec372c4284",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "const": "approve",
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec",
+          "digest",
+          "decision"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_build_page": {
+      "docstring_sha256": "3dfddedfb321848fea09a9d948e40f8251cd10b133f3888d7cc591da4f2f0051",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "op": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "page_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "app_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_build_workflow": {
+      "docstring_sha256": "ae4daeec1b501c81e0f90a5df7689e00c7e0b815ce1eea07fa5c31b594e5b204",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "parallel": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "parallel_after": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "roles": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "step_meta": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "steps": {
+            "items": {
+              "items": {},
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "flow_id",
+          "steps"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_capabilities": {
+      "docstring_sha256": "eb71964f165878e1078f5850ea59d37de21544bcee96970e6724364f8660a1da",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "forge_compare_to_spec": {
+      "docstring_sha256": "a26453a45dacf70d187237aa2fc909b44d7c70cbe3876fb8db8b1493538c6b2b",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "flow_id",
+          "spec"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_copilot_ask": {
+      "docstring_sha256": "07395a22807f59d5d417c278a14a1cdcbd3a95e3500c97abafbb02dd54a9fdb2",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "expect": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_id",
+          "message"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_copilot_check": {
+      "docstring_sha256": "a6dee6d5c5683ce771b2b99ffe238d6733eb4277cf10219a61c9d9abee7d7159",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "baseline_inventory": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "conversation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_id",
+          "conversation_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_create_app": {
+      "docstring_sha256": "f1961f0f0baea2f77f454a554f0d3ca6106af78de4d0e939f5a0756d601d2d0c",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_create_app_role": {
+      "docstring_sha256": "fb7ab750f094422a59737b4935b5fe1727401128c631800717a436ad5d6b0763",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_create_flow": {
+      "docstring_sha256": "26ec4a00ec88273320142b00bc847391ebec51f3554135624d088371183dadfe",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "extra": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "kind": {
+            "enum": [
+              "process",
+              "form",
+              "list",
+              "dataset",
+              "case"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_create_list": {
+      "docstring_sha256": "9d2a4bfdeed665afc823653ae726721a9f492d094bea2e77c40476d2bb2316d7",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "values"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_create_page": {
+      "docstring_sha256": "dd87d75fbed585965acbad28512bed41a6068605ba8a7a53f502e557aa209c7a",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "app_id",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_create_process": {
+      "docstring_sha256": "14fb8f5a35d7e75e7e456e2d6db13b94af52c0fb2477ffa9d09efccea8c079a8",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "from_template": {
+            "default": true,
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_create_template_app": {
+      "docstring_sha256": "3beabd80c3e702b88d70750118c0e186aa28ffdd48bbe8b3566b5b3a17411dcd",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Display name for the new application \u2014 the only argument. A duplicate name surfaces the platform's FlowNameAlreadyExists error loud; pick another name, never auto-rename.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_dataset_records": {
+      "docstring_sha256": "4718f48a9e3cceb71cefa0cd67b82a5129db27cc17d9e9ac27b732bcdead7fa2",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "op": {
+            "enum": [
+              "create",
+              "update",
+              "delete",
+              "list"
+            ],
+            "type": "string"
+          },
+          "record": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "flow_id",
+          "op"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_delete_app_role": {
+      "docstring_sha256": "2ee796bf60171529ae40d4c81cf262ec6a77c3fbaab356b8320c87faa8c454f6",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "role_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_delete_fields": {
+      "docstring_sha256": "07ad3a08de3153bd4990642f272e723de1d70729bc5cb0486066a259e1dee9e3",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "tables": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "flow_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_delete_flow": {
+      "docstring_sha256": "3207be2873ca85f7324626104278b16363450c0edf1d234438173079a9c61fb8",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "form",
+              "process",
+              "case",
+              "list",
+              "dataset",
+              "page",
+              "application"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "flow_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_doctor": {
+      "docstring_sha256": "fe0433688ca94c0f13083280d7995940bbdd37157a30be1a31be8265f02a76b9",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "visibility_role_claims": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "flow_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_grant_tier": {
+      "docstring_sha256": "5c15dfb104ac1c06497f75b957a389fdb814d1c6d4ce3562057e31fe503e5b89",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "role_id": {
+            "type": "string"
+          },
+          "tier": {
+            "enum": [
+              "No access",
+              "Initiate",
+              "Read-only",
+              "Edit",
+              "Manage"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "flow_id",
+          "role_id",
+          "tier"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_intake_questions": {
+      "docstring_sha256": "3357845d5a5eba4bc651b66843c19e318ddcd689518e082e35a3c6420481807a",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 4,
+            "type": "integer"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "forge_list_app_roles": {
+      "docstring_sha256": "9351e56c6590ad5ff727aab4ce2b7757a6925bac21e85be655f77347b34c8d80",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    "forge_list_apps": {
+      "docstring_sha256": "0445b2865509ec22c7ea90998288a031c068663645e94d365ce9566e6f237792",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "forge_member_batch": {
+      "docstring_sha256": "bb6c2ef0179b2c44bb92e14c2e6841dc1297f98c2e811e9f167377ab58062411",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "source_flow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "target_flow_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_flow_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_plan_app": {
+      "docstring_sha256": "0be0ddae15ad2f54cc4dc21c00c730b1e510b7f09b4a8b61370765cc8f7b5f0d",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_token": {
+            "type": "string"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec",
+          "approval_token"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_playbook": {
+      "docstring_sha256": "780033ff9586afa168bfdc35bc8362670f3313d6629392443b05ea92770c08e1",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "forge_publish": {
+      "docstring_sha256": "021c9518571257f9394718ef890a22f75f4a86267461da6838e0bd9b946ec68e",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "form",
+              "process",
+              "case",
+              "page",
+              "application"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "flow_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_publish_app": {
+      "docstring_sha256": "bf220dd86f7e344cf943451a30fd1023af27539dce94a360a8fdab4f4be27a14",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_rename_fields": {
+      "docstring_sha256": "3263614d643d7e4234747a8e5478769a701d6b9d9e94b4ba23b7f0e6073aa0c4",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "renames": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "flow_id",
+          "renames"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_render_flow_diagram": {
+      "docstring_sha256": "aec70ea7a353ac363414430367deb80a90913de8e0deb7cc8659cc99c8291e65",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "out_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_render_mockups": {
+      "docstring_sha256": "698e10acedbbcda154625e5c2b0cbc5eef63c4805c746d6262bfc14145c3da51",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "out_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_render_schema_diagram": {
+      "docstring_sha256": "d1603178e7116a96b05601cd10ba2ea04672cc6dc6e29130d7aa4fb50827b356",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "out_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_request_confirmation": {
+      "docstring_sha256": "fc5862f8f5ce2d95196454a6c56403059c9663e164f749afc43389e59c974b05",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "out_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_set_branch_conditions": {
+      "docstring_sha256": "b1d9cdb52433f28f432cf1c0ea0660967c9c4dbbd30efd757a2711a1bdc18e12",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "branch_literals": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "field_name": {
+            "type": "string"
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "flow_id",
+          "field_name",
+          "branch_literals"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_set_events": {
+      "docstring_sha256": "4e0ba68927f2f2fe7e65264e03ab25a45598088164ac6d0e5adc81abf4f9d60c",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "events": {
+            "additionalProperties": {
+              "items": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "flow_id",
+          "events"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_set_navigation": {
+      "docstring_sha256": "e633d0446e282068d7acd52485540216c934cad4cf641e11343de7f5432e490f",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "page_id": {
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "sweep": {
+            "default": false,
+            "type": "boolean"
+          },
+          "unify": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "app_id",
+          "page_id",
+          "label"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_set_required": {
+      "docstring_sha256": "0e62c19b4b75452fc6aefc2171a4844427121d5758c92d59b9d5abedb36a7b33",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "required": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "flow_id",
+          "required"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_set_role_preference": {
+      "docstring_sha256": "e92a4c934ea9e4afc29ae74e58aa4cadd02eaf558adc11ae00793f28cf8cfbdf",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "default_navigation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "default_page": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "role_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role_id"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_set_styles": {
+      "docstring_sha256": "e64e938ba63d0871fcf0d422f0354c8c9cd6817aff742a8150473c6ba60d256a",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "hint_text_position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "root_style": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "styles": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "flow_id",
+          "styles"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_set_visibility": {
+      "docstring_sha256": "3c2b4516b5ddf5d3a6d1c3fec5f8aff6232e38af42608aac399ae37c67720fad",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "field_owners": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "include_pairs": {
+            "default": false,
+            "description": "Return every (column, activity) permission pair in full, resolved to field/section/step names, instead of the bounded counts + by_section/by_step rollups. The default already lists every `missing` pair in full and states how many entries it summarised.",
+            "type": "boolean"
+          },
+          "kind": {
+            "default": "process",
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          },
+          "owners": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "flow_id",
+          "owners"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_share_report": {
+      "docstring_sha256": "22c574a7d23bee1c35e26df85dad9350dc75a2fa804fff8443029eab25516d72",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "report_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow_id",
+          "report_id",
+          "members"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_simulate_case": {
+      "docstring_sha256": "209b2789947ae92bcda6c05417d45d0555dc9c7106f5ece86e356813ae0d07f7",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "poll": {
+            "default": true,
+            "type": "boolean"
+          },
+          "poll_delay": {
+            "default": 0.9,
+            "type": "number"
+          },
+          "poll_tries": {
+            "default": 8,
+            "type": "integer"
+          },
+          "steps": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "flow_id",
+          "steps"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_sweep": {
+      "docstring_sha256": "530bd8102aa82b7d6809532498a96d8ccf8a15bd565785ad3582b1dbbe687344",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "scope": {
+            "enum": [
+              "apps",
+              "flows",
+              "pages",
+              "roles",
+              "lists",
+              "all"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "type": "object"
+      }
+    },
+    "forge_update_spec": {
+      "docstring_sha256": "c33fcf91b4995baa076a24525c75ac8e4b1132cc31106bd67cd0c35faecfab63",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "patch": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "spec",
+          "patch"
+        ],
+        "type": "object"
+      }
+    },
+    "kf_apply_field_change": {
+      "docstring_sha256": "fa243bafe0f04fda788b9e7512b6ac8a47317e7daf80eff4f804597ce4aeb405",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "changes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "flow_kind": {
+            "enum": [
+              "form",
+              "process",
+              "case",
+              "dataset"
+            ],
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "flow_kind",
+          "flow_id",
+          "changes"
+        ],
+        "type": "object"
+      }
+    },
+    "kf_create_process": {
+      "docstring_sha256": "9a7fb063b2d9ae719c8c7439ad235eddd41554d8dd8bcde035454c52b5c3fe40",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "fields": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "from_template": {
+            "default": true,
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          },
+          "steps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "steps",
+          "fields"
+        ],
+        "type": "object"
+      }
+    },
+    "kf_get_flow_schema": {
+      "docstring_sha256": "1150728a52c3d6850080982cb836ae3f402b3cb41fe7d277ee807990701991ef",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "flow_kind": {
+            "enum": [
+              "form",
+              "process",
+              "case",
+              "dataset",
+              "page"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow_kind",
+          "flow_id"
+        ],
+        "type": "object"
+      }
+    },
+    "kf_list_field_types": {
+      "docstring_sha256": "f1a46ed817acf85b1ce93070eae5c47f5fa0d5a0bf9832e5a4289b2bddcf2043",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "kf_plan_field_change": {
+      "docstring_sha256": "7d793dac22f1ba36af98bf091bf8802ea94b6832f6a01b924687863444794031",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "changes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "draft": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "draft",
+          "changes"
+        ],
+        "type": "object"
+      }
+    },
+    "kf_plan_step_visibility": {
+      "docstring_sha256": "e422d9e0f00c28f856ac4fb140e0040fbb05801e9074f9041025555f099cf7e9",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "draft": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "owners": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "draft",
+          "owners"
+        ],
+        "type": "object"
+      }
+    },
+    "kf_publish": {
+      "docstring_sha256": "7604634d93a6025550745767f931c39847b0a7f2b17295cea36679cb43456061",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "flow_kind": {
+            "enum": [
+              "form",
+              "process",
+              "case"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow_kind",
+          "flow_id"
+        ],
+        "type": "object"
+      }
+    },
+    "kf_set_step_visibility": {
+      "docstring_sha256": "eef68675c7164fda4d9afaa38c7e1a41eba039b3b2918446b6428778be5d4be5",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "flow_id": {
+            "type": "string"
+          },
+          "include_pairs": {
+            "default": false,
+            "description": "Return every (column, activity) permission pair in full, resolved to field/section/step names, instead of the bounded counts + by_section/by_step rollups. The default already lists every `missing` pair in full and states how many entries it summarised.",
+            "type": "boolean"
+          },
+          "owners": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "publish": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "flow_id",
+          "owners"
+        ],
+        "type": "object"
+      }
+    }
+  }
+}

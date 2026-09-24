@@ -1,0 +1,16 @@
+{
+  "new": [
+    {
+      "body": null,
+      "method": "GET",
+      "url": "https://dev-acme.kissflow.com/process/2/ACC1/admin/F1/I1"
+    }
+  ],
+  "old": [
+    {
+      "body": null,
+      "method": "GET",
+      "url": "https://dev-acme.kissflow.com/process/2/ACC1/admin/F1/I1"
+    }
+  ]
+}

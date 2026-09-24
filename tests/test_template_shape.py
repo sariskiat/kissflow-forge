@@ -16,7 +16,9 @@ import json
 import pathlib
 import re
 
-SHAPE_PATH = pathlib.Path(__file__).parent.parent / "shapes" / "process_template_full.json"
+SHAPE_PATH = (
+    pathlib.Path(__file__).parent.parent / "shapes" / "process_template_full.json"
+)
 
 # The capture's exact per-Kind census. A recapture that changes ANY of these numbers must
 # change this table in the same commit — the point is that drift is loud, never silent.
@@ -163,7 +165,9 @@ def test_user_and_reference_fields_keep_querydefinition_siblings() -> None:
     # ADR-0006: User fields keep their QueryDefinition siblings; Reference fields kept. The type
     # census alone would still pass with every Field::QueryDefinition link deleted.
     fields = {k: n for k, n in _template().items() if n["Kind"] == "Field"}
-    linked_types = sorted(n["Type"] for n in fields.values() if n.get("Field::QueryDefinition"))
+    linked_types = sorted(
+        n["Type"] for n in fields.values() if n.get("Field::QueryDefinition")
+    )
     assert linked_types == ["Reference", "Reference", "User", "User", "User"]
 
 
@@ -225,8 +229,14 @@ def test_publisher_record_is_fully_scrubbed() -> None:
     template = _template()
     users = {k: n for k, n in template.items() if n["Kind"] == "User"}
     assert users == {
-        "User_Sample01": {"_id": "User_Sample01", "Name": "Sample Publisher", "Kind": "User"}
+        "User_Sample01": {
+            "_id": "User_Sample01",
+            "Name": "Sample Publisher",
+            "Kind": "User",
+        }
     }
     # count inside the template only — the envelope notes name the placeholder once more
     template_text = json.dumps(template, ensure_ascii=False)
-    assert template_text.count("sample.user@example.com") == 2  # one ExpressionStr, one AST Value
+    assert (
+        template_text.count("sample.user@example.com") == 2
+    )  # one ExpressionStr, one AST Value

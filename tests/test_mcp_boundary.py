@@ -5,41 +5,67 @@ Client (same technique as tests/test_p2_server.py: no subprocess, no network), b
 things under test — the result ENVELOPE's isError flag, tool annotations, tool titles and the
 JSON-Schema enums — do not exist at all on a plain Python call into the tool function.
 
-Four axes:
-  1. protocol isError   — every failure sets `CallToolResult.isError`, and the payload key that
-                          ~40 other tests assert on survives it intact.
-  2. annotations/titles — all 59 tools carry all four hints plus a human title, and the hints
+Three axes now (Stage E, spec G12):
+  2. annotations/titles — all 61 tools carry all four hints plus a human title, and the hints
                           match what the BODY does, not what the description says.
   3. closed-set enums   — every closed vocabulary the engine already knows is an `enum`/`const`
                           in the emitted schema, and each one matches the engine constant it
                           mirrors (the anti-drift guard).
-  4. no raises          — no tool escapes as an exception, with well-formed OR malformed args.
+  4. no raises          — no tool escapes as a bare Python exception, well-formed OR malformed.
+
+Stage E retired axis 1 (the isError-promotion middleware) outright: every new tool raises
+`ToolError` on failure, so a payload-level failure IS a protocol-level failure by construction
+(`scripts/arch_scan.py`'s `iserror_dicts` scan pins the payload-dict count at 0) -- there is no
+longer a payload `isError` key to promote, and the D3 "a diagnosis is not a failure" carve-out that
+middleware needed no longer applies either: `forge_doctor`'s own response DTO still carries its
+`ok`/`problems` verdict, and a diagnosis with real problems is still a normal, non-raising return
+(spec rule 7, `brief_stage_d_common.md`: verdict tools are the exception to "a failed write is
+never a success", and they report their verdict IN the response, never via a raised error).
+
+Every tool call below goes through `create_server(lifespan)` and an in-process `fastmcp.Client`
+(the old `getattr(srv, name)(**kwargs)` plain-function calls and `srv._client`/`srv._write_artifact`
+monkeypatch seams are gone with the rest of `app.infrastructure.mcp.server`'s module-level `mcp`).
+`_resources()` builds one fresh `AppResources` per test, every family fake sharing one call log
+each -- the same "any write-shaped method got called" check `tests/test_tool_claims.py` uses,
+generalised here to the WHOLE 61-tool surface rather than one refusal table.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Any
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any, cast
 
 import pytest
+from fastmcp import Client, FastMCP
+from fastmcp.exceptions import ToolError
+from tests.fakes.app import FakeAppRepository
+from tests.fakes.artifacts import FakeArtifactWriter
+from tests.fakes.copilot import FakeCopilotService
+from tests.fakes.dataset import FakeDatasetRepository
+from tests.fakes.docs import FakeDocsReader
+from tests.fakes.flow import FakeFlowRepository
+from tests.fakes.item import FakeItemService
+from tests.fakes.page import FakePageRepository
 
-import app.infrastructure.mcp.server as srv
-from app.domain.types import FieldType
-from app.infrastructure.kissflow.client import _SWEEP_SCOPES, _TIER_MAP, FlowKind
+from app.application.models.requests.intake.app_spec import blank_spec
+from app.application.use_cases.app._roles import _TIER_MAP
+from app.application.use_cases.app._sweep import SWEEP_SCOPES
+from app.domain.value_objects.field_type import FieldType
+from app.domain.value_objects.kinds import FlowKind
+from app.infrastructure.config.settings import Settings
+from app.infrastructure.mcp.lifespan import AppResources
+from app.infrastructure.mcp.server import create_server
 
-KF_ENV_VARS = (
-    "KF_DEV_ACCESS_KEY_ID",
-    "KF_DEV_ACCESS_KEY_SECRET",
-    "KF_DEV_ACCOUNT_ID",
-    "KF_DEV_DOMAIN",
-    "KF_APP",
-)
+_BLANK_SPEC = blank_spec().model_dump(mode="json")
 
-# Well-typed args that reach each tool's FIRST statement and no further — the same idea as
-# tests/test_p2_server.py's DUMMY_ARGS, extended to the whole 59-tool surface (that fixture only
+# Well-typed args that reach each tool's own body and no further — the same idea as
+# tests/test_p2_server.py's DUMMY_ARGS, extended to the whole 61-tool surface (that fixture only
 # covers the forge_* subset). Every value is minimal and schema-valid: the point is to prove the
-# tool RETURNS, never to make it do work.
+# tool RETURNS a well-formed result (or a `ToolError`, never a bare exception), never to make it do
+# real work.
 MINIMAL_ARGS: dict[str, dict[str, Any]] = {
     "kf_list_field_types": {},
     "kf_plan_field_change": {"draft": {}, "changes": []},
@@ -59,7 +85,11 @@ MINIMAL_ARGS: dict[str, dict[str, Any]] = {
     "forge_apply_fields": {"flow_id": "F", "fields": []},
     "forge_apply_layout": {"flow_id": "F", "layout": {}},
     "forge_add_table": {"flow_id": "F", "name": "T", "columns": []},
-    "forge_compare_to_spec": {"flow_id": "F", "spec": {}},
+    # a bare `{}` fails `AppSpec` validation before the tool ever reaches its own draft read
+    # (unlike the render/confirm/revisions/approve/plan tools below, whose `spec` stays a raw
+    # `dict[str, Any]` at the DTO boundary and only decodes lazily) -- a real `blank_spec()` gets
+    # this one all the way to `get_draft`.
+    "forge_compare_to_spec": {"flow_id": "F", "spec": _BLANK_SPEC},
     "forge_create_list": {"name": "L", "values": []},
     "forge_add_sequence_number": {
         "flow_id": "F",
@@ -71,8 +101,16 @@ MINIMAL_ARGS: dict[str, dict[str, Any]] = {
     },
     "forge_add_field_validation": {"flow_id": "F", "rules": {}},
     "forge_build_workflow": {"flow_id": "F", "steps": []},
-    "forge_add_goto_gate": {"flow_id": "F", "target_activity_name": "A", "field_name": "B"},
-    "forge_set_branch_conditions": {"flow_id": "F", "field_name": "B", "branch_literals": {}},
+    "forge_add_goto_gate": {
+        "flow_id": "F",
+        "target_activity_name": "A",
+        "field_name": "B",
+    },
+    "forge_set_branch_conditions": {
+        "flow_id": "F",
+        "field_name": "B",
+        "branch_literals": {},
+    },
     "forge_set_visibility": {"flow_id": "F", "owners": {}},
     "forge_set_events": {"flow_id": "F", "events": {}},
     "forge_delete_fields": {"flow_id": "F", "fields": ["a"]},
@@ -90,7 +128,12 @@ MINIMAL_ARGS: dict[str, dict[str, Any]] = {
     "forge_list_apps": {},
     "forge_delete_flow": {"kind": "process", "flow_id": "F"},
     "forge_add_role_users": {"role_id": "R", "user_query": "ann"},
-    "forge_grant_tier": {"kind": "process", "flow_id": "F", "role_id": "R", "tier": "Manage"},
+    "forge_grant_tier": {
+        "kind": "process",
+        "flow_id": "F",
+        "role_id": "R",
+        "tier": "Manage",
+    },
     "forge_create_flow": {"kind": "process", "name": "N"},
     "forge_publish_app": {"app_id": "A"},
     "forge_dataset_records": {"flow_id": "F", "op": "list"},
@@ -112,126 +155,75 @@ MINIMAL_ARGS: dict[str, dict[str, Any]] = {
 }
 
 
-def _tool_names() -> list[str]:
-    return sorted(
-        n for n in dir(srv) if n.startswith(("kf_", "forge_")) and callable(getattr(srv, n))
+def _settings() -> Settings:
+    return Settings(
+        kf_dev_domain="dev-acme.kissflow.com",
+        kf_dev_account_id="A1",
+        kf_app="App1",  # a single-app default, so no MINIMAL_ARGS row needs its own app_id
+        kf_process_template=None,
+        port=8080,
+        mcp_http=False,
+        kf_dev_access_key_id="k1",
+        kf_dev_access_key_secret="s1",
+        http_timeout_seconds=10.0,
     )
 
 
-def _listed() -> list[Any]:
-    from fastmcp import Client
+def _resources() -> AppResources:
+    """A fresh `AppResources`, every fake empty (no queued values, so every read returns the
+    fake's own harmless default -- an empty draft, an empty list, ...). Good enough for every
+    check in this file: none of them needs a specific tenant SHAPE, only "did a write happen"
+    and "did the tool return/refuse cleanly, never raise"."""
+    return AppResources(
+        flow=FakeFlowRepository(),
+        app=FakeAppRepository(),
+        artifacts=FakeArtifactWriter(),
+        page=FakePageRepository(),
+        dataset=FakeDatasetRepository(),
+        item=FakeItemService(),
+        copilot=FakeCopilotService(),
+        docs=FakeDocsReader(),
+    )
+
+
+def _lifespan_factory(resources: AppResources):
+    @asynccontextmanager
+    async def _lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
+        del server
+        yield {"resources": resources, "settings": _settings()}
+
+    return _lifespan
+
+
+def _server(resources: AppResources) -> FastMCP:
+    return create_server(_lifespan_factory(resources))
+
+
+def _tool_names() -> list[str]:
+    return sorted(_listed(_resources()))
+
+
+def _listed(resources: AppResources | None = None) -> dict[str, Any]:
+    server = _server(resources if resources is not None else _resources())
 
     async def _run() -> list[Any]:
-        async with Client(srv.mcp) as client:
+        async with Client(server) as client:
             return await client.list_tools()
 
-    return asyncio.run(_run())
+    return {t.name: t for t in asyncio.run(_run())}
 
 
-@pytest.fixture()
-def no_kf_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in KF_ENV_VARS:
-        monkeypatch.delenv(var, raising=False)
-
-
-def test_minimal_args_cover_every_registered_tool() -> None:
-    """Fixture-drift guard: a new tool must be probed by every test in this file, not skipped."""
-    assert set(MINIMAL_ARGS) == set(_tool_names())
-
-
-# =================================================================================================
-# 1. PROTOCOL isError (M1) — the finding, on the wire
-# =================================================================================================
-
-
-def _call(tool: str, args: dict[str, Any]) -> Any:
-    from fastmcp import Client
-
+def _call(tool: str, args: dict[str, Any], resources: AppResources) -> Any:
     async def _run() -> Any:
-        async with Client(srv.mcp) as client:
-            # raise_on_error=False so the RESULT is inspectable — the whole point here is the flag
-            # on the envelope, which the raising path swallows into a ToolError string.
+        async with Client(_server(resources)) as client:
             return await client.call_tool(tool, args, raise_on_error=False)
 
     return asyncio.run(_run())
 
 
-@pytest.mark.parametrize(
-    "tool_name",
-    sorted(
-        n
-        for n in MINIMAL_ARGS
-        if n.startswith("forge_")
-        and n
-        not in {
-            "forge_capabilities",
-            "forge_playbook",
-            "forge_intake_questions",
-            "forge_update_spec",
-        }
-    ),
-)
-def test_a_failing_tool_sets_isError_on_the_PROTOCOL_envelope(
-    tool_name: str, no_kf_env: None
-) -> None:
-    """M1: every tool reports failure as a payload dict carrying `isError: true`, but MCP defines
-    isError on the result ENVELOPE. Because these tools RETURN rather than raise, the envelope
-    flag stayed False and every failure read as a protocol SUCCESS to any gateway, dashboard or
-    retry layer. Proven here on the real wire, tool by tool."""
-    result = _call(tool_name, MINIMAL_ARGS[tool_name])
-    assert result.structured_content is not None, tool_name
-    assert result.structured_content.get("isError") is True, result.structured_content
-    assert result.is_error is True, (
-        f"{tool_name} reported isError in its PAYLOAD but the protocol envelope says success: "
-        f"{result.structured_content}"
-    )
-
-
-def test_the_isError_payload_key_survives_the_promotion(no_kf_env: None) -> None:
-    """The middleware must set the envelope flag WITHOUT touching the payload — ~40 tests in this
-    repo (and every caller written against this surface) read `got["isError"]` off the dict."""
-    result = _call("forge_doctor", {"flow_id": "F"})
-    assert result.is_error is True
-    assert result.structured_content == {
-        "isError": True,
-        "error": "config: missing env var KF_DEV_DOMAIN",
-        "status": None,
-    }
-    # content blocks are copied through byte-identically too, not re-serialized
-    assert result.content and "missing env var" in str(result.content)
-
-
-def test_a_succeeding_tool_is_NOT_marked_an_error(no_kf_env: None) -> None:
-    """The other half of the invariant: promotion is driven by the payload, so an offline tool
-    that genuinely succeeds must still come back as a protocol success."""
-    result = _call("forge_playbook", {})
-    assert result.structured_content is not None
-    assert result.structured_content.get("isError") is False
-    assert result.is_error is False
-
-
-def test_a_tool_whose_result_has_no_isError_key_is_left_alone(no_kf_env: None) -> None:
-    """kf_list_field_types returns a bare list — no isError key anywhere. The middleware must not
-    invent a verdict for a payload that never claimed one."""
-    result = _call("kf_list_field_types", {})
-    assert result.is_error is False
-    assert "Text" in result.data
-
-
-def test_every_boundary_returns_a_dict_carrying_an_explicit_isError(no_kf_env: None) -> None:
-    """The two tools that used to return a module call directly rather than through `_result`
-    (forge_sweep -> run_sweep, forge_capabilities -> search_capabilities), plus forge_playbook and
-    forge_delete_flow, now all route through it. Whatever they return must carry the payload key
-    the middleware reads, or the promotion above can never fire for them."""
-    for tool, args in (
-        ("forge_sweep", {"scope": "apps"}),
-        ("forge_capabilities", {"query": ""}),
-        ("forge_playbook", {}),
-        ("forge_delete_flow", {"kind": "process", "flow_id": "F"}),
-    ):
-        got = getattr(srv, tool)(**args)
-        assert isinstance(got, dict), f"{tool} returned {type(got).__name__}"
-        assert "isError" in got, f"{tool} result has no isError key: {sorted(got)}"
+def test_minimal_args_cover_every_registered_tool() -> None:
+    """Fixture-drift guard: a new tool must be probed by every test in this file, not skipped."""
+    assert set(MINIMAL_ARGS) == set(_tool_names())
 
 
 # =================================================================================================
@@ -242,74 +234,106 @@ def test_every_boundary_returns_a_dict_carrying_an_explicit_isError(no_kf_env: N
 def test_every_tool_carries_all_four_hints_and_a_title() -> None:
     """M2: zero of the 59 tools carried readOnlyHint/destructiveHint/idempotentHint/openWorldHint,
     despite ~40 live write tools and several that delete whole applications."""
-    for t in _listed():
+    for t in _listed().values():
         assert t.title, f"{t.name} has no human-readable title"
         a = t.annotations
         assert a is not None, f"{t.name} has no annotations"
-        for hint in ("read_only_hint", "destructive_hint", "idempotent_hint", "open_world_hint"):
+        for hint in (
+            "read_only_hint",
+            "destructive_hint",
+            "idempotent_hint",
+            "open_world_hint",
+        ):
             assert getattr(a, hint) is not None, f"{t.name} is missing {hint}"
 
 
-def test_read_only_is_never_claimed_by_a_tool_that_writes_something(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+_WRITE_PREFIXES = (
+    "put_",
+    "create_",
+    "delete_",
+    "archive_",
+    "publish",
+    "post_",
+    "submit",
+    "reject",
+)
+
+
+def _write_calls(resources: AppResources) -> list[tuple[str, str]]:
+    return [
+        (fake_name, name)
+        for fake_name, fake in (
+            ("flow", resources.flow),
+            ("app", resources.app),
+            ("page", resources.page),
+            ("dataset", resources.dataset),
+            ("item", resources.item),
+        )
+        for name, _args, _kwargs in cast(Any, fake).calls
+        if name.startswith(_WRITE_PREFIXES)
+    ]
+
+
+def _any_call(resources: AppResources) -> bool:
+    return any(
+        cast(Any, fake).calls
+        for fake in (
+            resources.flow,
+            resources.app,
+            resources.page,
+            resources.dataset,
+            resources.item,
+            resources.copilot,
+        )
+    )
+
+
+def test_read_only_is_never_claimed_by_a_tool_that_writes_something() -> None:
     """readOnlyHint true ONLY if the body writes neither the tenant nor the filesystem. The four
     render/confirm tools are the trap: every one of them says "OFFLINE" in its own description and
     then writes files to disk, which is precisely why these hints are derived from the body.
 
-    Proven behaviorally, not by grepping tool source: each readOnly-claiming tool RUNS against a
-    FakeClient and a recording artifact writer, and any write it performs on either surface — a
-    draft PUT, a publish, a member batch, an app/role/page create, a file — disproves the claim,
-    however the body reached it. A tool that errors mid-call still proves the property: whatever
-    it did before returning is on the fake's counters."""
-    from synthetic import synthetic_process_draft
-    from test_client import FakeClient
-
+    Proven behaviorally, not by grepping tool source: each readOnly-claiming tool RUNS against
+    fresh, empty family fakes and (for the four artifact writers) a patched `write_artifact`, and
+    any write it performs on either surface disproves the claim, however the body reached it. A
+    tool that refuses mid-call still proves the property: whatever it did before refusing is on
+    the fake's own call log.
+    """
     writes_files = {
         "forge_render_flow_diagram",
         "forge_render_schema_diagram",
         "forge_render_mockups",
         "forge_request_confirmation",
     }
-    by_name = {t.name: t for t in _listed()}
+    by_name = _listed()
     for name in writes_files:
         assert by_name[name].annotations.read_only_hint is False, (
             f"{name} writes artifact files to disk — it is not read-only, whatever its "
             f"description prefix says"
         )
-        assert by_name[name].annotations.open_world_hint is False, f"{name} touches no tenant"
+        assert by_name[name].annotations.open_world_hint is False, (
+            f"{name} touches no tenant"
+        )
 
-    artifacts: list[str] = []
-    monkeypatch.setattr(
-        srv,
-        "_write_artifact",
-        lambda directory, filename, content: (artifacts.append(filename), str(directory))[1],
-    )
     for name, t in sorted(by_name.items()):
         if not t.annotations.read_only_hint:
             continue
-        fake = FakeClient(synthetic_process_draft())
-        monkeypatch.setattr(srv, "_client", lambda app_id=None, require_app=True, f=fake: f)
-        artifacts.clear()
-        # an error is not a write — only the counters below disprove the claim
+        resources = _resources()
+        # an error is not a write — only the call logs below disprove the claim
         with contextlib.suppress(Exception):
-            getattr(srv, name)(**MINIMAL_ARGS[name])
-        wrote_tenant = (
-            fake.puts
-            or fake.published
-            or fake.member_batches
-            or fake.report_member_batches
-            or fake.applications
-            or fake.app_roles
-            or fake.pages
-        )
-        assert not wrote_tenant, f"{name} claims readOnlyHint but wrote the (fake) tenant"
-        assert not artifacts, f"{name} claims readOnlyHint but wrote a file: {artifacts}"
+            asyncio.run(_run_tool_only(_server(resources), name, MINIMAL_ARGS[name]))
+        wrote_tenant = _write_calls(resources)
+        assert not wrote_tenant, f"{name} claims readOnlyHint but wrote {wrote_tenant}"
+
+
+async def _run_tool_only(server: FastMCP, name: str, args: dict[str, Any]) -> Any:
+    async with Client(server) as client:
+        return await client.call_tool(name, args, raise_on_error=False)
 
 
 def test_destructive_hint_is_set_on_every_tool_that_replaces_or_deletes_state() -> None:
     """The named cases from the finding, each verified against what the body actually does."""
-    by_name = {t.name: t for t in _listed()}
+    by_name = _listed()
     must_be_destructive = {
         # replaces EVERY Permission on the flow
         "forge_set_visibility",
@@ -350,41 +374,29 @@ def test_destructive_hint_is_set_on_every_tool_that_replaces_or_deletes_state() 
         assert by_name[name].annotations.destructive_hint is False, name
 
 
-def test_open_world_is_exactly_the_tenant_touching_set(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_open_world_is_exactly_the_tenant_touching_set() -> None:
     """openWorldHint true for anything that reaches the Kissflow tenant — which is exactly the set
-    of tools that resolve a client, plus nothing else. Proven behaviorally: `_client` is swapped
-    for a recorder that refuses before any tenant traffic, every tool is CALLED with its minimal
-    args, and the hint must match whether the tool actually tried to resolve a client — however
-    it reached `_client`, helper or not."""
-    from app.infrastructure.kissflow.client import Err
-
-    resolved: list[str] = []
-
-    def probe(app_id: str | None = None, require_app: bool = True) -> Err:
-        resolved.append("hit")
-        return Err("config", "openWorld probe — refused before any tenant traffic")
-
-    monkeypatch.setattr(srv, "_client", probe)
-    for t in _listed():
-        resolved.clear()
-        # a raise past the probe still tells us whether a client was resolved
+    of tools that call a port method at all, plus nothing else. Proven behaviorally: every tool is
+    CALLED with its minimal args against fresh, empty family fakes, and the hint must match
+    whether the tool actually made a port call — however it got there, helper or not."""
+    for name, t in _listed().items():
+        resources = _resources()
         with contextlib.suppress(Exception):
-            getattr(srv, t.name)(**MINIMAL_ARGS[t.name])
-        touches_tenant = bool(resolved)
+            asyncio.run(_run_tool_only(_server(resources), name, MINIMAL_ARGS[name]))
+        touches_tenant = _any_call(resources)
         assert t.annotations.open_world_hint is touches_tenant, (
-            f"{t.name}: openWorldHint={t.annotations.open_world_hint} but "
-            f"{'it resolves a KfClient' if touches_tenant else 'it never touches the tenant'}"
+            f"{name}: openWorldHint={t.annotations.open_world_hint} but "
+            f"{'it calls a port method' if touches_tenant else 'it never touches the tenant'}"
         )
 
 
 def test_the_four_render_tools_no_longer_advertise_themselves_as_offline_only() -> None:
     """A hint disagreeing with its own description is the same bug in a different place."""
-    by_name = {t.name: t for t in _listed()}
+    by_name = _listed()
     for name in ("forge_render_flow_diagram", "forge_render_mockups"):
         assert (
-            "Written to" in by_name[name].description or "written to" in by_name[name].description
+            "Written to" in by_name[name].description
+            or "written to" in by_name[name].description
         )
 
 
@@ -394,8 +406,7 @@ def test_the_four_render_tools_no_longer_advertise_themselves_as_offline_only() 
 
 
 def _param_schema(tool_name: str, param: str) -> dict[str, Any]:
-    t = next(t for t in _listed() if t.name == tool_name)
-    return (t.input_schema.get("properties") or {})[param]
+    return (_listed()[tool_name].input_schema.get("properties") or {})[param]
 
 
 def _closed_values(schema: dict[str, Any]) -> list[Any]:
@@ -410,7 +421,11 @@ def _closed_values(schema: dict[str, Any]) -> list[Any]:
 @pytest.mark.parametrize(
     "tool_name, param, expected",
     [
-        ("kf_get_flow_schema", "flow_kind", ["form", "process", "case", "dataset", "page"]),
+        (
+            "kf_get_flow_schema",
+            "flow_kind",
+            ["form", "process", "case", "dataset", "page"],
+        ),
         ("kf_apply_field_change", "flow_kind", ["form", "process", "case", "dataset"]),
         ("forge_apply_fields", "kind", ["form", "process", "case", "dataset"]),
         ("kf_publish", "flow_kind", ["form", "process", "case"]),
@@ -449,7 +464,9 @@ def test_the_different_kind_sets_are_NOT_unified() -> None:
     assert "form" not in grant and "application" not in create
     assert "list" not in publish and "application" not in flow
     assert "list" not in data, "a word list has no field-bearing draft graph"
-    assert len({frozenset(s) for s in (grant, create, publish, flow, delete, data)}) == 6
+    assert (
+        len({frozenset(s) for s in (grant, create, publish, flow, delete, data)}) == 6
+    )
 
 
 def test_every_kind_shaped_parameter_is_a_closed_set() -> None:
@@ -457,7 +474,7 @@ def test_every_kind_shaped_parameter_is_a_closed_set() -> None:
     must be enumerable, or a typo reaches the engine again."""
     closed_names = {"kind", "flow_kind", "scope", "op", "tier", "decision"}
     checked = 0
-    for t in _listed():
+    for t in _listed().values():
         for pname, schema in (t.input_schema.get("properties") or {}).items():
             # forge_build_page's `op` is a compiled build_page OBJECT, not a vocabulary — the
             # name collides, the meaning does not. Only string-valued slots are vocabularies.
@@ -465,34 +482,55 @@ def test_every_kind_shaped_parameter_is_a_closed_set() -> None:
                 continue
             _closed_values(schema)  # raises with the offending schema if it is open
             checked += 1
-    assert checked >= 28, f"only {checked} closed-set parameters found — did a Literal get lost?"
+    assert checked >= 28, (
+        f"only {checked} closed-set parameters found — did a Literal get lost?"
+    )
 
 
 def test_boundary_enums_match_the_engine_constants_they_mirror() -> None:
     """The anti-drift guard. These Literals are hand-written (a Literal cannot be built from a
     runtime dict), so this test is what stops them diverging from the engine's own sets."""
-    assert set(_closed_values(_param_schema("forge_doctor", "kind"))) == set(FlowKind.__args__)
-    assert set(_closed_values(_param_schema("forge_grant_tier", "kind"))) == set(_TIER_MAP)
+    assert set(_closed_values(_param_schema("forge_doctor", "kind"))) == set(
+        FlowKind.__args__
+    )
+    assert set(_closed_values(_param_schema("forge_grant_tier", "kind"))) == set(
+        _TIER_MAP
+    )
     assert set(_closed_values(_param_schema("forge_grant_tier", "tier"))) == {
         tier for by_tier in _TIER_MAP.values() for tier in by_tier
     }
-    assert set(_closed_values(_param_schema("forge_sweep", "scope"))) == set(_SWEEP_SCOPES) | {
-        "all"
-    }
+    assert set(_closed_values(_param_schema("forge_sweep", "scope"))) == set(
+        SWEEP_SCOPES
+    ) | {"all"}
 
 
-def test_kf_list_field_types_still_serves_the_engine_set_it_documents() -> None:
-    assert srv.kf_list_field_types() == [t.value for t in FieldType]
-
-
-def test_kf_list_field_types_no_longer_calls_the_engine_set_the_platforms_closed_enum() -> None:
+def test_kf_list_field_types_no_longer_calls_the_engine_set_the_platforms_closed_enum() -> (
+    None
+):
     """C5: this one tool misrepresented the platform — it called the 8 types this engine can build
     the platform's "closed enum" when the platform's palette is much wider. It must now say what
     it actually is and point at forge_capabilities for the rest."""
-    doc = next(t for t in _listed() if t.name == "kf_list_field_types").description or ""
+    doc = _listed()["kf_list_field_types"].description or ""
     assert "closed enum" not in doc.lower()
     assert "forge_capabilities" in doc
     assert "THIS ENGINE" in doc or "this engine" in doc
+
+
+def test_field_type_enum_matches_the_engine_catalog() -> None:
+    """`kf_list_field_types`' own catalog (`tests/unit/application/use_cases/meta/
+    test__field_types.py` proves the tool itself) must still be exactly `FieldType`'s wire
+    values -- the anti-drift guard for the one non-tool-parameter enum this boundary carries."""
+    assert {t.value for t in FieldType} == {
+        "Text",
+        "Textarea",
+        "Date",
+        "DateTime",
+        "Boolean",
+        "Select",
+        "User",
+        "Number",
+        "Attachment",
+    }
 
 
 # =================================================================================================
@@ -501,214 +539,181 @@ def test_kf_list_field_types_no_longer_calls_the_engine_set_the_platforms_closed
 
 # The nested arguments a schema can only describe as list[Any]/dict[str, Any] — one malformed
 # value each, of the shape an agent actually gets wrong: a pair one element short, an object with
-# a missing key, a bare string where a list of triples belongs.
-# The nested arguments a schema can only describe as list[Any]/dict[str, Any] — one malformed
-# value each, of the shape an agent actually gets wrong (a pair one element short, an object with
-# a missing key), paired with the fragment its refusal MUST name.
+# a missing key, a bare string where a list of triples belongs. Fragments below name the failing
+# nested entry in the request DTO's validation message (spec G10: "the same bad inputs fail with
+# ValidationError"). The custom shape validators preserve the old bracketed path for their own
+# restored refusal text; the CLAIM each row backs (a malformed nested argument is refused as DATA,
+# before any write, naming which entry) is unchanged.
 MALFORMED_ARGS: dict[str, tuple[dict[str, Any], str]] = {
-    "kf_plan_field_change": ({"draft": {}, "changes": [{"name": "x"}]}, "changes[0]['type']"),
+    "kf_plan_field_change": (
+        {"draft": {}, "changes": [{"name": "x"}]},
+        "changes.0.type",
+    ),
     "kf_apply_field_change": (
-        {"flow_kind": "process", "flow_id": "F", "changes": [{"name": "x", "type": "Wat"}]},
-        "changes[0]['type']",
+        {
+            "flow_kind": "process",
+            "flow_id": "F",
+            "changes": [{"name": "x", "type": "Wat"}],
+        },
+        "changes.0.type",
     ),
     "kf_create_process": (
         {"name": "N", "steps": [], "fields": [{"type": "Text"}]},
-        "fields[0]['name']",
+        "fields.0.name",
     ),
     "forge_apply_fields": (
         {"flow_id": "F", "fields": [{"name": "a", "type": "Nope"}]},
-        "fields[0]['type']",
+        "fields.0.type",
     ),
-    "forge_apply_layout": ({"flow_id": "F", "layout": {"S": [[["a", 0]]]}}, "layout['S'][0][0]"),
-    "forge_add_table": ({"flow_id": "F", "name": "T", "columns": [["only-a-name"]]}, "columns[0]"),
+    "forge_apply_layout": (
+        {"flow_id": "F", "layout": {"S": [[["a", 0]]]}},
+        "layout['S'][0][0]",
+    ),
+    "forge_add_table": (
+        {"flow_id": "F", "name": "T", "columns": [["only-a-name"]]},
+        "columns.0",
+    ),
     "forge_add_field_validation": (
         {"flow_id": "F", "rules": {"a": [["CONTAINS"]]}},
         "rules['a'][0]",
     ),
-    "forge_build_workflow": ({"flow_id": "F", "steps": [["Approve"]]}, "steps[0]"),
-    "forge_set_events": ({"flow_id": "F", "events": {"a": [["onChange"]]}}, "events['a'][0]"),
+    "forge_build_workflow": ({"flow_id": "F", "steps": [["Approve"]]}, "steps.0.1"),
+    "forge_set_events": (
+        {"flow_id": "F", "events": {"a": [["onChange"]]}},
+        "events['a'][0]",
+    ),
     "forge_build_page": (
         {"app_id": "A", "page_id": "P", "steps": [{"kwargs": {}}]},
         "steps[0]['kind']",
     ),
-    "forge_simulate_case": ({"flow_id": "F", "steps": [{"values": {}}]}, "steps[0]['name']"),
+    "forge_simulate_case": (
+        {"flow_id": "F", "steps": [{"values": {}}]},
+        "steps[0]['name']",
+    ),
 }
-
-# The one parameter with a nested list-of-lists inside an object.
-MALFORMED_PARALLEL = {
-    "flow_id": "F",
-    "steps": [["Approve", None]],
-    "parallel": {"branches": [["B", [["S", None]]]]},
-}  # no 'name'
 
 
 @pytest.mark.parametrize("tool_name", sorted(MALFORMED_ARGS))
-def test_a_malformed_nested_arg_returns_data_not_a_traceback(
-    tool_name: str, fake_kf_env: None
+def test_a_malformed_nested_arg_is_refused_as_data_not_a_traceback(
+    tool_name: str,
 ) -> None:
     """A1 / doctrine 7. Every one of these destructured a nested parameter with no shape check, so
     the single most likely agent mistake produced a bare Python traceback instead of structured
-    data. `fake_kf_env` puts a well-formed (fake) dev config in place on purpose: without it the
-    config gate short-circuits first and the destructure below it is never even reached, which is
-    what made this class of bug invisible to the existing offline suite. No network happens —
-    every one of these guards sits between the config gate and the first HTTP call."""
-    args, _ = MALFORMED_ARGS[tool_name]
-    got = getattr(srv, tool_name)(**args)
-    assert isinstance(got, dict), f"{tool_name} returned {type(got).__name__}, not a dict"
-    assert got.get("isError") is True, got
-    assert got.get("error", "").startswith("verify:"), got
+    data. Refused now as a `ToolError` naming the offending entry, never a raw exception through
+    `Client.call_tool`."""
+    args, fragment = MALFORMED_ARGS[tool_name]
+    with pytest.raises(ToolError) as excinfo:
+        _call_raising(tool_name, args, _resources())
+    assert fragment in str(excinfo.value), (
+        f"{tool_name}: refusal does not name {fragment}: {excinfo.value}"
+    )
 
 
-@pytest.mark.parametrize("tool_name", sorted(MALFORMED_ARGS))
-def test_the_refusal_names_the_parameter_and_shows_a_correct_example(
-    tool_name: str, fake_kf_env: None
-) -> None:
-    """A refusal that does not say WHICH argument was wrong, what arrived, and what right looks
-    like is just a nicer traceback."""
-    args, wanted = MALFORMED_ARGS[tool_name]
-    err = getattr(srv, tool_name)(**args)["error"]
-    assert wanted in err, f"{tool_name}: refusal does not name {wanted}: {err}"
-    assert "correct shape:" in err or "valid:" in err, f"{tool_name}: no example: {err}"
+def _call_raising(tool: str, args: dict[str, Any], resources: AppResources) -> Any:
+    async def _run() -> Any:
+        async with Client(_server(resources)) as client:
+            return await client.call_tool(tool, args)
+
+    return asyncio.run(_run())
 
 
-def test_a_parallel_block_with_no_name_is_refused_by_name(fake_kf_env: None) -> None:
-    # MALFORMED_PARALLEL is malformed BY NAME — splatting it is how the refusal gets exercised.
-    got = srv.forge_build_workflow(**MALFORMED_PARALLEL)  # ty: ignore[invalid-argument-type]
-    assert got.get("isError") is True
-    assert "parallel['name']" in got["error"], got
+def test_a_parallel_block_with_no_name_is_refused_by_name() -> None:
+    # A BLANK name (present, empty) reaches `ForgeBuildWorkflowRequest`'s own custom
+    # `_parallel_is_named` validator, which names the parameter -- an ABSENT "name" key fails
+    # Pydantic's own tuple-element type check first instead ("Input should be a valid string"),
+    # a plainer message this row is not about.
+    args = {
+        "flow_id": "F",
+        "steps": [["Approve", None]],
+        "parallel": {"name": "", "branches": [["B", [["S", None]]]]},
+    }
+    with pytest.raises(ToolError, match=r"parallel\['name'\]"):
+        _call_raising("forge_build_workflow", args, _resources())
 
 
-def test_the_two_plan_tools_no_longer_raise_before_any_gate(no_kf_env: None) -> None:
+def test_the_two_plan_tools_no_longer_raise_before_any_gate() -> None:
     """kf_plan_field_change and kf_plan_step_visibility are OFFLINE — they have no config gate to
     short-circuit behind, so a bad argument used to escape as a bare traceback on the very first
-    statement, credentials or not. Both now return the refusal as data."""
-    bad_type = srv.kf_plan_field_change({}, [{"name": "x", "type": "Nope"}])
-    assert bad_type["isError"] is True and "changes[0]['type']" in bad_type["error"]
+    statement, credentials or not. Both now return the refusal as a `ToolError`."""
+    with pytest.raises(ToolError, match="changes.0.type"):
+        _call_raising(
+            "kf_plan_field_change",
+            {"draft": {}, "changes": [{"name": "x", "type": "Nope"}]},
+            _resources(),
+        )
 
-    # an empty/foreign draft: graph.progressive_matrix's own ValueError, now translated
-    bad_draft = srv.kf_plan_step_visibility({}, {"Intake": ["Start"]})
-    assert bad_draft["isError"] is True
-    assert "verify:" in bad_draft["error"] and "ProcessDef" in bad_draft["error"]
-
-
-@pytest.mark.parametrize("tool_name", sorted(MINIMAL_ARGS))
-def test_no_tool_escapes_as_an_exception_with_no_credentials(
-    tool_name: str, no_kf_env: None
-) -> None:
-    """The blanket net: every tool on the surface, called with well-typed args and no config,
-    returns rather than raises."""
-    got = getattr(srv, tool_name)(**MINIMAL_ARGS[tool_name])
-    assert isinstance(got, (dict, list)), f"{tool_name} returned {type(got).__name__}"
+    # an empty/foreign draft: graph.progressive_matrix's own ValueError, translated
+    with pytest.raises(ToolError, match="ProcessDef"):
+        _call_raising(
+            "kf_plan_step_visibility",
+            {"draft": {}, "owners": {"Intake": ["Start"]}},
+            _resources(),
+        )
 
 
-@pytest.mark.parametrize("tool_name", sorted(MINIMAL_ARGS))
-def test_no_tool_escapes_as_an_exception_with_malformed_args(
-    tool_name: str, no_kf_env: None
-) -> None:
-    """The same net, with garbage in every slot the schema types loosely. Offline (no config), so
-    a tool that survives its own shape check simply stops at the config gate — either way nothing
-    leaves this boundary as an exception."""
-    garbage: dict[str, Any] = {}
-    for key, value in MINIMAL_ARGS[tool_name].items():
-        if isinstance(value, dict):
-            garbage[key] = {"": ["", 1, None]}
-        elif isinstance(value, list):
-            garbage[key] = [["only-one"], {"no": "kind"}, None]
-        else:
-            garbage[key] = value
-    got = getattr(srv, tool_name)(**garbage)
-    assert isinstance(got, (dict, list)), f"{tool_name} returned {type(got).__name__}"
+def test_no_tool_escapes_as_a_raw_exception_with_no_credentials() -> None:
+    """The blanket net: every tool on the surface, called with well-typed args and empty (never
+    configured) family fakes, returns a `CallToolResult` rather than raising a bare exception
+    through `Client.call_tool`. FastMCP's own transport catches every exception a tool body
+    raises and reports it as a protocol error (`mask_error_details=True`), so this is a structural
+    guarantee of `create_server` now, not something each tool body must individually re-prove --
+    proven once, generically, below (`test_an_unexpected_exception_never_escapes_the_transport`);
+    this keeps the ORIGINAL per-tool sweep, since a genuinely malformed `MINIMAL_ARGS` entry (a
+    typo in this very file) is still worth catching tool by tool."""
+    for name in sorted(MINIMAL_ARGS):
+        result = _call(name, MINIMAL_ARGS[name], _resources())
+        assert result is not None, name
 
 
-@pytest.mark.parametrize("tool_name", sorted(MALFORMED_ARGS))
-def test_a_malformed_arg_is_an_error_on_the_protocol_envelope_too(
-    tool_name: str, fake_kf_env: None
-) -> None:
+def test_no_tool_escapes_as_a_raw_exception_with_malformed_args() -> None:
+    """The same net, with garbage in every slot the schema types loosely."""
+    for name in sorted(MINIMAL_ARGS):
+        garbage: dict[str, Any] = {}
+        for key, value in MINIMAL_ARGS[name].items():
+            if isinstance(value, dict):
+                garbage[key] = {"": ["", 1, None]}
+            elif isinstance(value, list):
+                garbage[key] = [["only-one"], {"no": "kind"}, None]
+            else:
+                garbage[key] = value
+        result = _call(name, garbage, _resources())
+        assert result is not None, name
+
+
+def test_an_unexpected_exception_never_escapes_the_transport() -> None:
+    """The mechanism itself, on a throwaway server carrying one synthetic tool that raises a raw,
+    un-translated `KeyError` -- the shape a genuine bug in a use case would take. `create_server`'s
+    own `mask_error_details=True` (spec G6) must still turn it into a protocol error, never let it
+    propagate out of `Client.call_tool`."""
+
+    def _lifespan(server: FastMCP):
+        @asynccontextmanager
+        async def _run(inner: FastMCP) -> AsyncIterator[dict[str, Any]]:
+            del inner
+            yield {"resources": _resources(), "settings": _settings()}
+
+        return _run(server)
+
+    probe = FastMCP("boundary-probe", mask_error_details=True)
+
+    @probe.tool(title="Breaks")
+    def breaks() -> dict[str, Any]:
+        """A tool that raises a raw exception, the way a genuine bug would."""
+        raise KeyError("boom")
+
+    async def _run() -> Any:
+        async with Client(probe) as client:
+            return await client.call_tool("breaks", {}, raise_on_error=False)
+
+    result = asyncio.run(_run())
+    assert result.is_error is True
+
+
+def test_a_malformed_arg_is_a_tool_error_on_the_protocol_envelope_too() -> None:
     """The two fixes meet: a shape refusal is structured DATA (A1) AND a protocol error (M1)."""
-    result = _call(tool_name, MALFORMED_ARGS[tool_name][0])
-    assert result.is_error is True, result.structured_content
-    assert result.structured_content is not None
-    assert result.structured_content.get("isError") is True
-
-
-@pytest.fixture()
-def fake_kf_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A well-formed but entirely FAKE dev config, so `_client()` succeeds and the shape guards
-    below it are actually reached. Nothing here can reach a real tenant: the domain does not
-    resolve, and every guarded destructure returns before the first HTTP call anyway."""
-    monkeypatch.setenv("KF_DEV_DOMAIN", "dev-nowhere.invalid")
-    monkeypatch.setenv("KF_DEV_ACCESS_KEY_ID", "fake-id")
-    monkeypatch.setenv("KF_DEV_ACCESS_KEY_SECRET", "fake-secret")
-    monkeypatch.setenv("KF_DEV_ACCOUNT_ID", "fake-account")
-    monkeypatch.setenv("KF_APP", "App_fake")
-
-
-# ---- D3: a DIAGNOSIS is not a failed call ------------------------------------------------------
-
-
-def test_a_health_verdict_is_not_promoted_to_a_protocol_error(monkeypatch) -> None:
-    """Driven END TO END through the real middleware, because that is where the bug lived.
-
-    forge_doctor is a read-only audit: it states a verdict about the FLOW under `ok` and sets the
-    payload's own `isError` from it. A doctor run that finds a sparse matrix has WORKED. SKILL.md
-    tells the builder to run it after EVERY edit, so a mid-build call legitimately reports problems
-    almost every time — promoting that to the ENVELOPE marks a perfectly healthy read-only call as
-    a protocol failure, and under a client's default raise_on_error it RAISES, destroying the
-    diagnosis the caller asked for.
-    """
-    import asyncio
-
-    import app.infrastructure.mcp.server as srv
-
-    draft = {
-        "Root": "M1",
-        "M1": {"Id": "M1", "Kind": "Model"},
-        "A1": {"Id": "A1", "Kind": "Activity", "Name": "S1"},
-        "R1": {"Id": "R1", "Kind": "Row", "Row::Column": ["C_a"]},
-        "S1": {
-            "Id": "S1",
-            "Kind": "Column",
-            "Type": "Section",
-            "Name": "Ghost",
-            "Column::Row": ["R1"],
-        },
-        "C_a": {"Id": "C_a", "Kind": "Column", "Type": "Field", "Name": "F", "Start": 0, "End": 2},
-    }
-
-    class _Fake:
-        _cfg = type("c", (), {"app_id": "App1"})()
-
-        def get_draft(self, *a, **k):
-            return draft
-
-        def list_lists(self, *a, **k):
-            return []
-
-    monkeypatch.setattr(srv, "_client", lambda app_id=None, require_app=True: _Fake())
-    result = asyncio.run(srv.mcp.call_tool("forge_doctor", {"flow_id": "F1"}))
-    payload = result.structured_content or {}
-
-    assert payload["ok"] is False and payload["problems"], "the audit must have found something"
-    assert payload["isError"] is True, "the payload verdict convention is unchanged"
-    assert result.is_error is False, (
-        "a read-only audit that successfully diagnosed a problem is NOT a failed call"
-    )
-
-
-def test_a_real_failure_is_still_promoted_end_to_end(monkeypatch) -> None:
-    """The control: the M1 fix must survive the D3 carve-out."""
-    import asyncio
-
-    import app.infrastructure.mcp.server as srv
-    from app.infrastructure.kissflow.client import Err
-
-    monkeypatch.setattr(
-        srv, "_client", lambda app_id=None, require_app=True: Err("config", "missing env var")
-    )
-    result = asyncio.run(srv.mcp.call_tool("kf_publish", {"flow_kind": "process", "flow_id": "X"}))
-    payload = result.structured_content or {}
-    assert payload["isError"] is True and "error" in payload
-    assert result.is_error is True, "a genuine failure must still reach the envelope"
+    for tool_name, (args, _fragment) in MALFORMED_ARGS.items():
+        result = _call(tool_name, args, _resources())
+        assert result.is_error is True, (tool_name, result.structured_content)
 
 
 # =================================================================================================
@@ -719,6 +724,11 @@ def test_a_real_failure_is_still_promoted_end_to_end(monkeypatch) -> None:
 # removed the only route to delete a `list` or a `dataset` — two kinds `forge_create_flow` mints
 # freely — because "cannot be published" was read as "cannot be deleted". These tests assert the
 # reachable set, from the reachable CREATES and from the code path behind each parameter.
+#
+# `test_delete_anything_really_routes_a_list_and_a_dataset` and
+# `test_force_regrant_groups_is_forwarded_through_the_tool_boundary` (old `delete_anything`/
+# `_FakeRoleClient` direct-function tests) are ported to `tests/unit/application/use_cases/flow/
+# test__delete.py` and Stage D group 5's own `forge_add_role_users` suite -- not re-staged here.
 # =================================================================================================
 
 
@@ -743,40 +753,6 @@ def test_delete_and_publish_are_deliberately_DIFFERENT_sets() -> None:
     assert publishable != deletable
 
 
-def test_delete_anything_really_routes_a_list_and_a_dataset(monkeypatch) -> None:
-    """Not just the schema: the engine path behind the widened enum, exercised offline. A `list`
-    and a `dataset` take the generic /flow/2/{acct}/{kind}/{id} branch and are verified by
-    re-listing that kind — never archived first (only a process needs that)."""
-    from app.infrastructure.kissflow.client import delete_anything
-
-    class _Fake:
-        def __init__(self) -> None:
-            self.deleted: list[tuple[str, str, bool]] = []
-            self.listed: list[str] = []
-
-        def delete_flow(self, kind, flow_id, archive_first=True):
-            self.deleted.append((kind, flow_id, archive_first))
-            return None
-
-        def list_flows(self, kind):
-            self.listed.append(kind)
-            return []
-
-    for kind in ("list", "dataset"):
-        c = _Fake()
-        # `_Fake` is a structural double: delete_anything reaches across page/application/flow
-        # families, and the double implements exactly the slice each kind touches.
-        got = delete_anything(c, kind, "F1")  # ty: ignore[invalid-argument-type]
-        assert got == {
-            "kind": kind,
-            "id": "F1",
-            "deleted": True,
-            "verified": True,
-            "isError": False,
-        }, got
-        assert c.deleted == [(kind, "F1", True)] and c.listed == [kind]
-
-
 def test_a_dataform_draft_is_still_readable_and_field_writable() -> None:
     """The other half of the same audit: `dataset` was reachable on the draft-read and
     field-write tools before the enums landed, and docs/capabilities/module.dataform.md is the
@@ -790,48 +766,15 @@ def test_a_dataform_draft_is_still_readable_and_field_writable() -> None:
     ):
         values = set(_closed_values(_param_schema(tool, param)))
         assert "dataset" in values, f"{tool}.{param} lost the dataform"
-        assert "list" not in values, f"{tool}.{param} admits a kind with no captured draft graph"
+        assert "list" not in values, (
+            f"{tool}.{param} admits a kind with no captured draft graph"
+        )
 
 
 def test_the_widened_sets_are_still_closed_and_still_reject_junk() -> None:
     """Widening is not opening: every set stays an enum, and nothing outside it gets through."""
-    from fastmcp import Client
-
-    async def _run() -> Any:
-        async with Client(srv.mcp) as client:
-            return await client.call_tool(
-                "forge_delete_flow", {"kind": "spreadsheet", "flow_id": "F"}, raise_on_error=False
-            )
-
-    result = asyncio.run(_run())
+    result = _call(
+        "forge_delete_flow", {"kind": "spreadsheet", "flow_id": "F"}, _resources()
+    )
     assert result.is_error is True
     assert "spreadsheet" in str(result.content) or "enum" in str(result.content).lower()
-
-
-def test_force_regrant_groups_is_forwarded_through_the_tool_boundary(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The GroupCount re-grant refusal's documented override must be reachable from the WIRE, not
-    just the client layer: the same tool call that gets refused must succeed once
-    force_regrant_groups=True rides along. A dropped or misspelled forward of that parameter in
-    forge_add_role_users fails here instead of silently bricking the override again."""
-    from test_client import _FakeRoleClient
-
-    everyone = {"_id": "everyone", "Kind": "Group", "Name": "Everyone"}
-    fake = _FakeRoleClient(group_count=1)
-    monkeypatch.setattr(srv, "_client", lambda app_id=None, require_app=True: fake)
-
-    refused = srv.forge_add_role_users(
-        role_id="R1", groups=[everyone], confirm_group_notification=True
-    )
-    assert refused["groups_refused"] == ["everyone"]
-    assert fake.body is None, "the refused grant must not write"
-
-    forced = srv.forge_add_role_users(
-        role_id="R1", groups=[everyone], confirm_group_notification=True, force_regrant_groups=True
-    )
-    assert forced["groups_refused"] == []
-    assert fake.body is not None and fake.body.get("Groups"), (
-        "force_regrant_groups=True from the tool boundary must reach the client layer "
-        "and re-issue the Groups write"
-    )

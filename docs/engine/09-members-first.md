@@ -44,7 +44,16 @@ shorter than the page size, no need to probe an explicit empty page after
 that). Each record carries an `Applications` array scoping which app(s) it
 belongs to — **each entry is a `{"_id": ..., "Type": "Application"}` dict,
 not a bare id string**; filtering with a plain `app_id in record ["Applications"]` silently matches zero roles (found live writing this note)
-— check each dict's own `_id` instead. `GET /app_role/2/{acct}/{role_id}`
+— check each dict's own `_id` instead.
+
+⚠️ **The account-wide pages are not a complete list (captured live 2026-09-24).**
+Three identical full scans of the dev tenant each returned 682 entries, but only 562
+unique `_id`s (120 duplicates across pages). Some app-scoped roles never appeared on any
+page, although `GET /app_role/2/{acct}/{role_id}` still returns them. Add
+`&_application_id={app_id}` to the same route: the tenant filters server-side. It needs
+one request, and for one app it listed a role the full scan never showed. For a role
+lookup inside one app, always send the filter. Never conclude "no such role" from an
+unfiltered scan. `GET /app_role/2/{acct}/{role_id}`
 returns one role's own detail, including its `Members` list — which the list route's records
 never carry (verified across every record, not sampled). Do NOT generalise the rest of the
 list record's key-set: most records are

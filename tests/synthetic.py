@@ -11,8 +11,9 @@ import json
 import pathlib
 from typing import Any
 
-from app.domain.graph import apply_changes, build_workflow, regroup_into_sections
-from app.domain.types import FieldSpec, FieldType
+from app.domain.entities.flow_draft import FlowDraft
+from app.domain.value_objects.field_spec import FieldSpec
+from app.domain.value_objects.field_type import FieldType
 
 Draft = dict[str, Any]
 
@@ -24,7 +25,11 @@ ROLE_FRONT, ROLE_TECH, ROLE_LEAD = "Ro_front_001", "Ro_tech_0002", "Ro_lead_0003
 # names one (neutral ids, no real list on any tenant). A bare Select is a dropdown bound to
 # nothing: `apply_changes` refuses to mint one, and `verify.doctor` rule 7b flags any that arrives
 # from a template or a hand-built draft.
-LIST_URGENCY, LIST_ROUTE, LIST_OUTCOME = "List_Sample01", "List_Sample02", "List_Sample03"
+LIST_URGENCY, LIST_ROUTE, LIST_OUTCOME = (
+    "List_Sample01",
+    "List_Sample02",
+    "List_Sample03",
+)
 
 # (name, type, required, referred_list) — the list id is None for every type that is not a Select.
 FIELDS: list[tuple[str, FieldType, bool, str | None]] = [
@@ -92,18 +97,20 @@ OWNERS: dict[str, list[str]] = {
 
 def synthetic_process_draft() -> Draft:
     draft: Draft = json.loads(BASE.read_text())
-    draft = apply_changes(
-        draft, [FieldSpec(name=n, type=t, required=r, referred_list=rl) for n, t, r, rl in FIELDS]
+    flow = FlowDraft.from_wire(draft).apply_changes(
+        [
+            FieldSpec(name=n, type=t, required=r, referred_list=rl)
+            for n, t, r, rl in FIELDS
+        ]
     )
-    draft = regroup_into_sections(draft, SECTIONS)
-    draft = build_workflow(
-        draft,
+    flow = flow.regroup_into_sections(SECTIONS)
+    flow = flow.build_workflow(
         STEPS,
         parallel=("Repair paths", BRANCHES),
         parallel_after=3,
         roles={ROLE_FRONT: "Front Desk", ROLE_TECH: "Technician", ROLE_LEAD: "Lead"},
     )
-    return draft
+    return flow.to_wire()
 
 
 def with_goto_and_event(draft: Draft) -> Draft:
@@ -115,8 +122,8 @@ def with_goto_and_event(draft: Draft) -> Draft:
     `Activity::Expression` loop condition testing a Boolean field against the zero-arg `false()`
     literal, and an Event node whose script references the gate field by its own
     (platform-prefixed) id — the smallest shape that is genuinely CLEAN under
-    app.application.verify.doctor, so seeded-defect tests can mutate a deep copy of it to break exactly
-    one thing.
+    `FlowDraft.problems`, so seeded-defect tests can mutate a deep copy of it
+    to break exactly one thing.
 
     Ids are deliberately neutral (`Activity_Sample01` style — no app-specific names). Applied
     AFTER step permissions are set: a GotoTask renders no form of its own and correctly carries
@@ -130,7 +137,9 @@ def with_goto_and_event(draft: Draft) -> Draft:
     pd = new[pd_id]
     chain = list(pd["ProcessDef::Activity"])
     if len(chain) < 2:
-        raise ValueError("draft's workflow needs Start + at least one real step to loop back to")
+        raise ValueError(
+            "draft's workflow needs Start + at least one real step to loop back to"
+        )
     target_id = chain[1]  # loop back to the first real step after Start
 
     gate_id = "Field_SampleGate01"

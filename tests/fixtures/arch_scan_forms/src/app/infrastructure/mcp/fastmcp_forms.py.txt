@@ -1,0 +1,27 @@
+"""Coverage forms for module_level_fastmcp (G0 review finding 3) besides the plain `FastMCP(...)`
+call already in tests/fixtures/arch_scan_bad/: the attribute-call form, a `FastMCP` call inside a
+decorator, inside a parameter default, and inside a lambda default. Python evaluates a
+decorator, a default, and a lambda default when the enclosing `def`/`lambda` statement itself
+runs -- at module level here -- never when the function is later called, so all four are
+violations."""
+
+from __future__ import annotations
+
+import fastmcp
+from fastmcp import FastMCP
+
+server = fastmcp.FastMCP("attribute-form")
+
+
+@FastMCP("decorator-form").tool
+def registered() -> None:
+    """A tool registered through a decorator that itself calls FastMCP(...)."""
+
+
+def create_server(mcp: FastMCP = FastMCP("default-form")) -> FastMCP:
+    """Compliant part of this case: the function BODY makes no module-level call. The VIOLATION
+    is the parameter default above, evaluated when this `def` statement runs."""
+    return mcp
+
+
+with_lambda_default = lambda mcp=FastMCP("lambda-default-form"): mcp  # noqa: E731

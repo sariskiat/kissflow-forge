@@ -1,20 +1,21 @@
 [project]
+# Delta: name, description (ours, not the boilerplate's) -- reason and every other tooling
+# delta from the clone are in tests/fixtures/tooling_deltas.toml ([[pyproject]] "project.name",
+# "project.description").
 name = "kissflow-forge"
 version = "0.1.0"
 description = "Generalised Kissflow builder engine + MCP server"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
+# Delta: only what our code imports (no asyncpg; fastmcp pinned exactly) -- see
+# tests/fixtures/tooling_deltas.toml [[pyproject]] "project.dependencies".
 dependencies = [
-    # Pinned exactly: the OAuth-proxy seam in infrastructure/kissflow/auth.py reaches into
-    # fastmcp.server.auth internals, which are not covered by semver.
+    # Pinned exactly, matching the clone's own pin (tests/fixtures/tooling_deltas.toml
+    # [[pyproject]] "project.dependencies").
     "fastmcp==4.0.2",
-    # Imported directly, not just pulled in by fastmcp. Before this file existed the Dockerfile
-    # installed fastmcp alone and these four arrived transitively — an upstream dependency drop
-    # would have broken the running container with no local signal.
-    "mcp>=1.19",
+    "httpx>=0.28,<1",
     "pydantic>=2.12,<3",
-    "starlette>=0.47",
-    "cryptography>=44",
+    "python-dotenv>=1.1,<2",
     "PyYAML>=6",
 ]
 
@@ -27,14 +28,17 @@ dev = [
     "pytest-cov>=7,<8",
     "ruff>=0.13,<1",
     "ty>=0.0.1a0",
+    "pytest-asyncio>=1.2,<2",
     "import-linter>=2,<3",
-    "httpx>=0.28,<1",   # test-only: drives the ASGI app in test_proxy_headers / test_oauth_per_user
 ]
 
 [tool.uv]
 default-groups = ["dev"]
 package = true
 
+# Delta: [build-system] and [tool.hatch.build.targets.wheel] stay (D3) -- the Dockerfile runs
+# `uv sync --frozen --no-dev`, which builds the project with hatchling; a new Dockerfile comes
+# later. See tests/fixtures/tooling_deltas.toml [[pyproject]] "build-system", "tool.hatch".
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -44,60 +48,63 @@ packages = ["src/app"]
 
 [tool.ruff]
 target-version = "py313"
-line-length = 100
+line-length = 88
 src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
-# E501 is OFF, and line-length below is for the formatter only. Measured on this tree: p95=98,
-# p99=106 — the code is already written to ~100. The 594-line tail over it is almost entirely
-# captured Kissflow wire strings, copilot prompt text, and the long explanatory comments this
-# engine is documented in; 128 of those lines cannot be split at all without mangling a literal.
-# Reflowing the rest buys nothing and would bury every real finding. Re-enable once the tail is
-# dealt with deliberately, as its own change.
-ignore = ["E501"]
+
+# The E501 ratchet (2026-09-22 user decision): line-length = 88 and E501 is ON, as the clone.
+# Every file that still fails E501 after `ruff format .` at 88 is listed here. The list only
+# shrinks -- a goal that moves or deletes a file takes it off and fixes its lines -- and is
+# empty at P6. Frozen ceiling: tests/fixtures/e501_ratchet_g1.txt.
+[tool.ruff.lint.per-file-ignores]
+"scripts/arch_scan.py" = ["E501"]
+"src/app/domain/__init__.py" = ["E501"]
+"src/app/infrastructure/capabilities.py" = ["E501"]
+"src/app/infrastructure/mcp/server.py" = ["E501"]
+"src/app/infrastructure/playbook.py" = ["E501"]
+"src/app/main.py" = ["E501"]
+"src/app/resources.py" = ["E501"]
+"tests/live_helpers.py" = ["E501"]
+"tests/synthetic.py" = ["E501"]
+"tests/test_arch_scan.py" = ["E501"]
+"tests/test_boilerplate_conformance.py" = ["E501"]
+"tests/test_coverage.py" = ["E501"]
+"tests/test_empty_form.py" = ["E501"]
+"tests/integration/test_live_branching.py" = ["E501"]
+"tests/integration/test_live_lifecycle.py" = ["E501"]
+"tests/integration/test_live_page_plan.py" = ["E501"]
+"tests/integration/test_live_template_app.py" = ["E501"]
+"tests/test_mcp_boundary.py" = ["E501"]
+"tests/test_mcp_surface.py" = ["E501"]
+"tests/test_p0_scaffold.py" = ["E501"]
+"tests/test_p2_server.py" = ["E501"]
+"tests/test_proxy_headers.py" = ["E501"]
+"tests/test_reader_boundary.py" = ["E501"]
+"tests/test_shapes.py" = ["E501"]
+"tests/test_step_permissions.py" = ["E501"]
+"tests/test_template_shape.py" = ["E501"]
+"tests/test_tool_claims.py" = ["E501"]
+"tests/test_tool_surface_snapshot.py" = ["E501"]
+"tests/test_transplant.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
 
-# Two rules are switched off for tests/ ONLY, and only after every other diagnostic there was
-# fixed (194 -> 0). Everything else stays live in tests — that is how the always-truthy
-# `assert report.ok` in test_graph.py was caught.
-#
-#   too-many-positional-arguments (32 hits) — all of them `pytest.skip("...")`. ty cannot see
-#     through pytest's `@_with_exception` decorator and reports `skip` as taking no positional
-#     arguments. Probed both spellings: the positional form gives this error and the keyword form
-#     gives `unknown-argument`, so there is NO call that satisfies it. A tool gap, not our code.
-#
-#   invalid-assignment (35 hits) — instance-level method stubbing on a test double
-#     (`c.get_draft = lambda ...`). 27 of the 35 already carried mypy's own
-#     `# type: ignore[assignment]`, so the codebase had already classified the pattern as
-#     deliberate; this states it once instead of 35 times.
-[[tool.ty.overrides]]
-include = ["tests/**"]
-
-[tool.ty.overrides.rules]
-too-many-positional-arguments = "ignore"
-invalid-assignment = "ignore"
-
 [tool.ty.environment]
 python-version = "3.13"
-# "." is here so `tests.synthetic` and friends resolve; without it ty reports 49 phantom
-# unresolved-imports for helper modules that pytest imports fine.
-root = ["./src", "."]
+# The unit and integration trees are packages rooted at the repository, so the source tree is
+# the only import root required by the boilerplate contract.
+root = ["./src"]
 
-# ---------------------------------------------------------------------------
-# Architecture enforcement. The layer rules are a check, not a docstring:
-# `make architecture` fails the build when a dependency stops pointing inward.
-#
-# app.resources and app.main sit outside the three layers on purpose — the first
-# is the shared filesystem anchor, the second is the composition root — so the
-# layers contract below does not constrain them.
-# ---------------------------------------------------------------------------
+# Architecture enforcement -- deterministic checks for Clean Architecture rules from
+# code_architecture.md. Run with: make architecture
 [tool.importlinter]
 root_packages = ["app"]
 include_external_packages = true
 
+# Core rule: Infrastructure → Application → Domain (dependencies point inward)
 [[tool.importlinter.contracts]]
 name = "Clean Architecture layer dependencies point inward"
 type = "layers"
@@ -107,22 +114,28 @@ layers = [
     "app.domain",
 ]
 
+# Domain must not import any infrastructure libraries
 [[tool.importlinter.contracts]]
 name = "Domain must not import infrastructure libraries"
 type = "forbidden"
 source_modules = ["app.domain"]
-forbidden_modules = ["fastmcp", "mcp", "starlette", "httpx", "pydantic", "cryptography", "yaml"]
+forbidden_modules = ["pydantic", "fastmcp", "asyncpg", "httpx", "dotenv"]
 
+# Application must not import concrete infrastructure libraries
+# (pydantic is allowed — it's used for request/response DTOs)
 [[tool.importlinter.contracts]]
 name = "Application must not import concrete infrastructure libraries"
 type = "forbidden"
 source_modules = ["app.application"]
-forbidden_modules = ["fastmcp", "mcp", "starlette", "httpx", "cryptography", "yaml"]
+forbidden_modules = ["asyncpg", "httpx", "fastmcp", "dotenv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-pythonpath = ["src", "."]
+pythonpath = ["src"]
+# Delta: the `live` marker (HR6) -- the live suites never run in CI, only on the engineer's
+# machine with the engineer's .env. See tests/fixtures/tooling_deltas.toml [[pyproject]]
+# "tool.pytest.ini_options.markers".
 markers = ["live: hits the real Kissflow dev tenant (KF_APP) — skipped unless --run-live"]
 
 [tool.coverage.run]
@@ -131,9 +144,4 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
-# The boilerplate's threshold, and now genuinely met: 90.04% measured 2026-09-17, up from 89.88%
-# (which DISPLAYED as 90 but would have failed this gate). The gap closed by covering three things
-# that had no test at all rather than by padding: app/main.py, the composition root the container's
-# CMD runs, was at 0%; and both born-live publish guards in client.py plus the popup-container
-# guard in pages_live.py were code added without its check.
 fail_under = 90

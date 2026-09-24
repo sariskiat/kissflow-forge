@@ -1,0 +1,59 @@
+"""Fixture for dict_draft_in_domain_api. Three functions, each proving exactly one path of the
+scan, so a mutation that breaks only one path cannot hide behind another path also firing on the
+same function (G0 review finding 2):
+
+  * `only_rule_a` -- a parameter annotated with the `Draft` alias itself (rule a). Its parameter
+    is not named `draft`/`*_draft`, so rule (b) never also fires here.
+  * `only_rule_b` -- a parameter literally named `draft`, typed as a bare `dict[str, Any]`
+    (rule b). Its annotation never names the `Draft` alias, so rule (a) never also fires here.
+  * `only_quoted_string_annotation` -- a parameter annotated with the QUOTED string `"Draft"`,
+    reachable only if the scan parses a string annotation into its expression tree (rule a
+    again, but only through that parse) before it checks it.
+
+`FlowDraft` is the compliant target shape G9 moves to. Both `from_wire` and `to_wire` are
+excluded by name even though their own signatures use the `Draft` alias -- proving the name
+exclusion is the only reason they are not reported, not that their signatures happen to dodge
+every rule."""
+
+from __future__ import annotations
+
+from typing import Any
+
+Draft = dict[str, Any]
+
+
+def only_rule_a(change: Draft) -> None:
+    """VIOLATION: dict_draft_in_domain_api, rule (a) alone. 'change' is annotated with the
+    Draft alias; it is not named 'draft' or '*_draft', so rule (b) cannot also fire here."""
+    _ = change
+
+
+def only_rule_b(draft: dict[str, Any]) -> None:
+    """VIOLATION: dict_draft_in_domain_api, rule (b) alone. 'draft' is named 'draft' and typed
+    as a literal dict, never the Draft alias, so rule (a) cannot also fire here."""
+    _ = draft
+
+
+def only_quoted_string_annotation(x: "Draft") -> None:
+    """VIOLATION: dict_draft_in_domain_api, rule (a) reachable only through a quoted string
+    annotation. 'x' is not named 'draft'/'*_draft' (no rule b), and the Draft alias appears only
+    inside the quoted string, so this fires only when the scan parses the string first."""
+    _ = x
+
+
+class FlowDraft:
+    """The rich entity goal G9 introduces."""
+
+    def __init__(self, nodes: dict[str, Any]) -> None:
+        self._nodes = nodes
+
+    @classmethod
+    def from_wire(cls, draft: Draft) -> "FlowDraft":
+        """Compliant: from_wire is excluded by name. Without that exclusion this would still be
+        reported, through rule (a): 'draft' is annotated with the Draft alias itself."""
+        return cls(dict(draft))
+
+    def to_wire(self) -> Draft:
+        """Compliant: to_wire is excluded by name. Without that exclusion this would still be
+        reported, through rule (a): the return annotation is the Draft alias itself."""
+        return dict(self._nodes)

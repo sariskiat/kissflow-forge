@@ -1,0 +1,16 @@
+{
+  "new": [
+    {
+      "body": null,
+      "method": "GET",
+      "url": "https://dev-acme.kissflow.com/metadata/2/ACC1/ai/application/A1/copilot/conversations?_application_id=A1"
+    }
+  ],
+  "old": [
+    {
+      "body": null,
+      "method": "GET",
+      "url": "https://dev-acme.kissflow.com/metadata/2/ACC1/ai/application/A1/copilot/conversations?_application_id=A1"
+    }
+  ]
+}

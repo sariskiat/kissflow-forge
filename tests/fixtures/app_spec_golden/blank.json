@@ -1,0 +1,50 @@
+{
+  "app_name": "",
+  "approved": false,
+  "data_model": {
+    "computed": [],
+    "fields": [],
+    "sections": [],
+    "sequence": null,
+    "tables": []
+  },
+  "master_data": {
+    "confirmed_none": false,
+    "lists": []
+  },
+  "personas": {
+    "views": []
+  },
+  "problem_goal": {
+    "done_definition": "",
+    "goal": "",
+    "pain": "",
+    "result_values": [],
+    "terminal_states": []
+  },
+  "rework_loops": {
+    "confirmed_none": false,
+    "loops": []
+  },
+  "roles": {
+    "roles": []
+  },
+  "routing": {
+    "confirmed_none": false,
+    "points": []
+  },
+  "stages": {
+    "stages": []
+  },
+  "test_cases": {
+    "cases": []
+  },
+  "timing": {
+    "batch_days": [],
+    "reminders": [],
+    "sla_notes": ""
+  },
+  "visibility": {
+    "entries": []
+  }
+}

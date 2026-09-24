@@ -11,3 +11,10 @@ dist/
 bestonesource.html
 brokesoruce.html
 uat-key.json
+
+# Claude Code
+.claude/hooks/.coverage-attempt-count
+.claude/hooks/.lint-attempt-count
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/

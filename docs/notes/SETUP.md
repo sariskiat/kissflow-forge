@@ -39,10 +39,10 @@ You do NOT need to install Python separately — `uv` handles it. Run `uv sync` 
 `.venv` from `uv.lock`; after that every command is a plain `uv run ...` or `make ...`.
 
 ## Step 2 — create the secrets file `.env`  ← **ASK THE HUMAN**
-The server needs 5 secret values. There is a template at `kf.env.example`. Copy it to `.env`
+The server needs 5 secret values. There is a template at `.env.example`. Copy it to `.env`
 in `REPO`:
 ```bash
-cp kf.env.example .env
+cp .env.example .env
 ```
 Then fill these 5 keys in `.env`:
 ```
@@ -52,9 +52,9 @@ KF_DEV_ACCESS_KEY_ID=   # a secret
 KF_DEV_ACCESS_KEY_SECRET=  # a secret
 KF_APP=                 # which app to build in
 ```
-To build on a tenant that is NOT dev (no `dev-` in the URL), leave every `KF_DEV_*` line empty
-and fill `KF_DOMAIN`, `KF_ACCOUNT_ID`, `KF_ACCESS_KEY_ID`, `KF_ACCESS_KEY_SECRET` instead — same
-values, no dev-only guard. Same endpoints on every tenant; only domain + credentials change.
+The engine only ever talks to a dev tenant: `KF_DEV_DOMAIN` must be a plain hostname that
+contains `dev-`, and the server refuses to start on anything else. There is no non-dev
+opt-out — every tenant this engine ever builds against is a `dev-` one.
 **ASK THE HUMAN to get these 5 values from the person who gave them this folder** (send them
 privately — a DM or password manager, never a public chat). Paste the values in and save.
 ⚠️ `.env` holds live credentials. It is already git-ignored — never commit it, never paste the
@@ -117,7 +117,7 @@ docker build -t kissflow-forge:local .          # one-time, in REPO
 # receive:  docker load < kissflow-forge.tar.gz
 ```
 
-Then `cp kf.env.example kf.env`, fill the same 5 secrets, and point the MCP config at Docker
+Then `cp .env.example kf.env`, fill the same 5 secrets, and point the MCP config at Docker
 instead (`.mcp.json` for a project, or `~/.claude.json`), with the absolute path to `kf.env`:
 
 ```json

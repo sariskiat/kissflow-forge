@@ -27,7 +27,7 @@ A feature is done when ALL of these hold, in this order:
 
 ```bash
 git clone <our github url> kissflow-forge && cd kissflow-forge
-cp kf.env.example .env        # fill it, see below; never commit it
+cp .env.example .env          # fill it, see below; never commit it
 uv --version || curl -LsSf https://astral.sh/uv/install.sh | sh
 uv run pytest -q   # must be green before you touch anything
 claude mcp add kissflow-forge -- sh -lc "cd '$(pwd)' && set -a; . ./.env; set +a; exec uv run mcp-server"
@@ -117,7 +117,9 @@ copy, `test_delete_fields_deletes_a_user_field_cluster_rather_than_refusing_it`
 c = FakeClient(_form_with(FieldSpec(name="Owner", type=FieldType.USER)))
 rep = delete_fields(c, "F1", ("Owner",), kind="form")
 assert not [
-    v for v in c.draft.values() if isinstance(v, dict) and v.get("Kind") == "QueryDefinition"
+    v
+    for v in c.draft.values()
+    if isinstance(v, dict) and v.get("Kind") == "QueryDefinition"
 ]
 ```
 

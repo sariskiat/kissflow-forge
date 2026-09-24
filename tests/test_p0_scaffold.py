@@ -26,7 +26,11 @@ def _repo_text_files():
 
 
 def test_blindness_no_real_app_tokens():
-    hits = [str(p) for p in _repo_text_files() if FORBIDDEN.search(p.read_text(errors="ignore"))]
+    hits = [
+        str(p)
+        for p in _repo_text_files()
+        if FORBIDDEN.search(p.read_text(errors="ignore"))
+    ]
     assert hits == [], f"real-app knowledge leaked into: {hits}"
 
 
@@ -40,31 +44,30 @@ def test_no_kfmcp_references():
 
 
 def test_client_requires_explicit_app(monkeypatch):
-    """App is no longer required at config load — it can be chosen per call (app_id) or at
-    runtime (forge_use_app). But an app IS still required to actually build: the guard moved to
-    the _client() chokepoint, which fails loud (require_app=True) when no app is resolvable."""
-    import app.infrastructure.mcp.server as srv
-    from app.infrastructure.kissflow.client import Err, KfConfig
+    """App is no longer required at config load — it can be chosen per call (app_id) or via
+    the `KF_APP` env default. But a use case that needs an app still refuses loud when none
+    resolves ("The app id", `brief_stage_d_common.md`) -- the guard moved from the old
+    `server._client()` chokepoint to `Settings.resolve_app_id` plus each family's own
+    `require_app_id` helper, proven per-tool by every `tests/unit/application/use_cases/*/
+    test__app_id.py`/`test_forge_*.py` "no app selected" case; this test pins the config-level
+    half of that rule."""
+    from app.infrastructure.config.settings import load_settings
 
     monkeypatch.setenv("KF_DEV_ACCESS_KEY_ID", "k")
     monkeypatch.setenv("KF_DEV_ACCESS_KEY_SECRET", "s")
     monkeypatch.setenv("KF_DEV_ACCOUNT_ID", "a")
     monkeypatch.setenv("KF_DEV_DOMAIN", "dev-example.test")
     monkeypatch.delenv("KF_APP", raising=False)
+    monkeypatch.delenv("MCP_HTTP", raising=False)
 
-    # config load now succeeds with an empty app_id (no boot-time lock)
-    cfg = KfConfig.from_env()
-    assert isinstance(cfg, KfConfig) and cfg.app_id == ""
-    # a per-call override flows through
-    overridden = KfConfig.from_env(app_id_override="App_X")
-    assert isinstance(overridden, KfConfig) and overridden.app_id == "App_X"
-    # but building a client for a build tool still refuses without a resolved app
-    guarded = srv._client()
-    assert isinstance(guarded, Err) and "app" in guarded.message.lower()
-    # the discovery path (list/use app) is allowed with no app selected
-    assert not isinstance(srv._client(require_app=False), Err)
-    # and a per-call app_id satisfies the guard
-    assert not isinstance(srv._client("App_X"), Err)
+    # config load now succeeds with no app configured at all (no boot-time lock)
+    settings = load_settings()
+    assert settings.kf_app is None
+    # with no per-call override and no KF_APP default, resolution is empty -- the empty
+    # string every family's own require_app_id helper refuses on
+    assert settings.resolve_app_id(None) == ""
+    # a per-call override flows through regardless of the configured default
+    assert settings.resolve_app_id("App_X") == "App_X"
 
 
 def test_image_declares_forwarded_allow_ips():
@@ -79,7 +82,23 @@ def test_image_declares_forwarded_allow_ips():
 
 
 def test_server_exposes_original_8_tools():
-    import app.infrastructure.mcp.server as srv
+    import asyncio
+    from collections.abc import AsyncIterator
+    from contextlib import asynccontextmanager
+    from typing import Any
+
+    from fastmcp import Client, FastMCP
+
+    from app.infrastructure.mcp.server import create_server
+
+    @asynccontextmanager
+    async def _fake_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
+        del server
+        yield {"resources": None, "settings": None}
+
+    async def _tool_names() -> set[str]:
+        async with Client(create_server(_fake_lifespan)) as client:
+            return {t.name for t in await client.list_tools()}
 
     expected = {
         "kf_list_field_types",
@@ -91,6 +110,6 @@ def test_server_exposes_original_8_tools():
         "kf_set_step_visibility",
         "kf_publish",
     }
-    found = {name for name in dir(srv) if name.startswith("kf_")}
+    found = asyncio.run(_tool_names())
     missing = expected - found
-    assert not missing, f"tools missing from server module: {missing}"
+    assert not missing, f"tools missing from the server's tool surface: {missing}"

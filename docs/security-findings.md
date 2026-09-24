@@ -1,9 +1,23 @@
 # Security findings — dev-kissflow-mcp deployment
 
-**Status: historical record and remediation note.** Finding A described the former unauthenticated
-HTTP deployment. The application now fails closed in HTTP mode unless Entra configuration and the
-OAuth signing key are present; the deployment wizard supplies those values through Secret Manager.
-Finding B remains a credential-rotation action for the tenant administrator.
+**Current status, 2026-09-23.** This file preserves the 2026-08-19 incident
+evidence below. It does not describe the refactored server's current auth path.
+The server no longer runs its own Entra provider. SRE's gateway must sign users
+in and forward the Kissflow key headers. That gateway behavior and the running
+endpoint have not been verified for the refactored version. An HTTP tool call
+without the two key headers fails before a Kissflow request, but that does not
+replace gateway sign-in. Finding B remains a credential-rotation action for the
+tenant administrator.
+
+Two pre-existing caller path risks remain open before HTTP deployment:
+`out_dir` in four design tools can write where the process has access, and
+`forge_create_flow` can read a caller-chosen `extra["template_path"]`. The
+precise scope and possible controls are in section 14 of
+`docs/specs/refactor-to-mcp-boilerplate.md`.
+
+**Historical record below (2026-08-19):** names, routes, code paths, tool
+counts, and deployment claims below are snapshots from that date. Check the
+running service before treating any of them as current.
 
 | | Finding | Recorded | Owner | Status |
 |---|---|---|---|---|

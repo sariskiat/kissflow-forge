@@ -1,0 +1,28 @@
+{
+  "new": [
+    {
+      "body": [
+        {
+          "Kind": "AppRole",
+          "Name": "Reviewers",
+          "_id": "Ro1"
+        }
+      ],
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/process/F1/member/batch?_application_id=A1"
+    }
+  ],
+  "old": [
+    {
+      "body": [
+        {
+          "Kind": "AppRole",
+          "Name": "Reviewers",
+          "_id": "Ro1"
+        }
+      ],
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/process/F1/member/batch?_application_id=A1"
+    }
+  ]
+}

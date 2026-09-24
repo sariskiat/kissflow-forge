@@ -1,0 +1,20 @@
+"""The FlowRepository port. Both adapter_methods_without_port and port_methods_without_use_case
+read this module: it is the port base infrastructure/kissflow/flow.py implements, and the port
+whose two abstract methods G11's use cases are checked against."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any
+
+
+class FlowRepository(ABC):
+    """One ABC per family, CLAUDE.md > Ports."""
+
+    @abstractmethod
+    def get_draft(self, flow_id: str) -> dict[str, Any]:
+        """Read the current draft. Compliant: a use case calls this below."""
+
+    @abstractmethod
+    def publish(self, flow_id: str) -> None:
+        """Publish the flow. VIOLATION: port_methods_without_use_case -- no use case calls this."""

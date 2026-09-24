@@ -76,16 +76,20 @@ def test_capability_doc_schema(path: Path) -> None:
     for param in params:
         missing_p = REQUIRED_PARAM_KEYS - param.keys()
         assert not missing_p, f"param {param.get('name')!r} missing {sorted(missing_p)}"
-        assert isinstance(param["required"], bool), f"param {param['name']}: required must be bool"
+        assert isinstance(param["required"], bool), (
+            f"param {param['name']}: required must be bool"
+        )
         assert param["status"] in STATUS_ORDER, f"param {param['name']}: bad status"
         for list_key in ("constraints", "depends_on"):
             entries = param.get(list_key, [])
-            assert isinstance(entries, list) and all(isinstance(entry, str) for entry in entries), (
-                f"param {param['name']}: {list_key} must be a list of strings"
-            )
+            assert isinstance(entries, list) and all(
+                isinstance(entry, str) for entry in entries
+            ), f"param {param['name']}: {list_key} must be a list of strings"
 
     if params:
-        weakest = min((param["status"] for param in params), key=STATUS_ORDER.__getitem__)
+        weakest = min(
+            (param["status"] for param in params), key=STATUS_ORDER.__getitem__
+        )
         assert meta["status"] == weakest, (
             f"status {meta['status']!r} must equal weakest param status {weakest!r}"
         )
@@ -100,4 +104,6 @@ def test_capability_doc_schema(path: Path) -> None:
     for heading in REQUIRED_HEADINGS:
         assert heading in body, f"missing required heading {heading!r}"
     if "differs" in norm.values():
-        assert "## Module diffs" in body, "module marked `differs` needs a Module diffs section"
+        assert "## Module diffs" in body, (
+            "module marked `differs` needs a Module diffs section"
+        )

@@ -5,42 +5,45 @@ convenience that does NOT ship when the MCP server deploys, so a remote user's C
 but not the doctrine. Vendoring the skill at `skills/kissflow-forge-builder/SKILL.md` version-controls
 it with the codebase, and this module hands its text back over the wire so the brain travels with the
 tools — no local file required.
+
+`read_playbook` is the `DocsReader.playbook` read (spec G13): plain data, and a missing
+or blank file raises `ApplicationError(code=NOT_FOUND)`.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
+from app.application.exceptions import NOT_FOUND, ApplicationError
 from app.resources import REPO_ROOT, SKILLS_DIR
 
 PLAYBOOK_PATH: Path = SKILLS_DIR / "kissflow-forge-builder" / "SKILL.md"
 
 
-def load_playbook() -> dict[str, Any]:
-    """Return the vendored builder playbook's full text. OFFLINE, read-only, no credentials.
+def read_playbook(path: Path = PLAYBOOK_PATH, root: Path = REPO_ROOT) -> dict[str, str]:
+    """Read the vendored builder playbook as plain data. OFFLINE, read-only.
 
-    `text` carries the whole skill (THE RULE, the numbered build order, the intent->tool map, the
-    refuse table, the copilot fallback). A missing/empty vendored file lands in `isError: True` with a
-    stated reason rather than returning a silently blank brain — the same fail-loud discipline as every
-    other tool in this pack.
+    Args:
+        path: The playbook file. Defaults to the vendored `SKILL.md`, anchored
+            on `app.resources`.
+        root: The directory `source` is reported relative to. Defaults to the
+            repo root.
+
+    Returns:
+        `{"text": <the whole file>, "source": <path relative to root>}`.
+
+    Raises:
+        ApplicationError: `code=NOT_FOUND` when the file is missing, or when
+            its text is blank -- a stated reason, never a silently blank brain.
     """
-    if not PLAYBOOK_PATH.is_file():
-        return {
-            "isError": True,
-            "text": "",
-            "error": f"vendored playbook not found at {PLAYBOOK_PATH.relative_to(REPO_ROOT)}",
-        }
-    text = PLAYBOOK_PATH.read_text()
+    source = str(path.relative_to(root))
+    if not path.is_file():
+        raise ApplicationError(
+            f"vendored playbook not found at {source}", code=NOT_FOUND
+        )
+    text = path.read_text()
     if not text.strip():
-        return {
-            "isError": True,
-            "text": "",
-            "error": f"vendored playbook is empty at {PLAYBOOK_PATH.relative_to(REPO_ROOT)}",
-        }
-    return {
-        "isError": False,
-        "text": text,
-        "chars": len(text),
-        "source": str(PLAYBOOK_PATH.relative_to(REPO_ROOT)),
-    }
+        raise ApplicationError(
+            f"vendored playbook is empty at {source}", code=NOT_FOUND
+        )
+    return {"text": text, "source": source}

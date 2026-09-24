@@ -23,7 +23,7 @@ Claude จะเทียบ node ต่อ node กับสิ่งที่�
 
 ### `.env` ที่ต้องมี (รัน server เองในเครื่อง)
 
-`cp kf.env.example .env` แล้วเติม 5 ค่านี้ (ขอจากคนที่ดูแล dev tenant ส่งทาง DM ไม่ใช่แชทรวม):
+`cp .env.example .env` แล้วเติม 5 ค่านี้ (ขอจากคนที่ดูแล dev tenant ส่งทาง DM ไม่ใช่แชทรวม):
 
 ```bash
 KF_DEV_DOMAIN=              # โดเมน dev ต้องมีคำว่า dev- ไม่งั้น engine ปฏิเสธ

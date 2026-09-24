@@ -38,9 +38,19 @@ HEADINGS = [
 # anywhere in the doc — proves content lives under the right heading.
 SECTION_MARKERS: dict[str, list[str]] = {
     "## THE RULE": ["prove nothing", "ui-built", "have not checked"],
-    "## Node-graph invariants": ["6-unit", "createdat", "allowformatting", "capitalised"],
+    "## Node-graph invariants": [
+        "6-unit",
+        "createdat",
+        "allowformatting",
+        "capitalised",
+    ],
     "## Workflow": ["strands in-flight", "gototask", "issuspended", "zero permissions"],
-    "## Expressions": ["zero-arg function", "one of three", "case-sensitive", "six edits"],
+    "## Expressions": [
+        "zero-arg function",
+        "one of three",
+        "case-sensitive",
+        "six edits",
+    ],
     "## Gate polarity": ["fail closed", "escapes the loop", "stays in the loop"],
     "## Tables": ["nested model", "maxrow", "cannot live inside a section"],
     "## Field events": ["async () =>", "kfsdk", "source field"],
@@ -64,7 +74,12 @@ SECTION_MARKERS: dict[str, list[str]] = {
     ],
     "## Item data plane": ["read back", "aiid trap", "clears nothing"],
     "## Pages": ["raw hex", "viewing as", "only truth surface", "stepmetrics"],
-    "## Build order": ["output-invariant audit", "403/500", "only 404 means wrong door", "dry-run"],
+    "## Build order": [
+        "output-invariant audit",
+        "403/500",
+        "only 404 means wrong door",
+        "dry-run",
+    ],
 }
 
 HEADING_LINE = re.compile(r"^(## .+?)[ \t]*$", re.MULTILINE)
@@ -78,8 +93,12 @@ def _doc_text() -> str:
     file's text. A section may live in either place; what must not happen is
     its content disappearing.
     """
-    assert DOC_PATH.exists(), f"missing {DOC_PATH} — the engine manual must exist at worktree root"
-    assert SECTIONS_DIR.is_dir(), f"missing {SECTIONS_DIR} — the split engine sections must exist"
+    assert DOC_PATH.exists(), (
+        f"missing {DOC_PATH} — the engine manual must exist at worktree root"
+    )
+    assert SECTIONS_DIR.is_dir(), (
+        f"missing {SECTIONS_DIR} — the split engine sections must exist"
+    )
     parts = [DOC_PATH.read_text(encoding="utf-8")]
     section_files = sorted(SECTIONS_DIR.glob("*.md"))
     assert section_files, f"no section files in {SECTIONS_DIR}"

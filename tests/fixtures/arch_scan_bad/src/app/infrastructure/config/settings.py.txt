@@ -1,0 +1,11 @@
+"""The one module allowed to read the environment directly (CLAUDE.md > Engine manual, G2)."""
+
+from __future__ import annotations
+
+import os
+
+
+def dev_domain() -> str:
+    """Compliant: env_reads_outside_settings must not report this file, even though it reads
+    os.environ directly -- this is the one file the scan excludes by path."""
+    return os.environ.get("KF_DEV_DOMAIN", "")
