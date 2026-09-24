@@ -71,3 +71,8 @@ SweepScope = Literal["apps", "flows", "pages", "roles", "lists", "all"]
 # `design.confirm.is_approved` accepts exactly one literal and nothing
 # else — not "Approve", not "approved", not a revise request.
 ApprovalDecision = Literal["approve"]
+
+# The skills `forge_playbook` serves over the MCP, one vendored SKILL.md each:
+# builder = the build order, design = the business-owner interview,
+# usage = how to drive this MCP. Closed so no caller string reaches a path.
+PlaybookName = Literal["builder", "design", "usage"]

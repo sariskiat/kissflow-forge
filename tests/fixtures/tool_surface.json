@@ -1490,10 +1490,21 @@
       }
     },
     "forge_playbook": {
-      "docstring_sha256": "780033ff9586afa168bfdc35bc8362670f3313d6629392443b05ea92770c08e1",
+      "docstring_sha256": "be47c4eec301141ea897add7d546671363d9f7df5ac9bc9e76308a388279063a",
       "parameters": {
         "additionalProperties": false,
-        "properties": {},
+        "properties": {
+          "skill": {
+            "default": "builder",
+            "description": "Which vendored skill to return: 'builder' (default) = build order; 'usage' = how to drive this MCP; 'design' = design an app with a business owner.",
+            "enum": [
+              "builder",
+              "design",
+              "usage"
+            ],
+            "type": "string"
+          }
+        },
         "type": "object"
       }
     },

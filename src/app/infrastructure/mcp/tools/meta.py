@@ -11,7 +11,10 @@ merge-distance from. `forge_sweep` (`tools/app.py`), `forge_doctor` (`tools/flow
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastmcp import Context, FastMCP
+from pydantic import Field
 
 from app.application.models.requests.meta.forge_capabilities_request import (
     ForgeCapabilitiesRequest,
@@ -34,6 +37,7 @@ from app.application.models.responses.meta.kf_list_field_types_response import (
 from app.application.use_cases.meta.forge_capabilities import ForgeCapabilities
 from app.application.use_cases.meta.forge_playbook import ForgePlaybook
 from app.application.use_cases.meta.kf_list_field_types import KfListFieldTypes
+from app.domain.value_objects.kinds import PlaybookName
 from app.infrastructure.mcp.tools import _shared
 
 
@@ -51,17 +55,34 @@ def _register_all(mcp: FastMCP) -> None:
     are OFFLINE (no Kissflow tenant, no key pair) -- Stage D group 9."""
 
     @mcp.tool(title="Builder playbook", annotations=_shared.OFFLINE_PURE)
-    async def forge_playbook(*, ctx: Context) -> ForgePlaybookResponse:
+    async def forge_playbook(
+        skill: Annotated[
+            PlaybookName,
+            Field(
+                description=(
+                    "Which vendored skill to return: 'builder' (default) = build "
+                    "order; 'usage' = how to drive this MCP; 'design' = design an "
+                    "app with a business owner."
+                )
+            ),
+        ] = "builder",
+        *,
+        ctx: Context,
+    ) -> ForgePlaybookResponse:
         """OFFLINE, read-only: return the full builder PLAYBOOK — the doctrine a fresh Claude needs to
         drive this engine correctly (THE RULE that a 200/publish proves nothing, the proven numbered
         build order, the intent->tool map, the refuse-loudly table, the copilot fallback). Call this
         FIRST when you have the forge_* tools but no local kissflow-forge-builder skill loaded — it is
         the brain that ships with the MCP so it travels even to a remote user with no local files. Deep
         wire shapes it references live in `forge_capabilities(<id>)`.
+
+        `skill` selects one of three vendored skills: "builder" (default) = the build order above;
+        "usage" = how to drive this MCP safely (session start, evidence, reading results, reporting);
+        "design" = interview a business owner in plain words and turn the need into an approved spec.
         """  # noqa: E501
         return await _shared.run_use_case(
             ctx,
-            build_request=lambda: ForgePlaybookRequest(),
+            build_request=lambda: ForgePlaybookRequest(skill=skill),
             build_use_case=lambda resources: ForgePlaybook(resources.docs),
             needs_kissflow=False,
         )

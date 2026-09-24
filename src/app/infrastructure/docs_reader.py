@@ -14,17 +14,18 @@ import asyncio
 from typing import Any
 
 from app.application.interfaces.docs import DocsReader
+from app.domain.value_objects.kinds import PlaybookName
 from app.infrastructure.capabilities import find_capabilities
-from app.infrastructure.playbook import read_playbook
+from app.infrastructure.playbook import PLAYBOOKS, read_playbook
 
 
 class DocsReaderAdapter(DocsReader):
     """Implements `DocsReader` over `read_playbook`/`find_capabilities`, each run in a
     worker thread."""
 
-    async def playbook(self) -> dict[str, str]:
+    async def playbook(self, skill: PlaybookName = "builder") -> dict[str, str]:
         """See `DocsReader.playbook`."""
-        return await asyncio.to_thread(read_playbook)
+        return await asyncio.to_thread(read_playbook, PLAYBOOKS[skill])
 
     async def capabilities(self, query: str = "") -> dict[str, Any]:
         """See `DocsReader.capabilities`."""

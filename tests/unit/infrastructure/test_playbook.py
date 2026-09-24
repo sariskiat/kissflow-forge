@@ -17,7 +17,7 @@ import pytest
 from app.application.exceptions import NOT_FOUND, ApplicationError
 from app.application.interfaces.docs import DocsReader
 from app.infrastructure.docs_reader import DocsReaderAdapter
-from app.infrastructure.playbook import PLAYBOOK_PATH, read_playbook
+from app.infrastructure.playbook import PLAYBOOK_PATH, PLAYBOOKS, read_playbook
 from app.resources import REPO_ROOT, SKILLS_DIR
 
 _SOURCE = "skills/kissflow-forge-builder/SKILL.md"
@@ -109,3 +109,15 @@ def test_a_blank_playbook_is_not_found_with_todays_message(
 
     assert info.value.code == NOT_FOUND
     assert info.value.message == f"vendored playbook is empty at {_SOURCE}"
+
+
+def test_every_served_skill_name_maps_to_its_own_vendored_file() -> None:
+    """The closed name set and the file map cannot drift: each name has one file,
+    no two names share a file, and every file ships with the repo."""
+    assert set(PLAYBOOKS) == {"builder", "design", "usage"}
+    assert PLAYBOOKS["builder"] == PLAYBOOK_PATH
+    assert len(set(PLAYBOOKS.values())) == len(PLAYBOOKS)
+    for path in PLAYBOOKS.values():
+        assert path.is_file(), path
+        assert path.is_relative_to(SKILLS_DIR)
+        assert read_playbook(path)["text"].startswith("---\nname: ")

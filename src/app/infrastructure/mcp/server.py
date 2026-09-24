@@ -61,6 +61,8 @@ than the write API — a flow can accept every write, publish clean, and still r
 screen. Trust a read-back, never a status code. Run forge_doctor after every edit.
 
 Call forge_playbook FIRST for the build order, the intent->tool map and the refuse-loudly table.
+forge_playbook(skill="usage") covers how to drive this MCP; forge_playbook(skill="design") covers
+designing an app with a business owner before any build.
 Deep wire shapes are in forge_capabilities(<id>)."""
 
 

@@ -24,10 +24,10 @@ class ForgePlaybook:
         self._docs = docs
 
     async def execute(self, request: ForgePlaybookRequest) -> ForgePlaybookResponse:
-        """Read the vendored playbook and report its size.
+        """Read the requested vendored skill and report its size.
 
         Args:
-            request: The validated `forge_playbook` request (no fields).
+            request: The validated `forge_playbook` request: which skill.
 
         Returns:
             The playbook text, its character count, and its repo-relative
@@ -37,8 +37,7 @@ class ForgePlaybook:
             ApplicationError: `code=NOT_FOUND` when the vendored file is
                 missing or blank (raised by the port; propagates unchanged).
         """
-        del request
-        found = await self._docs.playbook()
+        found = await self._docs.playbook(request.skill)
         return ForgePlaybookResponse(
             text=found["text"], chars=len(found["text"]), source=found["source"]
         )

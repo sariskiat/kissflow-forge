@@ -1,4 +1,5 @@
-"""Serve the vendored builder playbook (the kissflow-forge-builder skill) over the MCP.
+"""Serve the vendored skills over the MCP: the builder playbook by default, plus the
+design and usage skills named in `PLAYBOOKS`.
 
 The skill is the BRAIN a fresh Claude needs to drive this engine; `~/.claude/skills` is a local-dev
 convenience that does NOT ship when the MCP server deploys, so a remote user's Claude gets the tools
@@ -15,9 +16,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.application.exceptions import NOT_FOUND, ApplicationError
+from app.domain.value_objects.kinds import PlaybookName
 from app.resources import REPO_ROOT, SKILLS_DIR
 
 PLAYBOOK_PATH: Path = SKILLS_DIR / "kissflow-forge-builder" / "SKILL.md"
+
+# One fixed file per closed name. The caller picks a KEY, never a path, so no
+# request string is ever joined into a filesystem path.
+PLAYBOOKS: dict[PlaybookName, Path] = {
+    "builder": PLAYBOOK_PATH,
+    "design": SKILLS_DIR / "kissflow-help-design" / "SKILL.md",
+    "usage": SKILLS_DIR / "kissflow-forge-mcp" / "SKILL.md",
+}
 
 
 def read_playbook(path: Path = PLAYBOOK_PATH, root: Path = REPO_ROOT) -> dict[str, str]:

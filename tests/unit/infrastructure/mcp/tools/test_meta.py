@@ -126,13 +126,13 @@ async def test_forge_playbook_returns_the_response_without_is_error() -> None:
         "chars": 11,
         "source": _SOURCE,
     }
-    assert docs.calls == [("playbook", (), {})]
+    assert docs.calls == [("playbook", (), {"skill": "builder"})]
 
 
 @pytest.mark.asyncio
 async def test_forge_playbook_not_found_becomes_a_tool_error() -> None:
     class _MissingPlaybook(FakeDocsReader):
-        async def playbook(self) -> dict[str, str]:
+        async def playbook(self, skill: str = "builder") -> dict[str, str]:
             raise ApplicationError(
                 f"vendored playbook not found at {_SOURCE}", code=NOT_FOUND
             )
@@ -153,7 +153,7 @@ async def test_forge_playbook_runs_with_no_key_pair() -> None:
         result = await client.call_tool("forge_playbook", {})
 
     assert result.is_error is False
-    assert docs.calls == [("playbook", (), {})]
+    assert docs.calls == [("playbook", (), {"skill": "builder"})]
 
 
 # ---- forge_capabilities ------------------------------------------------------------

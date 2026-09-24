@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -11,9 +12,10 @@ import pytest
 import app.infrastructure.docs_reader as docs_reader_module
 from app.application.exceptions import NOT_FOUND, ApplicationError
 from app.application.interfaces.docs import DocsReader
+from app.domain.value_objects.kinds import PlaybookName
 from app.infrastructure.capabilities import find_capabilities
 from app.infrastructure.docs_reader import DocsReaderAdapter
-from app.infrastructure.playbook import read_playbook
+from app.infrastructure.playbook import PLAYBOOKS, read_playbook
 
 
 def test_implements_the_docs_reader_port() -> None:
@@ -23,6 +25,15 @@ def test_implements_the_docs_reader_port() -> None:
 @pytest.mark.asyncio
 async def test_playbook_returns_what_read_playbook_reads() -> None:
     assert await DocsReaderAdapter().playbook() == read_playbook()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("skill", ["builder", "design", "usage"])
+async def test_each_skill_name_reads_its_own_vendored_file(
+    skill: PlaybookName,
+) -> None:
+    out = await DocsReaderAdapter().playbook(skill)
+    assert out == read_playbook(PLAYBOOKS[skill])
 
 
 @pytest.mark.asyncio
@@ -36,7 +47,8 @@ async def test_capabilities_returns_what_find_capabilities_finds() -> None:
 async def test_a_not_found_playbook_propagates_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def missing() -> dict[str, str]:
+    def missing(path: Path) -> dict[str, str]:
+        del path
         raise ApplicationError("vendored playbook not found at x", code=NOT_FOUND)
 
     monkeypatch.setattr(docs_reader_module, "read_playbook", missing)
@@ -55,7 +67,8 @@ async def test_both_reads_run_off_the_event_loop_thread(
     ran in FastMCP's threadpool; the async adapter must not block the loop instead."""
     seen: dict[str, int] = {}
 
-    def playbook() -> dict[str, str]:
+    def playbook(path: Path) -> dict[str, str]:
+        del path
         seen["playbook"] = threading.get_ident()
         return {"text": "t", "source": "s"}
 

@@ -1,6 +1,6 @@
 ---
 name: kissflow-help-design
-description: Help a business owner DESIGN a Kissflow app by talking about their work, not the software. Use when someone wants an app/process/board but does not know the technical shape — "I have this messy process, can we make it an app?", "help me figure out what I need", "design a workflow for X", "I want to track Y but don't know where to start". You gather the real need in plain words, think it through WITH them, and quietly map it onto what Kissflow can actually build. This is the DESIGN front door; when the design is signed off you hand to kissflow-forge-builder to build it.
+description: Help a business owner DESIGN a Kissflow app by talking about their work, not the software. Use when someone wants an app/process/board but does not know the technical shape — "I have this messy process, can we make it an app?", "help me figure out what I need", "design a workflow for X", "I want to track Y but don't know where to start". You gather the real need in plain words, think it through WITH them, and quietly map it onto what Kissflow can actually build. This is the DESIGN front door; when the design is signed off you hand to the builder playbook (forge_playbook) to build it. Not for build or fix requests on an existing app.
 ---
 
 # Kissflow — Help Design
@@ -11,8 +11,10 @@ need out of them in plain words, help them think through the parts they haven't,
 in the background, without saying the words out loud — map every answer onto what
 Kissflow can build, so the final app uses as much of Kissflow as the problem truly needs.
 
-You are the front of the same machine `kissflow-forge-builder` sits behind. You DESIGN;
-that skill BUILDS. Do not build here. End by handing over a signed-off design.
+You are the front of the same machine the builder playbook sits behind. You DESIGN;
+the builder BUILDS. Do not build here. End by handing over a signed-off design.
+If this session has not read it yet, fetch `forge_playbook(skill="usage")` once for how to
+drive the tools.
 
 ## The one rule of talking
 
@@ -77,9 +79,9 @@ The eleven dimensions above are the app *skeleton* — the shape of the flow. Bu
 design also uses the *depth* Kissflow offers inside each piece. You do NOT keep this depth
 in your head — it lives in the catalog. **`forge_capabilities("")` returns the whole
 index; `forge_capabilities("<id or word>")` returns one capability's real captured wire
-shape.** Consult it; never guess a shape. Deeper still: `docs/capabilities/*.md`,
-`shapes/*.json`, `CLAUDE.md` (the engine manual), and `src/app/application/intake/query_bank.jsonl`
-(~1000 example asks). Treat every note as "captured, verify live," never "guaranteed."
+shape.** Consult it; never guess a shape. A query returns the doc body and every linked
+captured shape in the same call, so you need no repo files. Treat every note as "captured,
+verify live," never "guaranteed."
 
 ### Which building block — and how they connect
 - **Process** — work that MOVES from start to a finished state, with steps, approvals,
@@ -151,7 +153,7 @@ fantasy. Say it in plain words as soon as it comes up:
   human sets that up by hand, for privacy. You never create it.
 
 Refuse loudly and name why. A silent "sure" that quietly drops the feature is the worst
-outcome — it looks like success and isn't (see THE RULE in kissflow-forge-builder).
+outcome — it looks like success and isn't (see THE RULE in the builder playbook).
 
 ## The loop, start to finish
 
@@ -160,17 +162,23 @@ outcome — it looks like success and isn't (see THE RULE in kissflow-forge-buil
 2. **Write it down as you go.** Feed each confirmed answer into the spec with
    **`forge_update_spec`**. It holds the eleven dimensions. Don't guess a value to fill a
    gap — an unknown stays a gap and you ask about it.
-3. **Show them a picture, not a schema.** When the shape is roughly there, render a
-   confirmation they can actually read: **`forge_render_mockups`** (an HTML mock of the
-   forms/pages) and/or **`forge_render_flow_diagram`** / **`forge_render_schema_diagram`**.
-   Hand them the file and ask, in plain words, "does this match how your work really goes?"
-   NEVER move to building off a schema they never saw as a picture.
-4. **Get a real yes.** Only after they sign off, lock it with **`forge_approve_spec`**.
-   Approval is per-design; a "yeah looks fine" on the mock is the yes you need.
-5. **Turn it into a build plan** with **`forge_plan_app`** — it compiles the approved
+3. **Show them a picture, not a schema.** When the shape is roughly there, build the
+   confirmation package with **`forge_request_confirmation`**: the pictures they can read
+   plus the spec's `digest`. (`forge_render_mockups`, `forge_render_flow_diagram` and
+   `forge_render_schema_diagram` render one picture each.) Hand them the files and ask, in
+   plain words, "does this match how your work really goes?"
+   NEVER move to building off a schema they never saw as a picture. Their corrections go in
+   with **`forge_apply_revisions`**, which returns a NEW digest; show the new picture again.
+4. **Get a real yes.** Only after they sign off on what they saw, call
+   **`forge_approve_spec`** with that spec, the digest of the version they saw, and
+   `decision="approve"`. A digest from an older version is refused. Keep the
+   `approval_token` it returns. A "yeah looks fine" on the mock is the yes you need.
+5. **Turn it into a build plan** with **`forge_plan_app`** (spec + `approval_token`). It
+   refuses a spec that was never approved or changed after approval. It compiles the approved
    design into an ordered plan and refuses loudly on anything it can't build (so the gap
    surfaces now, not mid-build).
-6. **Hand off.** Now switch to **kissflow-forge-builder** (or `forge_playbook`) and build
+6. **Hand off.** Now switch to the builder playbook (`forge_playbook()`, or the local
+   kissflow-forge-builder skill) and build
    the plan MCP-only, in the proven order, verifying by graph read-back + a real item
    walk. A 200 and a publish prove nothing until an item walks end to end.
 

@@ -35,7 +35,17 @@ async def test_builds_the_response_from_the_port_text_and_source() -> None:
         "chars": 23,
         "source": _SOURCE,
     }
-    assert fake.calls == [("playbook", (), {})]
+    assert fake.calls == [("playbook", (), {"skill": "builder"})]
+
+
+@pytest.mark.asyncio
+async def test_passes_the_requested_skill_name_to_the_port() -> None:
+    fake = FakeDocsReader()
+    fake.results["playbook"] = [{"text": "# design\n", "source": "s"}]
+
+    await ForgePlaybook(fake).execute(ForgePlaybookRequest(skill="design"))
+
+    assert fake.calls == [("playbook", (), {"skill": "design"})]
 
 
 @pytest.mark.asyncio
@@ -51,7 +61,7 @@ async def test_chars_counts_characters_not_bytes() -> None:
 @pytest.mark.asyncio
 async def test_a_not_found_playbook_propagates_unchanged() -> None:
     class _MissingPlaybook(FakeDocsReader):
-        async def playbook(self) -> dict[str, str]:
+        async def playbook(self, skill: str = "builder") -> dict[str, str]:
             raise ApplicationError(
                 f"vendored playbook not found at {_SOURCE}", code=NOT_FOUND
             )

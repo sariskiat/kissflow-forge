@@ -8,7 +8,9 @@ description: Build or edit a Kissflow app, process, board, dataform, page, or ro
 You are a fresh Claude with ONLY the kissflow-forge MCP connected. This is the whole
 playbook. The engine writes an **undocumented** internal builder graph; every rule here
 was captured live, not read off a schema. When unsure of a wire shape, do not guess —
-call `forge_capabilities(query)`.
+call `forge_capabilities(query)`. Two companion skills travel with the same tool:
+`forge_playbook(skill="usage")` for how to drive the MCP, and `forge_playbook(skill="design")`
+when the user does not yet know what to build.
 
 ## THE RULE — the one thing you must never forget
 
@@ -78,18 +80,22 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
    list writes 200 and then dies on publish with a bare 500 MetadataError and zero diagnostics.
 
 **0. Create the flow — `forge_create_process` (default `from_template=True`), `forge_create_flow`, or `forge_create_app` + `forge_create_page`.**
-   `from_template=True` (the default) clones a known-good identity/initiate shell with one
-   "Manager Approve" step — `steps=` is IGNORED; rebuild the real workflow in step 5. Pass
+   `from_template=True` (the default) builds the FULL production process template: every field,
+   its formulas, validations, conditional visibility and lookups, the layout, and a "Manager
+   Approve" workflow. Its approver is an AppRole named "<name> Role" (reused or created) that is
+   granted as a flow member; add users to it before anyone can submit. `forge_create_process`
+   takes no `steps`; replace the workflow with `forge_build_workflow` in step 4. Pass
    `from_template=False` only for a bare scaffold. ⚠️ THE DEFAULT IS NOT EMPTY: read the report's
    `template_sections` / `template_required_fields` / `template_steps` and carry them into step 7 —
-   the shell adds sections you did not ask for, and an `owners` map that cannot name them leaves
+   the template adds sections you did not ask for, and an `owners` map that cannot name them leaves
    them editable at no step. A board is flowtype `case` (status-lane
    tracker, no step workflow, born live); a dataform is `dataset`. Duplicate flow name 400s.
 
 **0.5. Roles + members BEFORE anything builds on top — `forge_create_app_role`, `forge_member_batch` / `forge_add_member_roles`, `forge_add_role_users`, `forge_grant_tier`.**
-   An API-created flow has ZERO members, so the acting user has no permission and the builder
+   A flow made with `from_template=False` or `forge_create_flow` has ZERO members, so the acting user has no permission and the builder
    refuses to render it — the #1 reason a fresh flow "does nothing." Grant `Permission:["InitiateItems"]`
-   (a LIST, never a bare string; `[]` PUTs 200 but the initiator still gets 403 on submit). Then
+   (a LIST, never a bare string). With `Role:"DataAdmin"` an empty `[]` PUTs 200 but the initiator
+   still gets 403 on submit; `Role:"Member"` with `[]` is the real "Initiate" tier (`forge_grant_tier`). Then
    ⚠️ Grant to NAMED INDIVIDUALS only — never a broad group (see the broadcast rule above).
    `forge_add_role_users` now REFUSES a `groups` grant unless `confirm_group_notification=True`
    is passed in the same call: a group grant notifies every member, cannot be recalled, and
@@ -115,20 +121,25 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
    never as verified. To CHANGE a field that already exists use `forge_rename_fields` (id, and so
    its permissions/events/data, survives), `forge_set_required` (a SET — pass the whole required
    list), or `forge_delete_fields` + re-add for a type change.
+   `forge_apply_fields` also takes `validation`, `computed` and `conditional_visibility` maps keyed
+   by field name, so a new field and its step-2 layers can land in ONE guarded write.
 
 **2. Offer the WHOLE field, not the skeleton.** Every field has four layers — build all four:
    - **Native config** — per-type keys (Number: `DefaultValue`+`Decimalpoint`; Textarea:
      `AllowFormatting`; Attachment: `CaptureOnly`; Currency: `CurrencyTypes`; Select:
      `ReferredList`; Lookup/Remote-lookup: `Field::QueryDefinition` with `FlowType` = the sole
      discriminator "Process" vs "Dataset"). Call `forge_capabilities("field.<type>")` for the shape.
-   - **Validation** — `forge_add_field_validation` writes `Condition{Operator, RHSValue, ErrorMessage}`.
+   - **Validation** — writes `Condition{Operator, RHSValue, ErrorMessage}`. Use
+     `forge_apply_fields(validation={name: [{"operator", "rhs", "error_message"}]})`: it is the only
+     path that writes an ErrorMessage, so always pass one. `forge_add_field_validation` takes
+     `rules={name: [[operator, value]]}` and has no message slot.
      Wire-proven operators: MAX_LENGTH, CONTAINS, GREATER_THAN, AFTER. "Not empty" is `Required:true`,
-     not a Condition. Always write an ErrorMessage.
+     not a Condition.
    - **Computed** — `forge_set_events` for a field EVENT (a script on the SOURCE field; trigger is a
      function of the source type — **pass `null` and it is DERIVED off the live draft**; a stated
      trigger that disagrees is refused, naming both, because a wrong one writes fine, publishes
-     fine and never fires. Six types can't be a source: Attachment, Image, Rich text, Signature,
-     Sequence number, Geolocation). A native formula also exists as a
+     fine and never fires. Five types can't be a source: Attachment, Image, Signature,
+     Sequence number, Geolocation. Rich text is not refused: its shape is uncaptured). A native formula also exists as a
      Field-owned Expression (`forge_capabilities("config.computed")`) — build the Node AST, not just
      the string mirror; validate every referenced field exists.
    - **Default + visibility** — a static default costs one key (`forge_apply_fields` `default_value=`;
@@ -204,13 +215,14 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
    raw hex or a token ref for color. Use a real token to complete a stranded style chain.
 
 **10. Pages — `forge_build_page`, `forge_create_page`, `forge_set_navigation`, `forge_share_report`.**
-   Widgets bind through one of three trios: view-type (`flow_type`/`flow_id`/`view_id`),
-   report-type (single `report_id`, renders the report's own type), or native KPI
-   (`metrics_type:"stepmetrics"`, flow id only). A page's content + behavior (widgets, KPIs,
+   Widgets bind through one of three trios: view-type (`flow_type`/`flow_id`/`view_id`; `view/form`
+   needs no `view_id`), report-type (`flow_type`/`flow_id`/`report_id` — `report_id` alone leaves a
+   placeholder flow id), or native KPI (`metrics`: `flow_type`/`flow_id`, `metrics_type` defaults
+   to `"stepmetrics"`). A page's content + behavior (widgets, KPIs,
    actions, popups, events) is governed; exact layout/color is NOT a build-correctness gate.
-   API page-create does NOT touch navigation — wire the Menu via `forge_set_navigation`. Role-scope
-   a menu with `Menu.VisibleTo:[<role ids>]` on a SHARED Navigation (no key = visible to all) rather
-   than duplicating Menus per role. Reports have the same member surface as flows (`forge_share_report`).
+   API page-create does NOT touch navigation — wire the Menu via `forge_set_navigation`. The wire
+   shape role-scopes a menu with `Menu.VisibleTo:[<role ids>]` on a SHARED Navigation (no key =
+   visible to all), but no forge tool writes `VisibleTo` yet — say so rather than duplicating Menus per role. Reports have the same member surface as flows (`forge_share_report`).
 
 **11. Publish — `forge_publish` (flows + pages), then `forge_publish_app` (the app itself).**
    App-level publish (`POST .../application/{app}/publish`) is SEPARATE from flow publish. Apps are
@@ -234,7 +246,9 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
 |---|---|
 | Discover existing objects (sweep first) | `forge_sweep` |
 | Exact wire shape for anything uncertain | `forge_capabilities(query)` |
+| List apps / list an app's roles | `forge_list_apps`, `forge_list_app_roles` |
 | Create app / page | `forge_create_app`, `forge_create_page` |
+| Delete a flow, page or app (archives, deletes, verifies by list read-back) | `forge_delete_flow` |
 | Template App in one call (transplanted source template process, published, builder URL back) | `forge_create_template_app` |
 | Create process (from template default) | `forge_create_process`, `forge_create_flow` |
 | Create board (case) / dataform (dataset) | `forge_create_flow(kind="case"|"dataset")` |
@@ -252,7 +266,7 @@ Each step names the tool(s) and the gotcha it guards. Foundational first.
 | Health check / spec compare | `forge_doctor`, `forge_compare_to_spec` |
 | Walk a real item | `forge_simulate_case` |
 | Confirmation artifacts | `forge_render_flow_diagram`, `forge_render_schema_diagram`, `forge_render_mockups`, `forge_request_confirmation` |
-| Intake pipeline (optional macro) | `forge_intake_questions`, `forge_update_spec`, `forge_approve_spec`, `forge_plan_app` |
+| Intake pipeline (optional macro) | `forge_intake_questions`, `forge_update_spec`, `forge_apply_revisions`, `forge_approve_spec`, `forge_plan_app` |
 | Copilot fallback | `forge_copilot_ask`, `forge_copilot_check` |
 
 Legacy `kf_*` tools (`kf_create_process`, `kf_get_flow_schema`, `kf_list_field_types`,
@@ -271,10 +285,12 @@ these, say so and name the reason; do not fake success.
 | Custom-component install | A custom component needs an installed bundle; there is NO API install path. |
 | Environment "Deploy" on dev | Deploy = dev→UAT/prod promotion. Publish (`forge_publish_app`) is the dev-local go-live; NEVER trigger Deploy. |
 | Adding `everyone` / any broad group to an AppRole or app membership | Kissflow notifies every member instantly, and AppRole membership writes are add-only — there is no removal route, so it cannot be undone. Add named individuals only; confirm the list with the human first. |
-| Bare `User` field without a QueryDefinition | A `User` field blocks publish until its `Field::QueryDefinition{FlowType:"User"}` is wired against a real user source. |
 
 NOT refused anymore: adding a user to a role — that's solved via `forge_add_role_users`
-(the `Users`-write / `Members`-read asymmetry).
+(the `Users`-write / `Members`-read asymmetry). A `User` field — a bare one blocks publish
+(KISSFLOW_ERROR_04211), but `forge_apply_fields` wires its `Field::QueryDefinition{FlowType:"User"}`
+on every User field it creates (`options["LHSModel"]` picks the source, default `"User"`);
+`forge_doctor` flags a bare one made outside the forge.
 
 ## Copilot fallback doctrine
 

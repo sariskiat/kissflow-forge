@@ -108,8 +108,9 @@ Only declare success when every bucket matches.
 
 ## Gotchas
 
-- The engine's `KfConfig.from_env` refuses non-dev domains. To read UAT/prod or drive the deploy,
-  construct `KfConfig(key_id, key_secret, account, domain, app_id)` directly.
+- The engine has no deploy tool, and `load_settings()` (`src/app/infrastructure/config/settings.py`)
+  refuses any domain without `dev-`. To read UAT/prod or drive the deploy, send the requests above
+  directly with that environment's own key pair. Do not route them through the engine.
 - Deleting flows is irreversible. Confirm with the human before deleting, and delete only what
   is provably archived junk or a duplicate.
 - A failed deploy can leave the target app as a Live **shell** with zero processes (partial

@@ -13,14 +13,20 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from app.domain.value_objects.kinds import PlaybookName
+
 
 class DocsReader(ABC):
-    """The two offline doc reads: the vendored builder playbook, and the capability-doc
-    index."""
+    """The two offline doc reads: a vendored skill (the builder playbook by
+    default), and the capability-doc index."""
 
     @abstractmethod
-    async def playbook(self) -> dict[str, str]:
-        """Return the vendored builder playbook.
+    async def playbook(self, skill: PlaybookName = "builder") -> dict[str, str]:
+        """Return one vendored skill's text.
+
+        Args:
+            skill: Which vendored skill to read. `"builder"` (the default) is
+                the builder playbook.
 
         Returns:
             `{"text": ..., "source": ...}`: the playbook's full text, never blank,
