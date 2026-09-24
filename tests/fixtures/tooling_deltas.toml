@@ -1,0 +1,93 @@
+# Deltas from the boilerplate clone that must stay, one entry per difference (refactor spec,
+# section 8 gate 1; HR5: the clone is the reference, every difference from it is listed here with
+# a reason). G0 wrote the [[slot]] / [[module]] entries below. G1 adds [[pyproject]] (every
+# dotted pyproject.toml path that still differs from the clone after G1's copy) and [[claude]]
+# (the two .claude/ files that differ, Q10).
+
+[clone]
+commit = "67c22ae231d28f6c13d390e9c9e3951f720ac09d"
+
+[[slot]]
+clone = "infrastructure/database"
+here = "infrastructure/kissflow"
+reason = "Forge has no database. The Kissflow builder API takes the repository slot (decision page, box by box)."
+
+[[slot]]
+clone = "infrastructure/external_api"
+here = "infrastructure/kissflow"
+reason = "the Kissflow item API takes the external-service slot (decision page, box by box)."
+
+[[module]]
+glob = "resources.py"
+reason = "the one filesystem anchor for shapes/, docs/capabilities/ and skills/ (spec, Appendix B)."
+
+[[module]]
+glob = "infrastructure/artifact_writer.py"
+reason = "Forge's filesystem adapter for the ArtifactWriter port; the boilerplate has no artifact output adapter."
+
+[[module]]
+glob = "infrastructure/playbook.py"
+reason = "a filesystem adapter behind the DocsReader port (spec, G13)."
+
+[[module]]
+glob = "infrastructure/capabilities.py"
+reason = "a filesystem adapter behind the DocsReader port (spec, G13)."
+
+[[module]]
+glob = "infrastructure/docs_reader.py"
+reason = "the DocsReader port's own adapter, composing playbook.py and capabilities.py (spec, G5/G7)."
+
+[[module]]
+glob = "infrastructure/mcp/tools/*"
+reason = "the 61 tools split into nine family modules that create_server() registers (spec D5, G12). The clone defines its one tool in server.py."
+
+# =================================================================================================
+# G1: pyproject.toml, every dotted path that still differs from the clone's after the copy.
+# =================================================================================================
+
+[[pyproject]]
+key = "project.name"
+reason = "ours, not the boilerplate's (spec G1 Known deltas)."
+
+[[pyproject]]
+key = "project.description"
+reason = "ours, not the boilerplate's (spec G1 Known deltas)."
+
+[[pyproject]]
+key = "project.dependencies"
+reason = "only what our code imports: no asyncpg; fastmcp==4.0.2 and httpx>=0.28,<1 match the clone's own exact pins (httpx moved here from the dev group in G5, its adapters and lifespan now the real callers -- spec G1 user decision, 2026-09-22); python-dotenv (G2, Settings' load_dotenv) pins the same range as the clone; pydantic and PyYAML are imported directly, not just pulled in transitively. mcp, starlette and cryptography were only pulled in by infrastructure/kissflow/auth.py, deleted in G3 (D1) -- uv remove'd, no longer explicit dependencies (spec G1 Known deltas, G3, G2)."
+
+[[pyproject]]
+key = "build-system"
+reason = "D3: the Dockerfile runs `uv sync --frozen --no-dev`, which builds the project with hatchling. A new Dockerfile comes later."
+
+[[pyproject]]
+key = "tool.hatch"
+reason = "D3, paired with [build-system]: the wheel's package list, kept for the same hatchling build."
+
+[[pyproject]]
+key = "tool.pytest.ini_options.markers"
+reason = "HR6: the `live` marker -- the live suites never run in CI, only on the engineer's machine with the engineer's own .env."
+
+[[pyproject]]
+key = "tool.ruff.lint.per-file-ignores"
+reason = "the E501 ratchet (spec G1 user decision, 2026-09-22): every file that still fails E501 at line-length 88 after `ruff format .`. Only shrinks -- frozen ceiling tests/fixtures/e501_ratchet_g1.txt -- empty at P6."
+
+# =================================================================================================
+# G1, Q10: .claude/ files that differ from the clone's.
+# =================================================================================================
+
+[[claude]]
+file = ".claude/agents/reviewer.md"
+reason = "the diff base is `develop`, this repo's trunk, not the clone's `main`."
+clone_text = "Look only at `git diff main...HEAD`, the files it touches, and"
+our_text = "Look only at `git diff develop...HEAD`, the files it touches, and"
+
+[[claude]]
+file = ".claude/settings.json"
+reason = "the deny list also covers kf.env, the name of the Docker env file (docs/notes/SETUP.md:120-128)."
+clone_text = '''"Write(.env)"'''
+our_text = '''"Write(.env)",
+      "Read(kf.env)",
+      "Edit(kf.env)",
+      "Write(kf.env)"'''

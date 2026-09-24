@@ -1,0 +1,2 @@
+"""Mirror of infrastructure/config/settings.py -- proves tests_mirror_src's compliant case: a
+source file whose mirror exists must not be reported."""

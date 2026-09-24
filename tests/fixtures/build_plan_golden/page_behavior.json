@@ -1,0 +1,745 @@
+[
+  {
+    "args": {
+      "done_definition": "the unit is repaired or declared unrepairable, and the customer has been notified",
+      "goal": "every repair job is trackable from intake to return, with a clear owner at each step",
+      "name": "Equipment Repair Tracker",
+      "pain": "technicians and customers cannot see which repair job is stuck or with whom",
+      "result_values": [
+        "Repaired",
+        "Beyond repair",
+        "Cancelled by customer"
+      ],
+      "terminal_states": [
+        "Completed",
+        "Cancelled"
+      ]
+    },
+    "kind": "create_process",
+    "why": "the flow every later step attaches to (Build order step 1)"
+  },
+  {
+    "args": {
+      "is_admin": false,
+      "members_hint": "2 front-desk staff",
+      "role": "Front Desk"
+    },
+    "kind": "member_batch",
+    "why": "grant 'Front Desk' access before anything else can render (Members first)"
+  },
+  {
+    "args": {
+      "is_admin": false,
+      "members_hint": "5 technicians",
+      "role": "Technician"
+    },
+    "kind": "member_batch",
+    "why": "grant 'Technician' access before anything else can render (Members first)"
+  },
+  {
+    "args": {
+      "is_admin": true,
+      "members_hint": "1 manager",
+      "role": "Service Manager"
+    },
+    "kind": "member_batch",
+    "why": "grant 'Service Manager' access before anything else can render (Members first)"
+  },
+  {
+    "args": {
+      "name": "Urgency Levels",
+      "owner_role": "Service Manager",
+      "personal_data": false,
+      "values": [
+        "High",
+        "Medium",
+        "Low"
+      ]
+    },
+    "kind": "create_list",
+    "why": "execute with forge_create_list (create-or-reuse by name, REPLACE-semantics item set, read-back audited); KEEP the `_id` it returns \u2014 every apply_fields field whose referred_list_from names this list resolves its referred_list to exactly that id \u2014 #13, live-proven 2026-08-12"
+  },
+  {
+    "args": {
+      "name": "Yes No",
+      "owner_role": "Service Manager",
+      "personal_data": false,
+      "values": [
+        "Yes",
+        "No"
+      ]
+    },
+    "kind": "create_list",
+    "why": "execute with forge_create_list (create-or-reuse by name, REPLACE-semantics item set, read-back audited); KEEP the `_id` it returns \u2014 every apply_fields field whose referred_list_from names this list resolves its referred_list to exactly that id \u2014 #13, live-proven 2026-08-12"
+  },
+  {
+    "args": {
+      "fields": [
+        {
+          "list_name": null,
+          "name": "Unit Name",
+          "options": {},
+          "referred_list": null,
+          "referred_list_from": null,
+          "required": true,
+          "section": "Intake Basics",
+          "type": "Text"
+        },
+        {
+          "list_name": null,
+          "name": "Customer Name",
+          "options": {},
+          "referred_list": null,
+          "referred_list_from": null,
+          "required": true,
+          "section": "Intake Basics",
+          "type": "Text"
+        },
+        {
+          "list_name": "Urgency Levels",
+          "name": "Urgency",
+          "options": {},
+          "referred_list": null,
+          "referred_list_from": {
+            "from_op": "create_list",
+            "list_name": "Urgency Levels",
+            "personal_data": false
+          },
+          "required": true,
+          "section": "Intake Priority",
+          "type": "Select"
+        }
+      ],
+      "sequence": {
+        "padding": "0001",
+        "prefix": "RPR"
+      },
+      "stage": "Intake"
+    },
+    "kind": "apply_fields",
+    "why": "fields for stage 'Intake' (Node-graph invariants: Field needs Model + CreatedAt). Every Select carries `referred_list: None` plus a `referred_list_from` BINDING, never an id \u2014 a plan is compiled before anything is created. THE EXECUTOR MUST RESOLVE IT before calling forge_apply_fields: take the `_id` returned by the preceding create_list op for that `list_name` (OP_ORDER runs create_list first), or, when `from_op` is None (a personal_data list, human-made per PDPA), the id of the human-made list of that name read off the tenant. Left unresolved the write REFUSES the field loudly, which is the intended failure: a Select written with no ReferredList PUTs 200 and its publish dies 500 MetadataError with zero diagnostics"
+  },
+  {
+    "args": {
+      "fields": [
+        {
+          "list_name": "Yes No",
+          "name": "Repairable",
+          "options": {},
+          "referred_list": null,
+          "referred_list_from": {
+            "from_op": "create_list",
+            "list_name": "Yes No",
+            "personal_data": false
+          },
+          "required": true,
+          "section": "Diagnose",
+          "type": "Select"
+        },
+        {
+          "list_name": null,
+          "name": "Diagnosis Notes",
+          "options": {
+            "AllowFormatting": "true"
+          },
+          "referred_list": null,
+          "referred_list_from": null,
+          "required": false,
+          "section": "Diagnose",
+          "type": "Textarea"
+        }
+      ],
+      "sequence": null,
+      "stage": "Diagnose"
+    },
+    "kind": "apply_fields",
+    "why": "fields for stage 'Diagnose' (Node-graph invariants: Field needs Model + CreatedAt). Every Select carries `referred_list: None` plus a `referred_list_from` BINDING, never an id \u2014 a plan is compiled before anything is created. THE EXECUTOR MUST RESOLVE IT before calling forge_apply_fields: take the `_id` returned by the preceding create_list op for that `list_name` (OP_ORDER runs create_list first), or, when `from_op` is None (a personal_data list, human-made per PDPA), the id of the human-made list of that name read off the tenant. Left unresolved the write REFUSES the field loudly, which is the intended failure: a Select written with no ReferredList PUTs 200 and its publish dies 500 MetadataError with zero diagnostics"
+  },
+  {
+    "args": {
+      "fields": [
+        {
+          "list_name": null,
+          "name": "Repair Cost",
+          "options": {
+            "Decimalpoint": "2"
+          },
+          "referred_list": null,
+          "referred_list_from": null,
+          "required": false,
+          "section": "Repair",
+          "type": "Number"
+        },
+        {
+          "list_name": null,
+          "name": "Total Parts Cost",
+          "options": {},
+          "referred_list": null,
+          "referred_list_from": null,
+          "required": false,
+          "section": "Repair",
+          "type": "Number"
+        }
+      ],
+      "sequence": null,
+      "stage": "Repair"
+    },
+    "kind": "apply_fields",
+    "why": "fields for stage 'Repair' (Node-graph invariants: Field needs Model + CreatedAt). Every Select carries `referred_list: None` plus a `referred_list_from` BINDING, never an id \u2014 a plan is compiled before anything is created. THE EXECUTOR MUST RESOLVE IT before calling forge_apply_fields: take the `_id` returned by the preceding create_list op for that `list_name` (OP_ORDER runs create_list first), or, when `from_op` is None (a personal_data list, human-made per PDPA), the id of the human-made list of that name read off the tenant. Left unresolved the write REFUSES the field loudly, which is the intended failure: a Select written with no ReferredList PUTs 200 and its publish dies 500 MetadataError with zero diagnostics"
+  },
+  {
+    "args": {
+      "fields": [
+        {
+          "list_name": null,
+          "name": "Quality Passed",
+          "options": {},
+          "referred_list": null,
+          "referred_list_from": null,
+          "required": false,
+          "section": "Quality Check",
+          "type": "Boolean"
+        }
+      ],
+      "sequence": null,
+      "stage": "Quality Check"
+    },
+    "kind": "apply_fields",
+    "why": "fields for stage 'Quality Check' (Node-graph invariants: Field needs Model + CreatedAt). Every Select carries `referred_list: None` plus a `referred_list_from` BINDING, never an id \u2014 a plan is compiled before anything is created. THE EXECUTOR MUST RESOLVE IT before calling forge_apply_fields: take the `_id` returned by the preceding create_list op for that `list_name` (OP_ORDER runs create_list first), or, when `from_op` is None (a personal_data list, human-made per PDPA), the id of the human-made list of that name read off the tenant. Left unresolved the write REFUSES the field loudly, which is the intended failure: a Select written with no ReferredList PUTs 200 and its publish dies 500 MetadataError with zero diagnostics"
+  },
+  {
+    "args": {
+      "columns": [
+        {
+          "name": "Part Name",
+          "required": true,
+          "type": "Text"
+        },
+        {
+          "name": "Quantity",
+          "required": true,
+          "type": "Number"
+        },
+        {
+          "name": "Unit Cost",
+          "required": true,
+          "type": "Number"
+        }
+      ],
+      "max_rows": 20,
+      "name": "Parts Used",
+      "stage": "Repair"
+    },
+    "kind": "add_table",
+    "why": "table 'Parts Used' \u2014 its own nested Model in its own root Row, never inside a Section"
+  },
+  {
+    "args": {
+      "parallels": [
+        {
+          "after": 1,
+          "branches": [
+            {
+              "name": "Yes",
+              "stages": [
+                "Repair"
+              ]
+            },
+            {
+              "name": "No",
+              "stages": [
+                "Return to Customer"
+              ]
+            }
+          ],
+          "name": "Repairable"
+        }
+      ],
+      "routing": [
+        {
+          "at_stage": "Diagnose",
+          "field_name": "Repairable",
+          "route_per_option": {
+            "No": [
+              "Return to Customer"
+            ],
+            "Yes": [
+              "Repair"
+            ]
+          }
+        }
+      ],
+      "stages": [
+        {
+          "entry_criteria": "customer drops off a unit",
+          "exit_criteria": "unit logged with a case number",
+          "name": "Intake",
+          "what_happens": "log the unit and customer details"
+        },
+        {
+          "entry_criteria": "unit logged",
+          "exit_criteria": "repairable decision recorded",
+          "name": "Diagnose",
+          "what_happens": "assess whether the unit is repairable"
+        },
+        {
+          "entry_criteria": "marked repairable",
+          "exit_criteria": "repair work finished",
+          "name": "Repair",
+          "what_happens": "perform the repair"
+        },
+        {
+          "entry_criteria": "repair marked finished",
+          "exit_criteria": "quality check passed",
+          "name": "Quality Check",
+          "what_happens": "verify the repair meets standard"
+        },
+        {
+          "entry_criteria": "quality check passed, or unit deemed unrepairable",
+          "exit_criteria": "customer notified and job closed",
+          "name": "Return to Customer",
+          "what_happens": "notify customer and close the job"
+        }
+      ],
+      "steps": [
+        "Intake",
+        "Diagnose",
+        "Quality Check"
+      ]
+    },
+    "kind": "build_workflow",
+    "why": "ProcessDef + Activities in stage order \u2014 WorkflowType=Sequence order IS the flow (Build order step 5); N sequential decision splits become N Parallel gateways in order (unconditional and-forks until S4 attaches branch conditions); assignees are a separate op"
+  },
+  {
+    "args": {
+      "owner_role": "Front Desk",
+      "stage": "Intake"
+    },
+    "kind": "set_assignees",
+    "why": "Resource(ValueType=AppRole) assignee on 'Intake''s Activity, resolved from role 'Front Desk' \u2014 members must exist first (Members first); without this nobody can submit the step and simulate_case always fails"
+  },
+  {
+    "args": {
+      "owner_role": "Technician",
+      "stage": "Diagnose"
+    },
+    "kind": "set_assignees",
+    "why": "Resource(ValueType=AppRole) assignee on 'Diagnose''s Activity, resolved from role 'Technician' \u2014 members must exist first (Members first); without this nobody can submit the step and simulate_case always fails"
+  },
+  {
+    "args": {
+      "owner_role": "Technician",
+      "stage": "Repair"
+    },
+    "kind": "set_assignees",
+    "why": "Resource(ValueType=AppRole) assignee on 'Repair''s Activity, resolved from role 'Technician' \u2014 members must exist first (Members first); without this nobody can submit the step and simulate_case always fails"
+  },
+  {
+    "args": {
+      "owner_role": "Service Manager",
+      "stage": "Quality Check"
+    },
+    "kind": "set_assignees",
+    "why": "Resource(ValueType=AppRole) assignee on 'Quality Check''s Activity, resolved from role 'Service Manager' \u2014 members must exist first (Members first); without this nobody can submit the step and simulate_case always fails"
+  },
+  {
+    "args": {
+      "owner_role": "Front Desk",
+      "stage": "Return to Customer"
+    },
+    "kind": "set_assignees",
+    "why": "Resource(ValueType=AppRole) assignee on 'Return to Customer''s Activity, resolved from role 'Front Desk' \u2014 members must exist first (Members first); without this nobody can submit the step and simulate_case always fails"
+  },
+  {
+    "args": {
+      "branch_name": "Yes",
+      "from_stage": "Quality Check",
+      "gate_field": "Quality Passed",
+      "max_rounds": 3,
+      "to_stage": "Repair"
+    },
+    "kind": "add_goto_gate",
+    "why": "backward GotoTask 'Quality Check' -> 'Repair', Boolean-gated, fail-closed (Gate polarity), placed inside branch 'Yes'"
+  },
+  {
+    "args": {
+      "at_stage": "Diagnose",
+      "branch_literals": {
+        "No": "No",
+        "Yes": "Yes"
+      },
+      "field_name": "Repairable"
+    },
+    "kind": "set_branch_conditions",
+    "why": "attach the branch conditions that make this Parallel a real conditional split, not an unconditional and-fork (CLAUDE.md Conditional routing); branch NAME -> the literal of field 'Repairable' that selects it, matching forge_set_branch_conditions. Only the FIRST split's gateway \u2014 every later split (S2 #33) stays unconditional pending S4 (#35)"
+  },
+  {
+    "args": {
+      "entries": [
+        {
+          "field": null,
+          "permission": "Editable",
+          "section": "Intake Basics",
+          "stage": "Start"
+        },
+        {
+          "field": null,
+          "permission": "Editable",
+          "section": "Intake Basics",
+          "stage": "Intake"
+        },
+        {
+          "field": null,
+          "permission": "Editable",
+          "section": "Intake Priority",
+          "stage": "Intake"
+        },
+        {
+          "field": null,
+          "permission": "ReadOnly",
+          "section": "Intake Basics",
+          "stage": "Diagnose"
+        },
+        {
+          "field": null,
+          "permission": "Editable",
+          "section": "Diagnose",
+          "stage": "Diagnose"
+        },
+        {
+          "field": null,
+          "permission": "Editable",
+          "section": "Parts Used",
+          "stage": "Repair"
+        },
+        {
+          "field": null,
+          "permission": "ReadOnly",
+          "section": "Parts Used",
+          "stage": "Quality Check"
+        },
+        {
+          "field": null,
+          "permission": "Editable",
+          "section": "Quality Check",
+          "stage": "Quality Check"
+        },
+        {
+          "field": "Repair Cost",
+          "permission": "ReadOnly",
+          "section": "Repair",
+          "stage": "Quality Check"
+        }
+      ]
+    },
+    "kind": "set_visibility",
+    "why": "per-step visibility matrix \u2014 rebuild after every workflow change (Build order step 8)"
+  },
+  {
+    "args": {
+      "formula_intent": "quantity times unit cost, summed across every row",
+      "source_fields": [
+        "Quantity",
+        "Unit Cost"
+      ],
+      "target_field": "Total Parts Cost",
+      "triggers": {
+        "Quantity": "onSelect",
+        "Unit Cost": "onSelect"
+      }
+    },
+    "kind": "set_events",
+    "why": "computed 'Total Parts Cost' via an event on its source field(s), never the target (Field events); per-source triggers derived from source type \u2014 every (source type -> trigger) pair CONFIRMED live"
+  },
+  {
+    "args": {
+      "stage": "Intake"
+    },
+    "kind": "set_styles",
+    "why": "give this stage's section a distinguishable look \u2014 token VALUES are read off the builder dropdown at apply time, never synthesized here"
+  },
+  {
+    "args": {
+      "stage": "Diagnose"
+    },
+    "kind": "set_styles",
+    "why": "give this stage's section a distinguishable look \u2014 token VALUES are read off the builder dropdown at apply time, never synthesized here"
+  },
+  {
+    "args": {
+      "stage": "Repair"
+    },
+    "kind": "set_styles",
+    "why": "give this stage's section a distinguishable look \u2014 token VALUES are read off the builder dropdown at apply time, never synthesized here"
+  },
+  {
+    "args": {
+      "stage": "Quality Check"
+    },
+    "kind": "set_styles",
+    "why": "give this stage's section a distinguishable look \u2014 token VALUES are read off the builder dropdown at apply time, never synthesized here"
+  },
+  {
+    "args": {
+      "stage": "Return to Customer"
+    },
+    "kind": "set_styles",
+    "why": "give this stage's section a distinguishable look \u2014 token VALUES are read off the builder dropdown at apply time, never synthesized here"
+  },
+  {
+    "args": {
+      "name": "Equipment Repair Tracker"
+    },
+    "kind": "publish",
+    "why": "publish so the live version matches the built draft (Build order step 11)"
+  },
+  {
+    "args": {
+      "visibility_role_claims": []
+    },
+    "kind": "doctor",
+    "why": "read-only health check \u2014 THE RULE: a 200 and a clean publish prove nothing"
+  },
+  {
+    "args": {},
+    "kind": "compare",
+    "why": "fidelity check against the input spec (forge_compare_to_spec) \u2014 doctor said ok on a build with wrong field types and a missing event; this is the step that catches those (#16)"
+  },
+  {
+    "args": {
+      "name": "Manager Dashboard"
+    },
+    "kind": "create_page",
+    "why": "a virgin page \u2014 4 nodes: Page, root Container, empty Style, User"
+  },
+  {
+    "args": {
+      "name": "My Jobs"
+    },
+    "kind": "create_page",
+    "why": "a virgin page \u2014 4 nodes: Page, root Container, empty Style, User"
+  },
+  {
+    "args": {
+      "actions": [
+        "approve quality check",
+        "log new unit",
+        "notify customer",
+        "reassign job"
+      ],
+      "design": null,
+      "kpis": [
+        "jobs awaiting pickup",
+        "open jobs",
+        "overdue jobs"
+      ],
+      "name": "Manager Dashboard",
+      "on_click": [
+        {
+          "action": "reassign job",
+          "kind": "OpenPopup",
+          "script": null,
+          "target_popup": "Detail"
+        }
+      ],
+      "popups": [
+        {
+          "name": "Detail",
+          "widgets": [
+            {
+              "config": {},
+              "row_fields": [],
+              "slug": "general/label"
+            }
+          ]
+        }
+      ],
+      "widgets": [
+        {
+          "config": {
+            "flow_id": "RepairJobs",
+            "flow_type": "process"
+          },
+          "row_fields": [],
+          "slug": "metrics"
+        },
+        {
+          "config": {
+            "flow_id": "RepairJobs",
+            "flow_type": "process",
+            "view_id": "myitems"
+          },
+          "row_fields": [],
+          "slug": "view/table"
+        },
+        {
+          "config": {},
+          "row_fields": [],
+          "slug": "general/label"
+        }
+      ]
+    },
+    "kind": "build_page",
+    "why": "container/component graph for 'Manager Dashboard''s widgets, KPIs, actions, popups, on-click behavior, and (if any) its beautiful-page design tree"
+  },
+  {
+    "args": {
+      "actions": [
+        "mark repaired",
+        "submit diagnosis"
+      ],
+      "design": null,
+      "kpis": [
+        "jobs assigned to me"
+      ],
+      "name": "My Jobs",
+      "on_click": [],
+      "popups": [],
+      "widgets": [
+        {
+          "config": {
+            "flow_id": "RepairJobs",
+            "flow_type": "process",
+            "view_id": "assigned"
+          },
+          "row_fields": [],
+          "slug": "view/table"
+        }
+      ]
+    },
+    "kind": "build_page",
+    "why": "container/component graph for 'My Jobs''s widgets, KPIs, actions, popups, on-click behavior, and (if any) its beautiful-page design tree"
+  },
+  {
+    "args": {
+      "page": "Manager Dashboard",
+      "role": "Service Manager"
+    },
+    "kind": "set_navigation",
+    "why": "bind 'Manager Dashboard' into 'Service Manager''s navigation so it appears as a tab"
+  },
+  {
+    "args": {
+      "page": "My Jobs",
+      "role": "Technician"
+    },
+    "kind": "set_navigation",
+    "why": "bind 'My Jobs' into 'Technician''s navigation so it appears as a tab"
+  },
+  {
+    "args": {
+      "page": "Manager Dashboard",
+      "role": "Front Desk"
+    },
+    "kind": "set_navigation",
+    "why": "bind 'Manager Dashboard' into 'Front Desk''s navigation so it appears as a tab"
+  },
+  {
+    "args": {
+      "expected_path": [
+        "Intake",
+        "Diagnose",
+        "Repair",
+        "Quality Check",
+        "Return to Customer"
+      ],
+      "expected_result": "Repaired",
+      "fills": [
+        {
+          "stage": "Intake",
+          "values": {
+            "Unit Name": "Printer",
+            "Urgency": "Medium"
+          }
+        },
+        {
+          "stage": "Diagnose",
+          "values": {
+            "Repairable": "Yes"
+          }
+        },
+        {
+          "stage": "Quality Check",
+          "values": {
+            "Quality Passed": "true"
+          }
+        }
+      ],
+      "name": "Straightforward repair"
+    },
+    "kind": "simulate_case",
+    "why": "walk create->fill->submit->gates->terminal (Build order step 13)"
+  },
+  {
+    "args": {
+      "expected_path": [
+        "Intake",
+        "Diagnose",
+        "Return to Customer"
+      ],
+      "expected_result": "Beyond repair",
+      "fills": [
+        {
+          "stage": "Intake",
+          "values": {
+            "Unit Name": "Old Fax Machine",
+            "Urgency": "Low"
+          }
+        },
+        {
+          "stage": "Diagnose",
+          "values": {
+            "Repairable": "No"
+          }
+        }
+      ],
+      "name": "Beyond repair"
+    },
+    "kind": "simulate_case",
+    "why": "walk create->fill->submit->gates->terminal (Build order step 13)"
+  },
+  {
+    "args": {
+      "expected_path": [
+        "Intake",
+        "Diagnose",
+        "Repair",
+        "Quality Check",
+        "Repair",
+        "Quality Check",
+        "Return to Customer"
+      ],
+      "expected_result": "Repaired",
+      "fills": [
+        {
+          "stage": "Intake",
+          "values": {
+            "Unit Name": "Blender",
+            "Urgency": "High"
+          }
+        },
+        {
+          "stage": "Diagnose",
+          "values": {
+            "Repairable": "Yes"
+          }
+        },
+        {
+          "stage": "Quality Check",
+          "values": {
+            "Quality Passed": "false"
+          }
+        },
+        {
+          "stage": "Quality Check",
+          "values": {
+            "Quality Passed": "true"
+          }
+        }
+      ],
+      "name": "Rework then pass"
+    },
+    "kind": "simulate_case",
+    "why": "walk create->fill->submit->gates->terminal (Build order step 13)"
+  }
+]

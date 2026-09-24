@@ -1,0 +1,16 @@
+"""Fixture for tool_module_imports_own_family_only: this module IS the 'flow' family tool
+module. Importing from its own family (flow) is compliant; importing from another family
+(page) is the violation. Both imports are relative (four dots,
+app.infrastructure.mcp.tools -> app), proving the scan resolves a relative import to its
+absolute dotted family candidate, not just an absolute one."""
+
+from __future__ import annotations
+
+from ....application.use_cases.flow.get_draft_uc import GetDraftUseCase
+from ....application.use_cases.page.build_page_uc import BuildPageUseCase
+
+
+def register(mcp) -> None:
+    """Compliant: GetDraftUseCase is this module's own family (flow).
+    VIOLATION: tool_module_imports_own_family_only -- BuildPageUseCase is family 'page'."""
+    _ = (GetDraftUseCase, BuildPageUseCase, mcp)

@@ -1,0 +1,16 @@
+{
+  "new": [
+    {
+      "body": null,
+      "method": "DELETE",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/application/A1/page/P1"
+    }
+  ],
+  "old": [
+    {
+      "body": null,
+      "method": "DELETE",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/application/A1/page/P1"
+    }
+  ]
+}

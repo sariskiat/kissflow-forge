@@ -5,7 +5,6 @@
 *.key
 
 # Blindness / local-only tenant traces (screenshots, handoffs, capture scratch) — never ship.
-HANDOFF.md
 image*.png
 kissflowfield-info-gatherlist/
 .vscode/

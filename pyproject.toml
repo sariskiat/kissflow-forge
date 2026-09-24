@@ -1,0 +1,147 @@
+[project]
+# Delta: name, description (ours, not the boilerplate's) -- reason and every other tooling
+# delta from the clone are in tests/fixtures/tooling_deltas.toml ([[pyproject]] "project.name",
+# "project.description").
+name = "kissflow-forge"
+version = "0.1.0"
+description = "Generalised Kissflow builder engine + MCP server"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+# Delta: only what our code imports (no asyncpg; fastmcp pinned exactly) -- see
+# tests/fixtures/tooling_deltas.toml [[pyproject]] "project.dependencies".
+dependencies = [
+    # Pinned exactly, matching the clone's own pin (tests/fixtures/tooling_deltas.toml
+    # [[pyproject]] "project.dependencies").
+    "fastmcp==4.0.2",
+    "httpx>=0.28,<1",
+    "pydantic>=2.12,<3",
+    "python-dotenv>=1.1,<2",
+    "PyYAML>=6",
+]
+
+[project.scripts]
+mcp-server = "app.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4,<9",
+    "pytest-cov>=7,<8",
+    "ruff>=0.13,<1",
+    "ty>=0.0.1a0",
+    "pytest-asyncio>=1.2,<2",
+    "import-linter>=2,<3",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+package = true
+
+# Delta: [build-system] and [tool.hatch.build.targets.wheel] stay (D3) -- the Dockerfile runs
+# `uv sync --frozen --no-dev`, which builds the project with hatchling; a new Dockerfile comes
+# later. See tests/fixtures/tooling_deltas.toml [[pyproject]] "build-system", "tool.hatch".
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+# The E501 ratchet (2026-09-22 user decision): line-length = 88 and E501 is ON, as the clone.
+# Every file that still fails E501 after `ruff format .` at 88 is listed here. The list only
+# shrinks -- a goal that moves or deletes a file takes it off and fixes its lines -- and is
+# empty at P6. Frozen ceiling: tests/fixtures/e501_ratchet_g1.txt.
+[tool.ruff.lint.per-file-ignores]
+"scripts/arch_scan.py" = ["E501"]
+"src/app/domain/__init__.py" = ["E501"]
+"src/app/infrastructure/capabilities.py" = ["E501"]
+"src/app/infrastructure/mcp/server.py" = ["E501"]
+"src/app/infrastructure/playbook.py" = ["E501"]
+"src/app/main.py" = ["E501"]
+"src/app/resources.py" = ["E501"]
+"tests/live_helpers.py" = ["E501"]
+"tests/synthetic.py" = ["E501"]
+"tests/test_arch_scan.py" = ["E501"]
+"tests/test_boilerplate_conformance.py" = ["E501"]
+"tests/test_coverage.py" = ["E501"]
+"tests/test_empty_form.py" = ["E501"]
+"tests/integration/test_live_branching.py" = ["E501"]
+"tests/integration/test_live_lifecycle.py" = ["E501"]
+"tests/integration/test_live_page_plan.py" = ["E501"]
+"tests/integration/test_live_template_app.py" = ["E501"]
+"tests/test_mcp_boundary.py" = ["E501"]
+"tests/test_mcp_surface.py" = ["E501"]
+"tests/test_p0_scaffold.py" = ["E501"]
+"tests/test_p2_server.py" = ["E501"]
+"tests/test_proxy_headers.py" = ["E501"]
+"tests/test_reader_boundary.py" = ["E501"]
+"tests/test_shapes.py" = ["E501"]
+"tests/test_step_permissions.py" = ["E501"]
+"tests/test_template_shape.py" = ["E501"]
+"tests/test_tool_claims.py" = ["E501"]
+"tests/test_tool_surface_snapshot.py" = ["E501"]
+"tests/test_transplant.py" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ty.environment]
+python-version = "3.13"
+# The unit and integration trees are packages rooted at the repository, so the source tree is
+# the only import root required by the boilerplate contract.
+root = ["./src"]
+
+# Architecture enforcement -- deterministic checks for Clean Architecture rules from
+# code_architecture.md. Run with: make architecture
+[tool.importlinter]
+root_packages = ["app"]
+include_external_packages = true
+
+# Core rule: Infrastructure → Application → Domain (dependencies point inward)
+[[tool.importlinter.contracts]]
+name = "Clean Architecture layer dependencies point inward"
+type = "layers"
+layers = [
+    "app.infrastructure",
+    "app.application",
+    "app.domain",
+]
+
+# Domain must not import any infrastructure libraries
+[[tool.importlinter.contracts]]
+name = "Domain must not import infrastructure libraries"
+type = "forbidden"
+source_modules = ["app.domain"]
+forbidden_modules = ["pydantic", "fastmcp", "asyncpg", "httpx", "dotenv"]
+
+# Application must not import concrete infrastructure libraries
+# (pydantic is allowed — it's used for request/response DTOs)
+[[tool.importlinter.contracts]]
+name = "Application must not import concrete infrastructure libraries"
+type = "forbidden"
+source_modules = ["app.application"]
+forbidden_modules = ["asyncpg", "httpx", "fastmcp", "dotenv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["src"]
+# Delta: the `live` marker (HR6) -- the live suites never run in CI, only on the engineer's
+# machine with the engineer's .env. See tests/fixtures/tooling_deltas.toml [[pyproject]]
+# "tool.pytest.ini_options.markers".
+markers = ["live: hits the real Kissflow dev tenant (KF_APP) — skipped unless --run-live"]
+
+[tool.coverage.run]
+source = ["src/app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90

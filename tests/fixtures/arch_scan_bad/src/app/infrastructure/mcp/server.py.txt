@@ -1,0 +1,13 @@
+"""Fixture for module_level_fastmcp: a bad module-level FastMCP() call next to a compliant one
+built inside a function, as create_server() will do from G12 on."""
+
+from __future__ import annotations
+
+from fastmcp import FastMCP
+
+mcp = FastMCP("bad-module-level")
+
+
+def create_server() -> FastMCP:
+    """Compliant: the call lives inside a function body."""
+    return FastMCP("good-inside-function")

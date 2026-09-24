@@ -1,0 +1,32 @@
+"""Coverage forms for tool_module_imports_own_family_only (G0 review finding 4): a `from X
+import a` family (X itself names no family; the combined `X.a` does), a bare `import X` family,
+the `application.models.requests.` prefix, the `application.models.responses.` prefix, and an
+import nested inside a function -- ast.walk must see that last one, not just the module body.
+This module's own family is `flow`, so none of the four other-family names below (`page`,
+`item`, `widget`, `gadget`, `dataset`) collide with it.
+
+Also calls `repo.publish()`: the reference port_methods_without_use_case's fixture
+(application/interfaces/flow_port.py.txt) proves must not count as a use, because this module
+sits under infrastructure/, not application/use_cases/."""
+
+from __future__ import annotations
+
+from app.application.use_cases import page
+import app.application.use_cases.item.simulate
+from app.application.models.requests.widget.x import Req
+from app.application.models.responses.gadget.y import Resp
+
+
+def call_publish(repo) -> None:
+    """A reference to `.publish` that must NOT count as a use for port_methods_without_use_case."""
+    repo.publish()
+
+
+def local_import():
+    """A function-local import: tool_module_imports_own_family_only must still see it."""
+    from app.application.use_cases.dataset import z
+
+    return z
+
+
+_ = (page, app.application.use_cases.item.simulate, Req, Resp)

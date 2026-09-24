@@ -1,0 +1,16 @@
+"""A non-compliant adapter: WidgetAdapter has no port base at all, so every public method is a
+finding -- adapter_methods_without_port's violation case."""
+
+from __future__ import annotations
+
+
+class WidgetAdapter:
+    """No port base."""
+
+    def fetch(self) -> dict[str, str]:
+        """VIOLATION: adapter_methods_without_port -- a public method with no port to satisfy."""
+        return {}
+
+    def _internal(self) -> None:
+        """Compliant: a private helper, excluded by its leading underscore."""
+        return None

@@ -1,0 +1,9 @@
+"""Deliberately has no mirror test under tests/unit/ -- the fixture's tests_mirror_src
+violation case. Otherwise inert: no env read, no FastMCP call, no isError dict."""
+
+from __future__ import annotations
+
+
+def noop() -> None:
+    """Does nothing; only exists so this module has one public function."""
+    return None

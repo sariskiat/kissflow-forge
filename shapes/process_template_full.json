@@ -1,0 +1,3211 @@
+{
+  "kind": "Model",
+  "description": "Full-fidelity de-identified capture of the production process template: all 277 Kind-bearing nodes (fields, layout, workflow, conditional visibility, computed formulas, QueryDefinition, Permission, Resource), with real field ids and system fields kept.",
+  "source_capture": "published schema of the production process template",
+  "template": {
+    "Model_Sample01": {
+      "Id": "Model_Sample01",
+      "Name": "Template Process",
+      "Kind": "Model",
+      "FlowType": "Process",
+      "Description": "สำหรับ Duplicate สร้าง Flow ใหม่",
+      "Model::Row": [
+        "Row_Sample29",
+        "Row_Sample11",
+        "Row_Sample05",
+        "Row_Sample25",
+        "Row_Sample28"
+      ],
+      "Model::Field": [
+        "Requestor_Manager",
+        "is_public_form",
+        "final_email",
+        "pbf_email",
+        "pbf_first_name",
+        "pbf_last_name",
+        "pbf_bu_lookup",
+        "final_requestor_name",
+        "pbf_nick_name",
+        "final_nick_name",
+        "final_employee_id",
+        "requestor_id",
+        "pbf_req_id",
+        "pbf_submit_flag",
+        "department_name",
+        "requestor_manager_mail",
+        "manager_user",
+        "self_or_representative",
+        "rep_requestor_email",
+        "final_manager_email",
+        "department_head_email",
+        "Department_",
+        "requestor",
+        "requestor_email",
+        "request_number",
+        "rep_requestor",
+        "Branch",
+        "Description"
+      ],
+      "Model::ProcessDef": [
+        "ProcessDef_Sample01"
+      ],
+      "RootProcessDef": "ProcessDef_Sample01",
+      "Button::Row": [
+        "Row_Sample10"
+      ],
+      "Model::Component": [
+        "Component_Sample01"
+      ]
+    },
+    "Row_Sample29": {
+      "Id": "Row_Sample29",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample03"
+      ]
+    },
+    "Column_Sample03": {
+      "Id": "Column_Sample03",
+      "Kind": "Column",
+      "Type": "Section",
+      "Name": "In-Kissflow Template",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample29",
+      "Column::Row": [
+        "Row_Sample08",
+        "Row_Sample24",
+        "Row_Sample26"
+      ],
+      "Description": "[{\"type\":\"paragraph\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"ขั้นตอนการใช้งาน Template New Flow \"}]},{\"type\":\"ul_list\",\"data\":{\"listStyle\":\"initial\"},\"nodes\":[{\"type\":\"list_item\",\"data\":{},\"nodes\":[{\"type\":\"paragraph\",\"nodes\":[{\"type\":\"text\",\"text\":\"Duplicate ไปตั้งชื่อ Flow เป็น ภาษาอังกฤษ\"}],\"data\":{}}]},{\"type\":\"list_item\",\"data\":{},\"nodes\":[{\"type\":\"paragraph\",\"nodes\":[{\"type\":\"text\",\"text\":\"แก้ Prefix ใน Request Number\"}],\"data\":{}}]},{\"type\":\"list_item\",\"data\":{},\"nodes\":[{\"type\":\"paragraph\",\"nodes\":[{\"type\":\"text\",\"text\":\"บันทึก URL ใน CJ Kissflow Process \"},{\"type\":\"link\",\"data\":{\"href\":\"https://cjexpress.kissflow.com/view/dataset/CJ_KF_Process/\",\"text\":\"https://cjexpress.kissflow.com/view/dataset/CJ_KF_Process/\"},\"nodes\":[{\"type\":\"text\",\"text\":\"https://cjexpress.kissflow.com/view/dataset/CJ_KF_Process/\"}]}],\"data\":{}}]},{\"type\":\"list_item\",\"data\":{},\"nodes\":[{\"type\":\"paragraph\",\"nodes\":[{\"type\":\"text\",\"text\":\"ส่งมอบให้ Dev ทำงาน\"}],\"data\":{}}]}]},{\"type\":\"paragraph\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"\"}]}]",
+      "ColumnVisibility::Criteria": [
+        "Criteria_Sample14"
+      ]
+    },
+    "ProcessDef_Sample01": {
+      "Id": "ProcessDef_Sample01",
+      "Kind": "ProcessDef",
+      "WorkflowType": "Sequence",
+      "Model": "Model_Sample01",
+      "ProcessDef::Activity": [
+        "Activity_Sample03",
+        "Activity_Sample04",
+        "Activity_Sample01",
+        "Activity_Sample02"
+      ]
+    },
+    "Activity_Sample03": {
+      "Id": "Activity_Sample03",
+      "Kind": "Activity",
+      "NodeType": "StartEvent",
+      "Name": "Start",
+      "ProcessDef": "ProcessDef_Sample01",
+      "Activity::Permission": [
+        "Permission_Sample01"
+      ]
+    },
+    "Activity_Sample02": {
+      "Id": "Activity_Sample02",
+      "Kind": "Activity",
+      "NodeType": "EndEvent",
+      "Name": "Completed",
+      "ProcessDef": "ProcessDef_Sample01"
+    },
+    "Row_Sample10": {
+      "Id": "Row_Sample10",
+      "Kind": "Row",
+      "Button": "Model_Sample01",
+      "Initiator::Column": [
+        "Column_Sample08"
+      ]
+    },
+    "Column_Sample26": {
+      "Id": "Column_Sample26",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample09",
+      "Column::Field": [
+        "Requestor_Manager"
+      ],
+      "Hint": "หากข้อมูลไม่ขึ้น กรุณาติดต่อทีม IT ETO"
+    },
+    "Requestor_Manager": {
+      "Id": "Requestor_Manager",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-07-08T11:46:36.483Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample26",
+      "Name": "Manager ของผู้เปิดงาน",
+      "Required": true,
+      "Field::Expression": [
+        "Expression_Sample11"
+      ]
+    },
+    "SendBackToInitiator": {
+      "Id": "SendBackToInitiator",
+      "Kind": "Activity",
+      "NodeType": "SendBackToInitiator",
+      "BaseMetadata": "Activity_Sample03"
+    },
+    "User_Sample01": {
+      "Kind": "User",
+      "Name": "Sample Publisher",
+      "_id": "User_Sample01"
+    },
+    "Row_Sample11": {
+      "Id": "Row_Sample11",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample13"
+      ]
+    },
+    "Column_Sample13": {
+      "Id": "Column_Sample13",
+      "Kind": "Column",
+      "Type": "Section",
+      "Start": 0,
+      "End": 6,
+      "Name": "Public Form Template",
+      "Row": "Row_Sample11",
+      "Column::Row": [
+        "Row_Sample22",
+        "Row_Sample13",
+        "Row_Sample02",
+        "Row_Sample16"
+      ],
+      "IsHidden": true,
+      "ColumnVisibility::Criteria": [
+        "Criteria_Sample05"
+      ],
+      "Description": "[{\"type\":\"paragraph\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"ขั้นตอนการใช้งาน Template New Flow \"}]},{\"type\":\"ul_list\",\"data\":{\"listStyle\":\"initial\"},\"nodes\":[{\"type\":\"list_item\",\"data\":{},\"nodes\":[{\"type\":\"paragraph\",\"nodes\":[{\"type\":\"text\",\"text\":\"Duplicate ไปตั้งชื่อ Flow เป็น ภาษาอังกฤษ\"}],\"data\":{}}]},{\"type\":\"list_item\",\"data\":{},\"nodes\":[{\"type\":\"paragraph\",\"nodes\":[{\"type\":\"text\",\"text\":\"แก้ Prefix ใน Request Number\"}],\"data\":{}}]},{\"type\":\"list_item\",\"data\":{},\"nodes\":[{\"type\":\"paragraph\",\"nodes\":[{\"type\":\"text\",\"text\":\"บันทึก URL ใน CJ Kissflow Process \"},{\"type\":\"link\",\"data\":{\"href\":\"https://cjexpress.kissflow.com/view/dataset/CJ_KF_Process/\",\"text\":\"https://cjexpress.kissflow.com/view/dataset/CJ_KF_Process/\"},\"nodes\":[{\"type\":\"text\",\"text\":\"https://cjexpress.kissflow.com/view/dataset/CJ_KF_Process/\"}]}],\"data\":{}}]},{\"type\":\"list_item\",\"data\":{},\"nodes\":[{\"type\":\"paragraph\",\"nodes\":[{\"type\":\"text\",\"text\":\"ส่งมอบให้ Dev ทำงาน\"}],\"data\":{}}]}]},{\"type\":\"paragraph\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"\"}]}]"
+    },
+    "Column_Sample29": {
+      "Id": "Column_Sample29",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample15",
+      "Column::Field": [
+        "is_public_form"
+      ]
+    },
+    "is_public_form": {
+      "Id": "is_public_form",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-10T14:39:50.140Z",
+      "Model": "Model_Sample01",
+      "Name": "is public form",
+      "Column": "Column_Sample29",
+      "Field::Expression": [
+        "Expression_Sample05"
+      ],
+      "LHSOwnField::Condition": [
+        "Condition_Sample07",
+        "Condition_Sample03"
+      ]
+    },
+    "Expression_Sample05": {
+      "Id": "Expression_Sample05",
+      "Kind": "Expression",
+      "ExpressionStr": "if(_is_public_form, \"Public Form\", \"Kissflow\"",
+      "Field": "is_public_form",
+      "Expression::Node": [
+        "Node_Sample37"
+      ]
+    },
+    "Node_Sample37": {
+      "Id": "Node_Sample37",
+      "Kind": "Node",
+      "Value": "if",
+      "Expression": "Expression_Sample05",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample76",
+        "Node_Sample79",
+        "Node_Sample09"
+      ],
+      "DataType": "String",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample76": {
+      "Id": "Node_Sample76",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_is_public_form",
+      "DataType": "Boolean",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample37"
+    },
+    "Node_Sample79": {
+      "Id": "Node_Sample79",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "Public Form",
+      "DataType": "String",
+      "Node": "Node_Sample37"
+    },
+    "Node_Sample09": {
+      "Id": "Node_Sample09",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "Kissflow",
+      "DataType": "String",
+      "Node": "Node_Sample37"
+    },
+    "Criteria_Sample05": {
+      "Id": "Criteria_Sample05",
+      "Kind": "Criteria",
+      "ColumnVisibility": "Column_Sample13",
+      "Criteria::Condition": [
+        "Condition_Sample07"
+      ],
+      "IsOR": false
+    },
+    "Condition_Sample07": {
+      "Id": "Condition_Sample07",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample05",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "RHSValue": "Public Form",
+      "HasArguments": true,
+      "LHSOwnField": "is_public_form"
+    },
+    "Row_Sample25": {
+      "Id": "Row_Sample25",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample28"
+      ]
+    },
+    "Column_Sample28": {
+      "Id": "Column_Sample28",
+      "Kind": "Column",
+      "Type": "Section",
+      "Start": 0,
+      "End": 6,
+      "Name": "System",
+      "Row": "Row_Sample25",
+      "Column::Row": [
+        "Row_Sample15"
+      ],
+      "Description": "[{\"type\":\"paragraph\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"เอาไว้ใช้สำหรับทำ field ทด หรือสำรองข้อมูลที่จำเป็นใน Process\"}]}]",
+      "IsHidden": true
+    },
+    "Row_Sample05": {
+      "Id": "Row_Sample05",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample16"
+      ]
+    },
+    "Column_Sample16": {
+      "Id": "Column_Sample16",
+      "Kind": "Column",
+      "Type": "Section",
+      "Start": 0,
+      "End": 6,
+      "Name": "Request Info",
+      "Row": "Row_Sample05",
+      "Column::Row": [
+        "Row_Sample18",
+        "Row_Sample17"
+      ],
+      "Description": "[{\"type\":\"paragraph\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"ในส่วนนี้จะเป็นส่วนที่ข้อมูลจาก In-App Kissflow กับ Public Form มาลงใน Section นี้\"}]}]",
+      "ColumnVisibility::Criteria": [
+        "Criteria_Sample10"
+      ]
+    },
+    "Column_Sample34": {
+      "Id": "Column_Sample34",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample07",
+      "Column::Field": [
+        "final_email"
+      ]
+    },
+    "Column_Sample37": {
+      "Id": "Column_Sample37",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample22",
+      "Column::Field": [
+        "pbf_email"
+      ],
+      "Hint": "Template จะบังคับใส่ตัวพิมพ์เล็กเท่านั้น ผู้ใช้งานสามารถเอา Validation ออกได้"
+    },
+    "pbf_email": {
+      "Id": "pbf_email",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:01:23.208Z",
+      "Model": "Model_Sample01",
+      "Name": "Email ผู้เปิดงาน (PBF)",
+      "Column": "Column_Sample37",
+      "FieldValidation::Criteria": [
+        "Criteria_Sample12"
+      ],
+      "Field::Node": [
+        "Node_Sample87"
+      ],
+      "RHSField::Condition": [
+        "Condition_Sample15"
+      ]
+    },
+    "Criteria_Sample12": {
+      "Id": "Criteria_Sample12",
+      "Kind": "Criteria",
+      "FieldValidation": "pbf_email",
+      "Criteria::Condition": [
+        "Condition_Sample08",
+        "Condition_Sample19"
+      ]
+    },
+    "Condition_Sample08": {
+      "Id": "Condition_Sample08",
+      "Kind": "Condition",
+      "Operator": "EMAIL",
+      "Criteria": "Criteria_Sample12"
+    },
+    "Column_Sample11": {
+      "Id": "Column_Sample11",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample21",
+      "Column::Field": [
+        "pbf_first_name"
+      ]
+    },
+    "pbf_first_name": {
+      "Id": "pbf_first_name",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:02:41.478Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample11",
+      "Name": "ชื่อจริง (PBF)",
+      "Field::Node": [
+        "Node_Sample91"
+      ]
+    },
+    "Column_Sample02": {
+      "Id": "Column_Sample02",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample21",
+      "Column::Field": [
+        "pbf_last_name"
+      ]
+    },
+    "pbf_last_name": {
+      "Id": "pbf_last_name",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:02:54.632Z",
+      "Model": "Model_Sample01",
+      "Name": "นามสกุล (PBF)",
+      "Column": "Column_Sample02",
+      "Field::Node": [
+        "Node_Sample101"
+      ]
+    },
+    "Column_Sample31": {
+      "Id": "Column_Sample31",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample20",
+      "Column::Field": [
+        "pbf_bu_lookup"
+      ]
+    },
+    "QueryDefinition_Sample02": {
+      "Id": "QueryDefinition_Sample02",
+      "Kind": "QueryDefinition",
+      "Field": "pbf_bu_lookup",
+      "LHSModel": "Department_Master_01",
+      "LookupField": [
+        {
+          "Type": "Text",
+          "Name": "Key",
+          "Id": "Name"
+        },
+        {
+          "Type": "Text",
+          "Name": "Department Name",
+          "Id": "Department_Name"
+        },
+        {
+          "Type": "User",
+          "Name": "Department Head",
+          "Id": "Department_Head",
+          "SourceFlowId": "User",
+          "SourceFlowType": "User"
+        },
+        {
+          "Type": "Text",
+          "Name": "Department Mail Alias",
+          "Id": "Department_Mail_Alias"
+        },
+        {
+          "Type": "Select",
+          "Name": "Cost Center",
+          "Id": "Cost_Center"
+        },
+        {
+          "Type": "User",
+          "Name": "Parent Department Head",
+          "Id": "Parent_Department_Head",
+          "SourceFlowId": "User",
+          "SourceFlowType": "User"
+        },
+        {
+          "Type": "MultiUser",
+          "Name": "Department Head Co",
+          "Id": "Department_Head_Co"
+        },
+        {
+          "Type": "Select",
+          "Name": "BU Certificate",
+          "Id": "BU_Certificate"
+        }
+      ],
+      "FlowType": "Dataset",
+      "HiddenField": [
+        "Name"
+      ]
+    },
+    "pbf_bu_lookup": {
+      "Id": "pbf_bu_lookup",
+      "Kind": "Field",
+      "Type": "Reference",
+      "CreatedAt": "2025-12-11T08:33:38.009Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample31",
+      "Field::QueryDefinition": [
+        "QueryDefinition_Sample02"
+      ],
+      "Field::Node": [
+        "Node_Sample34",
+        "Node_Sample93"
+      ],
+      "Field::Component": [
+        "Component_Sample01"
+      ],
+      "Name": "เลือก Business Unit"
+    },
+    "Row_Sample15": {
+      "Id": "Row_Sample15",
+      "Kind": "Row",
+      "Column": "Column_Sample28",
+      "Row::Column": [
+        "Column_Sample29",
+        "Column_Sample07"
+      ]
+    },
+    "final_email": {
+      "Id": "final_email",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:01:02.295Z",
+      "Model": "Model_Sample01",
+      "Name": "Email ผู้เปิดงาน",
+      "Column": "Column_Sample34",
+      "Field::Expression": [
+        "Expression_Sample16"
+      ],
+      "RHSField::Condition": [
+        "Condition_Sample17"
+      ]
+    },
+    "Column_Sample17": {
+      "Id": "Column_Sample17",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample04",
+      "Column::Field": [
+        "final_requestor_name"
+      ]
+    },
+    "final_requestor_name": {
+      "Id": "final_requestor_name",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:39:16.612Z",
+      "Model": "Model_Sample01",
+      "Name": "ชื่อผู้เปิดงาน",
+      "Column": "Column_Sample17",
+      "Field::Expression": [
+        "Expression_Sample14"
+      ]
+    },
+    "Column_Sample36": {
+      "Id": "Column_Sample36",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 4,
+      "End": 5,
+      "Row": "Row_Sample21",
+      "Column::Field": [
+        "pbf_nick_name"
+      ]
+    },
+    "pbf_nick_name": {
+      "Id": "pbf_nick_name",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:42:11.810Z",
+      "Model": "Model_Sample01",
+      "Name": "ชื่อเล่น (PBF)",
+      "Column": "Column_Sample36",
+      "Field::Node": [
+        "Node_Sample40"
+      ]
+    },
+    "Column_Sample12": {
+      "Id": "Column_Sample12",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample04",
+      "Column::Field": [
+        "final_nick_name"
+      ]
+    },
+    "final_nick_name": {
+      "Id": "final_nick_name",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T08:42:30.080Z",
+      "Model": "Model_Sample01",
+      "Name": "ชื่อเล่นผู้เปิดงาน",
+      "Column": "Column_Sample12",
+      "Field::Expression": [
+        "Expression_Sample15"
+      ]
+    },
+    "Column_Sample39": {
+      "Id": "Column_Sample39",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample07",
+      "Column::Field": [
+        "final_employee_id"
+      ]
+    },
+    "final_employee_id": {
+      "Id": "final_employee_id",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-11T09:58:39.783Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample39",
+      "Field::Expression": [
+        "Expression_Sample09"
+      ],
+      "Name": "รหัสพนักงานผู้เปิดงาน"
+    },
+    "Condition_Sample19": {
+      "Id": "Condition_Sample19",
+      "Kind": "Condition",
+      "Operator": "REGEX",
+      "HasArguments": true,
+      "Criteria": "Criteria_Sample12",
+      "RHSType": "Value",
+      "RHSValue": "^[a-z.]+@cjexpress.co.th$",
+      "ErrorMessage": "กรอกเฉพาะตัวพิมพ์เล็กเท่านั้นและเป็นเมลบริษัท"
+    },
+    "Column_Sample06": {
+      "Id": "Column_Sample06",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample09",
+      "Column::Field": [
+        "requestor_id"
+      ]
+    },
+    "requestor_id": {
+      "Id": "requestor_id",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-12T04:52:55.514Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample06",
+      "Field::Node": [
+        "Node_Sample99"
+      ],
+      "Name": "รหัสพนักงานผู้เปิดงาน",
+      "Required": true,
+      "Field::Expression": [
+        "Expression_Sample12"
+      ]
+    },
+    "Column_Sample38": {
+      "Id": "Column_Sample38",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 5,
+      "End": 6,
+      "Row": "Row_Sample21",
+      "Column::Field": [
+        "pbf_req_id"
+      ],
+      "Hint": "Template บังคับ format CJG1234567 (CJ ตามด้วยตัวพิมพ์ใหญ่และเลข 7 หลัก) ผู้ใช้งานสามารถเอา Validation ออกได้"
+    },
+    "pbf_req_id": {
+      "Id": "pbf_req_id",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-12T04:57:25.282Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample38",
+      "FieldValidation::Criteria": [
+        "Criteria_Sample15"
+      ],
+      "Field::Node": [
+        "Node_Sample47"
+      ],
+      "Name": "รหัสพนักงาน (PBF)"
+    },
+    "Criteria_Sample15": {
+      "Id": "Criteria_Sample15",
+      "Kind": "Criteria",
+      "FieldValidation": "pbf_req_id",
+      "Criteria::Condition": [
+        "Condition_Sample14"
+      ]
+    },
+    "Condition_Sample14": {
+      "Id": "Condition_Sample14",
+      "Kind": "Condition",
+      "Operator": "REGEX",
+      "HasArguments": true,
+      "Criteria": "Criteria_Sample15",
+      "RHSType": "Value",
+      "RHSValue": "^CJ[A-Z]\\d{7}$",
+      "ErrorMessage": "Template บังคับ format CJG0000000 (CJ ตามด้วยตัวพิมพ์ใหญ่และเลข 7 หลัก)"
+    },
+    "Activity_Sample01": {
+      "Id": "Activity_Sample01",
+      "Kind": "Activity",
+      "NodeType": "UserTask",
+      "ProcessDef": "ProcessDef_Sample01",
+      "Name": "Manager Approve",
+      "IsSuspended": true,
+      "SuspendedAt": "2025-12-12T05:09:10.618Z"
+    },
+    "Column_Sample07": {
+      "Id": "Column_Sample07",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample15",
+      "Column::Field": [
+        "pbf_submit_flag"
+      ],
+      "Hint": "0 คือ user มี kissflow account แล้ว จะไม่ให้กด submit ผ่าน Public Form"
+    },
+    "pbf_submit_flag": {
+      "Id": "pbf_submit_flag",
+      "Kind": "Field",
+      "Type": "Number",
+      "CreatedAt": "2025-12-12T05:13:15.572Z",
+      "Model": "Model_Sample01",
+      "Name": "pbf submit flag",
+      "Column": "Column_Sample07",
+      "FieldValidation::Criteria": [
+        "Criteria_Sample06"
+      ],
+      "LHSOwnField::Condition": [
+        "Condition_Sample18",
+        "Condition_Sample05",
+        "Condition_Sample06",
+        "Condition_Sample11",
+        "Condition_Sample13"
+      ],
+      "Field::Expression": [
+        "Expression_Sample04"
+      ]
+    },
+    "Criteria_Sample06": {
+      "Id": "Criteria_Sample06",
+      "Kind": "Criteria",
+      "FieldValidation": "pbf_submit_flag",
+      "Criteria::Condition": [
+        "Condition_Sample09"
+      ]
+    },
+    "Condition_Sample09": {
+      "Id": "Condition_Sample09",
+      "Kind": "Condition",
+      "Operator": "NOT_EQUAL_TO",
+      "HasArguments": true,
+      "Criteria": "Criteria_Sample06",
+      "RHSType": "Value",
+      "RHSValue": "0",
+      "ErrorMessage": "พบ User Kissflow ของผู้ใช้งานอยู่แล้วรบกวนไปเริ่มใบงานใน Kissflow"
+    },
+    "Column_Sample01": {
+      "Id": "Column_Sample01",
+      "Kind": "Column",
+      "Type": "Grid",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample02",
+      "Column::Row": [
+        "Row_Sample21",
+        "Row_Sample27"
+      ],
+      "ColumnVisibility::Criteria": [
+        "Criteria_Sample13"
+      ]
+    },
+    "Row_Sample21": {
+      "Id": "Row_Sample21",
+      "Kind": "Row",
+      "Column": "Column_Sample01",
+      "Row::Column": [
+        "Column_Sample11",
+        "Column_Sample02",
+        "Column_Sample36",
+        "Column_Sample38"
+      ]
+    },
+    "Column_Sample09": {
+      "Id": "Column_Sample09",
+      "Kind": "Column",
+      "Type": "RichText",
+      "Start": 1,
+      "End": 5,
+      "Row": "Row_Sample13",
+      "IsHidden": true,
+      "ColumnVisibility::Criteria": [
+        "Criteria_Sample01"
+      ],
+      "Description": "[{\"type\":\"h1\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"⚠️ พบข้อมูลของคุณในระบบแล้ว ❌ ไม่สามารถส่งคำขอผ่านหน้านี้ได้\"}]},{\"type\":\"paragraph\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"เนื่องจากคุณมี Kissflow Account อยู่แล้ว \"}]},{\"type\":\"paragraph\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"กรุณาเข้าสู่ระบบและเปิดใบงานผ่าน Process โดยตรงผ่าน Link: \"},{\"type\":\"link\",\"data\":{\"href\":\"https://cjexpress.kissflow.com/view/process/Template_Flow_Sample/myitems/Draft\",\"text\":\"Kissflow\"},\"nodes\":[{\"type\":\"underline\",\"data\":{},\"nodes\":[{\"type\":\"bold\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"Kissflow\"}]}]}]}]}]"
+    },
+    "Criteria_Sample01": {
+      "Id": "Criteria_Sample01",
+      "Kind": "Criteria",
+      "ColumnVisibility": "Column_Sample09",
+      "Criteria::Condition": [
+        "Condition_Sample05"
+      ],
+      "IsOR": false
+    },
+    "Condition_Sample05": {
+      "Id": "Condition_Sample05",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample01",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "RHSValue": "0",
+      "HasArguments": true,
+      "LHSOwnField": "pbf_submit_flag"
+    },
+    "Criteria_Sample14": {
+      "Id": "Criteria_Sample14",
+      "Kind": "Criteria",
+      "ColumnVisibility": "Column_Sample03",
+      "IsHidden": true,
+      "Criteria::Condition": [
+        "Condition_Sample03"
+      ],
+      "IsOR": false
+    },
+    "Condition_Sample03": {
+      "Id": "Condition_Sample03",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample14",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "RHSValue": "Public Form",
+      "HasArguments": true,
+      "LHSOwnField": "is_public_form"
+    },
+    "Column_Sample08": {
+      "Id": "Column_Sample08",
+      "Kind": "Column",
+      "Type": "Button",
+      "Name": "Submit",
+      "Label": "Submit",
+      "Start": 2,
+      "End": 3,
+      "Initiator": "Row_Sample10",
+      "Column::Permission": [
+        "Permission_Sample01"
+      ]
+    },
+    "Permission_Sample01": {
+      "Id": "Permission_Sample01",
+      "Kind": "Permission",
+      "Column": "Column_Sample08",
+      "Activity": "Activity_Sample03",
+      "Permission::Criteria": [
+        "Criteria_Sample03"
+      ],
+      "Label": "Submit"
+    },
+    "Criteria_Sample03": {
+      "Id": "Criteria_Sample03",
+      "Kind": "Criteria",
+      "Permission": "Permission_Sample01",
+      "Criteria::Condition": [
+        "Condition_Sample18"
+      ]
+    },
+    "Condition_Sample18": {
+      "Id": "Condition_Sample18",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample03",
+      "LHSOwnField": "pbf_submit_flag",
+      "Operator": "NOT_EQUAL_TO",
+      "RHSType": "Value",
+      "RHSValue": "0"
+    },
+    "Expression_Sample09": {
+      "Id": "Expression_Sample09",
+      "Kind": "Expression",
+      "ExpressionStr": "if(_is_public_form, pbf_req_id, requestor_id)",
+      "Field": "final_employee_id",
+      "Expression::Node": [
+        "Node_Sample22"
+      ]
+    },
+    "Node_Sample22": {
+      "Id": "Node_Sample22",
+      "Kind": "Node",
+      "Value": "if",
+      "Expression": "Expression_Sample09",
+      "FieldRefCount": 3,
+      "Node::Node": [
+        "Node_Sample73",
+        "Node_Sample47",
+        "Node_Sample99"
+      ],
+      "DataType": "String",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample73": {
+      "Id": "Node_Sample73",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_is_public_form",
+      "DataType": "Boolean",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample22"
+    },
+    "Node_Sample47": {
+      "Id": "Node_Sample47",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "pbf_req_id",
+      "DataType": "String",
+      "Node": "Node_Sample22"
+    },
+    "Node_Sample99": {
+      "Id": "Node_Sample99",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor_id",
+      "DataType": "String",
+      "Node": "Node_Sample22"
+    },
+    "Row_Sample27": {
+      "Id": "Row_Sample27",
+      "Kind": "Row",
+      "Column": "Column_Sample01"
+    },
+    "Column_Sample04": {
+      "Id": "Column_Sample04",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample14",
+      "Column::Field": [
+        "department_name"
+      ],
+      "IsHidden": true,
+      "Hint": "ชื่อสำนัก"
+    },
+    "Expression_Sample10": {
+      "Id": "Expression_Sample10",
+      "Kind": "Expression",
+      "ExpressionStr": "pbf_bu_lookup.Department_Name",
+      "Field": "department_name",
+      "Expression::Node": [
+        "Node_Sample27"
+      ]
+    },
+    "Node_Sample27": {
+      "Id": "Node_Sample27",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Expression": "Expression_Sample10",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample34",
+        "Node_Sample82"
+      ],
+      "SourceFlowId": "Department_Master_01",
+      "SourceFlowType": "Dataset",
+      "DataType": "String",
+      "Category": "Reference"
+    },
+    "Node_Sample34": {
+      "Id": "Node_Sample34",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "pbf_bu_lookup",
+      "DataType": "Reference",
+      "FlowId": "Department_Master_01",
+      "FlowType": "Dataset",
+      "Node": "Node_Sample27"
+    },
+    "Node_Sample82": {
+      "Id": "Node_Sample82",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Department_Name",
+      "RefModel": "Department_Master_01",
+      "DataType": "String",
+      "RefFlowType": "Dataset",
+      "Node": "Node_Sample27"
+    },
+    "department_name": {
+      "Id": "department_name",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2025-12-12T10:30:09.825Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample04",
+      "Field::Expression": [
+        "Expression_Sample10"
+      ],
+      "Name": "Department Name"
+    },
+    "Column_Sample19": {
+      "Id": "Column_Sample19",
+      "Kind": "Column",
+      "Type": "Grid",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample17",
+      "Column::Row": [
+        "Row_Sample04",
+        "Row_Sample07",
+        "Row_Sample23"
+      ]
+    },
+    "Row_Sample04": {
+      "Id": "Row_Sample04",
+      "Kind": "Row",
+      "Column": "Column_Sample19",
+      "Row::Column": [
+        "Column_Sample17",
+        "Column_Sample12"
+      ]
+    },
+    "Row_Sample07": {
+      "Id": "Row_Sample07",
+      "Kind": "Row",
+      "Column": "Column_Sample19",
+      "Row::Column": [
+        "Column_Sample39",
+        "Column_Sample34"
+      ]
+    },
+    "Column_Sample40": {
+      "Id": "Column_Sample40",
+      "Kind": "Column",
+      "Type": "Grid",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample16",
+      "Column::Row": [
+        "Row_Sample20",
+        "Row_Sample14"
+      ],
+      "ColumnVisibility::Criteria": [
+        "Criteria_Sample07"
+      ]
+    },
+    "Row_Sample20": {
+      "Id": "Row_Sample20",
+      "Kind": "Row",
+      "Column": "Column_Sample40",
+      "Row::Column": [
+        "Column_Sample31"
+      ]
+    },
+    "Row_Sample14": {
+      "Id": "Row_Sample14",
+      "Kind": "Row",
+      "Column": "Column_Sample40",
+      "Row::Column": [
+        "Column_Sample04",
+        "Column_Sample21"
+      ]
+    },
+    "Activity_Sample04": {
+      "Id": "Activity_Sample04",
+      "Kind": "Activity",
+      "Name": "Manager Approve",
+      "NodeType": "UserTask",
+      "ProcessDef": "ProcessDef_Sample01",
+      "Activity::Resource": [
+        "Resource_Sample01"
+      ]
+    },
+    "Column_Sample35": {
+      "Id": "Column_Sample35",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 4,
+      "End": 6,
+      "Row": "Row_Sample09",
+      "Column::Field": [
+        "requestor_manager_mail"
+      ],
+      "IsHidden": true
+    },
+    "requestor_manager_mail": {
+      "Id": "requestor_manager_mail",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-13T04:45:36.158Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample35",
+      "Field::Node": [
+        "Node_Sample58",
+        "Node_Sample94"
+      ],
+      "Name": "Manager Email ผู้เปิดงาน",
+      "Field::Expression": [
+        "Expression_Sample02"
+      ]
+    },
+    "Row_Sample23": {
+      "Id": "Row_Sample23",
+      "Kind": "Row",
+      "Column": "Column_Sample19",
+      "Row::Column": [
+        "Column_Sample27",
+        "Column_Sample32"
+      ]
+    },
+    "Column_Sample27": {
+      "Id": "Column_Sample27",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample23",
+      "Column::Field": [
+        "manager_user"
+      ]
+    },
+    "QueryDefinition_Sample01": {
+      "Id": "QueryDefinition_Sample01",
+      "Kind": "QueryDefinition",
+      "Field": "manager_user",
+      "FlowType": "User",
+      "LookupField": [],
+      "LHSModel": "_employee",
+      "AutoFill": true,
+      "QueryDefinition::Criteria": [
+        "Criteria_Sample02"
+      ]
+    },
+    "manager_user": {
+      "Id": "manager_user",
+      "Kind": "Field",
+      "Type": "User",
+      "CreatedAt": "2026-01-13T06:44:17.854Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample27",
+      "Field::QueryDefinition": [
+        "QueryDefinition_Sample01"
+      ],
+      "Field::Resource": [
+        "Resource_Sample01"
+      ],
+      "Name": "Manager ที่จะต้องอนุมัติใบงานผู้เปิดงาน"
+    },
+    "Criteria_Sample02": {
+      "Id": "Criteria_Sample02",
+      "Kind": "Criteria",
+      "QueryDefinition": "QueryDefinition_Sample01",
+      "Criteria::Condition": [
+        "Condition_Sample04"
+      ],
+      "IsOR": false
+    },
+    "Condition_Sample04": {
+      "Id": "Condition_Sample04",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample02",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Field",
+      "RHSField": "final_manager_email",
+      "HasArguments": true,
+      "LHSField": "Email"
+    },
+    "Row_Sample24": {
+      "Id": "Row_Sample24",
+      "Kind": "Row",
+      "Column": "Column_Sample03",
+      "Row::Column": [
+        "Column_Sample22"
+      ]
+    },
+    "Column_Sample22": {
+      "Id": "Column_Sample22",
+      "Kind": "Column",
+      "Type": "Grid",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample24",
+      "Column::Row": [
+        "Row_Sample19"
+      ],
+      "IsHidden": true,
+      "ColumnVisibility::Criteria": [
+        "Criteria_Sample11"
+      ]
+    },
+    "Row_Sample08": {
+      "Id": "Row_Sample08",
+      "Kind": "Row",
+      "Column": "Column_Sample03",
+      "Row::Column": [
+        "Column_Sample05"
+      ]
+    },
+    "Column_Sample05": {
+      "Id": "Column_Sample05",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample08",
+      "Column::Field": [
+        "self_or_representative"
+      ],
+      "Hint": "Yes คือเปิดงานด้วยตัวเอง | No คือ เปิดงานแทน",
+      "Column::Appearance": [
+        "Appearance_Sample02"
+      ]
+    },
+    "self_or_representative": {
+      "Id": "self_or_representative",
+      "Kind": "Field",
+      "Type": "Boolean",
+      "CreatedAt": "2026-01-13T07:40:28.028Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample05",
+      "Name": "เปิดงานด้วยตัวเองหรือไม่",
+      "LHSOwnField::Condition": [
+        "Condition_Sample16",
+        "Condition_Sample01",
+        "Condition_Sample12"
+      ],
+      "DefaultValue": "true",
+      "Field::Node": [
+        "Node_Sample24",
+        "Node_Sample02",
+        "Node_Sample43"
+      ]
+    },
+    "Row_Sample26": {
+      "Id": "Row_Sample26",
+      "Kind": "Row",
+      "Column": "Column_Sample03",
+      "Row::Column": [
+        "Column_Sample20"
+      ]
+    },
+    "Column_Sample20": {
+      "Id": "Column_Sample20",
+      "Kind": "Column",
+      "Type": "Grid",
+      "Start": 0,
+      "End": 6,
+      "Row": "Row_Sample26",
+      "Column::Row": [
+        "Row_Sample12",
+        "Row_Sample09",
+        "Row_Sample01"
+      ]
+    },
+    "Column_Sample33": {
+      "Id": "Column_Sample33",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample19",
+      "Column::Field": [
+        "rep_requestor_email"
+      ],
+      "Hint": "ผู้เปิดงานกรอก email ของผู้ที่ต้องการเปิดงานแทน โดยผู้เปิดงานแทนต้องมี Account Kissflow ด้วย",
+      "Column::Appearance": [
+        "Appearance_Sample01"
+      ]
+    },
+    "rep_requestor_email": {
+      "Id": "rep_requestor_email",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-13T07:54:04.427Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample33",
+      "Name": "Email ผู้เปิดงานแทน",
+      "Field::Node": [
+        "Node_Sample70"
+      ],
+      "RHSField::Condition": [
+        "Condition_Sample10"
+      ],
+      "Field::Expression": [
+        "Expression_Sample08"
+      ]
+    },
+    "Column_Sample32": {
+      "Id": "Column_Sample32",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample23",
+      "Column::Field": [
+        "final_manager_email"
+      ]
+    },
+    "final_manager_email": {
+      "Id": "final_manager_email",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-13T08:25:20.953Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample32",
+      "Name": "Manager Email",
+      "Field::Expression": [
+        "Expression_Sample07"
+      ],
+      "RHSField::Condition": [
+        "Condition_Sample04"
+      ]
+    },
+    "Column_Sample21": {
+      "Id": "Column_Sample21",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample14",
+      "Column::Field": [
+        "department_head_email"
+      ],
+      "IsHidden": true
+    },
+    "department_head_email": {
+      "Id": "department_head_email",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-13T08:27:17.821Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample21",
+      "Field::Expression": [
+        "Expression_Sample03"
+      ],
+      "Field::Node": [
+        "Node_Sample41"
+      ],
+      "Name": "Department Head Email"
+    },
+    "Expression_Sample03": {
+      "Id": "Expression_Sample03",
+      "Kind": "Expression",
+      "ExpressionStr": "pbf_bu_lookup.Department_Head.Email",
+      "Field": "department_head_email",
+      "Expression::Node": [
+        "Node_Sample49"
+      ]
+    },
+    "Node_Sample49": {
+      "Id": "Node_Sample49",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Expression": "Expression_Sample03",
+      "Node::Node": [
+        "Node_Sample35",
+        "Node_Sample56"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample35": {
+      "Id": "Node_Sample35",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Node": "Node_Sample49",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample93",
+        "Node_Sample89"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "User",
+      "Category": "Reference"
+    },
+    "Node_Sample93": {
+      "Id": "Node_Sample93",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "pbf_bu_lookup",
+      "DataType": "Reference",
+      "FlowId": "Department_Master_01",
+      "FlowType": "Dataset",
+      "Node": "Node_Sample35"
+    },
+    "Node_Sample89": {
+      "Id": "Node_Sample89",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Department_Head",
+      "RefModel": "User",
+      "DataType": "User",
+      "RefFlowType": "User",
+      "Node": "Node_Sample35"
+    },
+    "Node_Sample56": {
+      "Id": "Node_Sample56",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Email",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample49"
+    },
+    "Expression_Sample07": {
+      "Id": "Expression_Sample07",
+      "Kind": "Expression",
+      "ExpressionStr": "if(isBlank(requestor_manager_mail), department_head_email, requestor_manager_mail)",
+      "Field": "final_manager_email",
+      "Expression::Node": [
+        "Node_Sample96"
+      ]
+    },
+    "Node_Sample96": {
+      "Id": "Node_Sample96",
+      "Kind": "Node",
+      "Value": "if",
+      "Expression": "Expression_Sample07",
+      "Node::Node": [
+        "Node_Sample19",
+        "Node_Sample41",
+        "Node_Sample94"
+      ],
+      "FieldRefCount": 2,
+      "DataType": "String",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample19": {
+      "Id": "Node_Sample19",
+      "Kind": "Node",
+      "Value": "isBlank",
+      "Node": "Node_Sample96",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample58"
+      ],
+      "DataType": "Boolean",
+      "Category": "String",
+      "Type": "Function"
+    },
+    "Node_Sample58": {
+      "Id": "Node_Sample58",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor_manager_mail",
+      "DataType": "String",
+      "Node": "Node_Sample19"
+    },
+    "Node_Sample41": {
+      "Id": "Node_Sample41",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "department_head_email",
+      "DataType": "String",
+      "Node": "Node_Sample96"
+    },
+    "Node_Sample94": {
+      "Id": "Node_Sample94",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor_manager_mail",
+      "DataType": "String",
+      "Node": "Node_Sample96"
+    },
+    "Component_Sample01": {
+      "Id": "Component_Sample01",
+      "Kind": "Component",
+      "Type": "System",
+      "Model": "Model_Sample01",
+      "ComponentId": "Component_oKkCjtMhB6",
+      "Field": "pbf_bu_lookup",
+      "Component::Property": [
+        "Property_Sample01"
+      ]
+    },
+    "Property_Sample01": {
+      "Id": "Property_Sample01",
+      "Kind": "Property",
+      "Value": {
+        "SelectedFields": [
+          {
+            "Type": "Text",
+            "Name": "Department Name",
+            "Id": "Department_Name"
+          },
+          {
+            "Type": "User",
+            "Name": "Department Head",
+            "Id": "Department_Head",
+            "SourceFlowId": "User",
+            "SourceFlowType": "User"
+          },
+          {
+            "Type": "Text",
+            "Name": "Department Mail Alias",
+            "Id": "Department_Mail_Alias"
+          },
+          {
+            "Type": "Select",
+            "Name": "Cost Center",
+            "Id": "Cost_Center"
+          },
+          {
+            "Type": "User",
+            "Name": "Parent Department Head",
+            "Id": "Parent_Department_Head",
+            "SourceFlowId": "User",
+            "SourceFlowType": "User"
+          },
+          {
+            "Type": "MultiUser",
+            "Name": "Department Head Co",
+            "Id": "Department_Head_Co"
+          },
+          {
+            "Type": "Select",
+            "Name": "BU Certificate",
+            "Id": "BU_Certificate"
+          }
+        ],
+        "SelectionType": "CARD",
+        "DisplayType": "CARD",
+        "CoverImageAlignment": "HORIZONTAL",
+        "SelectedValueField": {},
+        "SelectedHeaderField": {
+          "Type": "Text",
+          "Name": "Department Name",
+          "Id": "Department_Name"
+        },
+        "SelectedCoverImageField": {}
+      },
+      "ValueType": "Object",
+      "Component": "Component_Sample01"
+    },
+    "Resource_Sample01": {
+      "Id": "Resource_Sample01",
+      "Kind": "Resource",
+      "ValueType": "Field",
+      "DisplayValue": "manager user",
+      "Field": "manager_user",
+      "Activity": "Activity_Sample04"
+    },
+    "Row_Sample12": {
+      "Id": "Row_Sample12",
+      "Kind": "Row",
+      "Column": "Column_Sample20",
+      "Row::Column": [
+        "Column_Sample30",
+        "Column_Sample25"
+      ]
+    },
+    "Row_Sample22": {
+      "Id": "Row_Sample22",
+      "Kind": "Row",
+      "Column": "Column_Sample13",
+      "Row::Column": [
+        "Column_Sample37"
+      ]
+    },
+    "Criteria_Sample13": {
+      "Id": "Criteria_Sample13",
+      "Kind": "Criteria",
+      "ColumnVisibility": "Column_Sample01",
+      "IsHidden": true,
+      "Criteria::Condition": [
+        "Condition_Sample06"
+      ],
+      "IsOR": false
+    },
+    "Condition_Sample06": {
+      "Id": "Condition_Sample06",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample13",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "RHSValue": "0",
+      "HasArguments": true,
+      "LHSOwnField": "pbf_submit_flag"
+    },
+    "Criteria_Sample07": {
+      "Id": "Criteria_Sample07",
+      "Kind": "Criteria",
+      "ColumnVisibility": "Column_Sample40",
+      "IsHidden": true,
+      "Criteria::Condition": [
+        "Condition_Sample11"
+      ],
+      "IsOR": false
+    },
+    "Condition_Sample11": {
+      "Id": "Condition_Sample11",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample07",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "RHSValue": "0",
+      "HasArguments": true,
+      "LHSOwnField": "pbf_submit_flag"
+    },
+    "Row_Sample13": {
+      "Id": "Row_Sample13",
+      "Kind": "Row",
+      "Column": "Column_Sample13",
+      "Row::Column": [
+        "Column_Sample09"
+      ]
+    },
+    "Row_Sample02": {
+      "Id": "Row_Sample02",
+      "Kind": "Row",
+      "Column": "Column_Sample13",
+      "Row::Column": [
+        "Column_Sample01"
+      ]
+    },
+    "Row_Sample16": {
+      "Id": "Row_Sample16",
+      "Kind": "Row",
+      "Column": "Column_Sample13",
+      "Row::Column": [
+        "Column_Sample40"
+      ]
+    },
+    "Column_Sample23": {
+      "Id": "Column_Sample23",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample01",
+      "Column::Field": [
+        "Department_"
+      ],
+      "Hint": "หากข้อมูลไม่ขึ้น กรุณาติดต่อทีม IT ETO"
+    },
+    "Department_": {
+      "Id": "Department_",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-14T07:30:00.606Z",
+      "Model": "Model_Sample01",
+      "Column": "Column_Sample23",
+      "Name": "Department ผู้เปิดงาน",
+      "Required": true,
+      "Field::Expression": [
+        "Expression_Sample06"
+      ]
+    },
+    "Criteria_Sample10": {
+      "Id": "Criteria_Sample10",
+      "Kind": "Criteria",
+      "ColumnVisibility": "Column_Sample16",
+      "IsHidden": true,
+      "Criteria::Condition": [
+        "Condition_Sample13"
+      ],
+      "IsOR": false
+    },
+    "Condition_Sample13": {
+      "Id": "Condition_Sample13",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample10",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "RHSValue": "0",
+      "HasArguments": true,
+      "LHSOwnField": "pbf_submit_flag"
+    },
+    "Column_Sample30": {
+      "Id": "Column_Sample30",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample12",
+      "Column::Field": [
+        "requestor"
+      ],
+      "ColumnVisibility::Criteria": [
+        "Criteria_Sample16"
+      ]
+    },
+    "QueryDefinition_Sample03": {
+      "Id": "QueryDefinition_Sample03",
+      "Kind": "QueryDefinition",
+      "Field": "requestor",
+      "FlowType": "User",
+      "LookupField": [],
+      "LHSModel": "User",
+      "AutoFill": true,
+      "QueryDefinition::Criteria": [
+        "Criteria_Sample08"
+      ]
+    },
+    "Row_Sample09": {
+      "Id": "Row_Sample09",
+      "Kind": "Row",
+      "Column": "Column_Sample20",
+      "Row::Column": [
+        "Column_Sample06",
+        "Column_Sample26",
+        "Column_Sample35"
+      ]
+    },
+    "Row_Sample01": {
+      "Id": "Row_Sample01",
+      "Kind": "Row",
+      "Column": "Column_Sample20",
+      "Row::Column": [
+        "Column_Sample23"
+      ]
+    },
+    "Appearance_Sample01": {
+      "Id": "Appearance_Sample01",
+      "Kind": "Appearance",
+      "Column": "Column_Sample33",
+      "Appearance::Style": [
+        "Style_Sample04"
+      ]
+    },
+    "Style_Sample04": {
+      "Id": "Style_Sample04",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample01"
+    },
+    "Column_Sample25": {
+      "Id": "Column_Sample25",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 2,
+      "End": 4,
+      "Row": "Row_Sample12",
+      "Column::Field": [
+        "requestor_email"
+      ],
+      "ColumnVisibility::Criteria": [
+        "Criteria_Sample04"
+      ],
+      "Hint": "กรณีเปิดงานเองระบบจะเรียกข้อมูลขึ้นมาให้",
+      "Column::Appearance": [
+        "Appearance_Sample03"
+      ]
+    },
+    "requestor_email": {
+      "Id": "requestor_email",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-26T08:06:07.707Z",
+      "Model": "Model_Sample01",
+      "Name": "Email ผู้เปิดงาน",
+      "Column": "Column_Sample25",
+      "FieldValidation::Criteria": [
+        "Criteria_Sample09"
+      ],
+      "Field::Expression": [
+        "Expression_Sample01"
+      ],
+      "Field::Node": [
+        "Node_Sample50"
+      ]
+    },
+    "requestor": {
+      "Id": "requestor",
+      "Kind": "Field",
+      "Type": "User",
+      "CreatedAt": "2026-01-26T08:03:03.668Z",
+      "Model": "Model_Sample01",
+      "Name": "Requestor User",
+      "Column": "Column_Sample30",
+      "Field::QueryDefinition": [
+        "QueryDefinition_Sample03"
+      ],
+      "Field::Node": [
+        "Node_Sample51",
+        "Node_Sample23",
+        "Node_Sample78",
+        "Node_Sample60",
+        "Node_Sample11",
+        "Node_Sample14",
+        "Node_Sample29"
+      ]
+    },
+    "Expression_Sample12": {
+      "Id": "Expression_Sample12",
+      "Kind": "Expression",
+      "ExpressionStr": "requestor.Staff_Id",
+      "Field": "requestor_id",
+      "Expression::Node": [
+        "Node_Sample46"
+      ]
+    },
+    "Node_Sample46": {
+      "Id": "Node_Sample46",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Expression": "Expression_Sample12",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample51",
+        "Node_Sample81"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample51": {
+      "Id": "Node_Sample51",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor",
+      "DataType": "User",
+      "FlowId": "User",
+      "FlowType": "User",
+      "Node": "Node_Sample46"
+    },
+    "Node_Sample81": {
+      "Id": "Node_Sample81",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Staff_Id",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample46"
+    },
+    "Expression_Sample11": {
+      "Id": "Expression_Sample11",
+      "Kind": "Expression",
+      "ExpressionStr": "requestor.Manager.Name",
+      "Field": "Requestor_Manager",
+      "Expression::Node": [
+        "Node_Sample10"
+      ]
+    },
+    "Node_Sample10": {
+      "Id": "Node_Sample10",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Expression": "Expression_Sample11",
+      "Node::Node": [
+        "Node_Sample39",
+        "Node_Sample31"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample39": {
+      "Id": "Node_Sample39",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Node": "Node_Sample10",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample23",
+        "Node_Sample85"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "User",
+      "Category": "User"
+    },
+    "Node_Sample23": {
+      "Id": "Node_Sample23",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor",
+      "DataType": "User",
+      "FlowId": "User",
+      "FlowType": "User",
+      "Node": "Node_Sample39"
+    },
+    "Node_Sample85": {
+      "Id": "Node_Sample85",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Manager",
+      "RefModel": "User",
+      "DataType": "User",
+      "RefFlowType": "User",
+      "Node": "Node_Sample39"
+    },
+    "Node_Sample31": {
+      "Id": "Node_Sample31",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Name",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample10"
+    },
+    "Expression_Sample02": {
+      "Id": "Expression_Sample02",
+      "Kind": "Expression",
+      "ExpressionStr": "requestor.Manager.Email",
+      "Field": "requestor_manager_mail",
+      "Expression::Node": [
+        "Node_Sample83"
+      ]
+    },
+    "Node_Sample83": {
+      "Id": "Node_Sample83",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Expression": "Expression_Sample02",
+      "Node::Node": [
+        "Node_Sample103",
+        "Node_Sample07"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample103": {
+      "Id": "Node_Sample103",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Node": "Node_Sample83",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample78",
+        "Node_Sample48"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "User",
+      "Category": "User"
+    },
+    "Node_Sample78": {
+      "Id": "Node_Sample78",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor",
+      "DataType": "User",
+      "FlowId": "User",
+      "FlowType": "User",
+      "Node": "Node_Sample103"
+    },
+    "Node_Sample48": {
+      "Id": "Node_Sample48",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Manager",
+      "RefModel": "User",
+      "DataType": "User",
+      "RefFlowType": "User",
+      "Node": "Node_Sample103"
+    },
+    "Node_Sample07": {
+      "Id": "Node_Sample07",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Email",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample83"
+    },
+    "Expression_Sample06": {
+      "Id": "Expression_Sample06",
+      "Kind": "Expression",
+      "ExpressionStr": "requestor.UserDepartment",
+      "Field": "Department_",
+      "Expression::Node": [
+        "Node_Sample100"
+      ]
+    },
+    "Node_Sample100": {
+      "Id": "Node_Sample100",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Expression": "Expression_Sample06",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample60",
+        "Node_Sample75"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample60": {
+      "Id": "Node_Sample60",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor",
+      "DataType": "User",
+      "FlowId": "User",
+      "FlowType": "User",
+      "Node": "Node_Sample100"
+    },
+    "Node_Sample75": {
+      "Id": "Node_Sample75",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "UserDepartment",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample100"
+    },
+    "Criteria_Sample09": {
+      "Id": "Criteria_Sample09",
+      "Kind": "Criteria",
+      "FieldValidation": "requestor_email",
+      "Criteria::Condition": [
+        "Condition_Sample02"
+      ]
+    },
+    "Condition_Sample02": {
+      "Id": "Condition_Sample02",
+      "Kind": "Condition",
+      "Operator": "EMAIL",
+      "Criteria": "Criteria_Sample09"
+    },
+    "Criteria_Sample04": {
+      "Id": "Criteria_Sample04",
+      "Kind": "Criteria",
+      "ColumnVisibility": "Column_Sample25",
+      "Criteria::Condition": [
+        "Condition_Sample12"
+      ],
+      "IsOR": false,
+      "IsHidden": true
+    },
+    "Condition_Sample12": {
+      "Id": "Condition_Sample12",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample04",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "RHSValue": "false",
+      "HasArguments": true,
+      "LHSOwnField": "self_or_representative"
+    },
+    "Expression_Sample01": {
+      "Id": "Expression_Sample01",
+      "Kind": "Expression",
+      "ExpressionStr": "if(self_or_representative, _created_by.Email, \"\")",
+      "Field": "requestor_email",
+      "Expression::Node": [
+        "Node_Sample67"
+      ]
+    },
+    "Node_Sample67": {
+      "Id": "Node_Sample67",
+      "Kind": "Node",
+      "Value": "if",
+      "Expression": "Expression_Sample01",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample24",
+        "Node_Sample42",
+        "Node_Sample71"
+      ],
+      "DataType": "String",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample24": {
+      "Id": "Node_Sample24",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "self_or_representative",
+      "DataType": "Boolean",
+      "Node": "Node_Sample67"
+    },
+    "Node_Sample42": {
+      "Id": "Node_Sample42",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Node": "Node_Sample67",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample16",
+        "Node_Sample26"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample16": {
+      "Id": "Node_Sample16",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_created_by",
+      "DataType": "User",
+      "FlowId": "User",
+      "FlowType": "User",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample42"
+    },
+    "Node_Sample26": {
+      "Id": "Node_Sample26",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Email",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample42"
+    },
+    "Node_Sample71": {
+      "Id": "Node_Sample71",
+      "Kind": "Node",
+      "Type": "Static",
+      "DataType": "String",
+      "Node": "Node_Sample67"
+    },
+    "Expression_Sample14": {
+      "Id": "Expression_Sample14",
+      "Kind": "Expression",
+      "ExpressionStr": "if(_is_public_form, concatenate(pbf_first_name, \" \", pbf_last_name), requestor.Name)",
+      "Field": "final_requestor_name",
+      "Expression::Node": [
+        "Node_Sample57"
+      ]
+    },
+    "Node_Sample57": {
+      "Id": "Node_Sample57",
+      "Kind": "Node",
+      "Value": "if",
+      "Expression": "Expression_Sample14",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample06",
+        "Node_Sample90",
+        "Node_Sample05"
+      ],
+      "DataType": "String",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample06": {
+      "Id": "Node_Sample06",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_is_public_form",
+      "DataType": "Boolean",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample57"
+    },
+    "Node_Sample90": {
+      "Id": "Node_Sample90",
+      "Kind": "Node",
+      "Value": "concatenate",
+      "Node": "Node_Sample57",
+      "FieldRefCount": 2,
+      "Node::Node": [
+        "Node_Sample91",
+        "Node_Sample18",
+        "Node_Sample101"
+      ],
+      "DataType": "String",
+      "Category": "String",
+      "Type": "Function"
+    },
+    "Node_Sample91": {
+      "Id": "Node_Sample91",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "pbf_first_name",
+      "DataType": "String",
+      "Node": "Node_Sample90"
+    },
+    "Node_Sample18": {
+      "Id": "Node_Sample18",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": " ",
+      "DataType": "String",
+      "Node": "Node_Sample90"
+    },
+    "Node_Sample101": {
+      "Id": "Node_Sample101",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "pbf_last_name",
+      "DataType": "String",
+      "Node": "Node_Sample90"
+    },
+    "Node_Sample05": {
+      "Id": "Node_Sample05",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Node": "Node_Sample57",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample11",
+        "Node_Sample52"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample11": {
+      "Id": "Node_Sample11",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor",
+      "DataType": "User",
+      "FlowId": "User",
+      "FlowType": "User",
+      "Node": "Node_Sample05"
+    },
+    "Node_Sample52": {
+      "Id": "Node_Sample52",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Name",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample05"
+    },
+    "Expression_Sample15": {
+      "Id": "Expression_Sample15",
+      "Kind": "Expression",
+      "ExpressionStr": "if(_is_public_form, pbf_nick_name, requestor.NickName)",
+      "Field": "final_nick_name",
+      "Expression::Node": [
+        "Node_Sample65"
+      ]
+    },
+    "Node_Sample65": {
+      "Id": "Node_Sample65",
+      "Kind": "Node",
+      "Value": "if",
+      "Expression": "Expression_Sample15",
+      "FieldRefCount": 2,
+      "Node::Node": [
+        "Node_Sample80",
+        "Node_Sample40",
+        "Node_Sample01"
+      ],
+      "DataType": "String",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample80": {
+      "Id": "Node_Sample80",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_is_public_form",
+      "DataType": "Boolean",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample65"
+    },
+    "Node_Sample40": {
+      "Id": "Node_Sample40",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "pbf_nick_name",
+      "DataType": "String",
+      "Node": "Node_Sample65"
+    },
+    "Node_Sample01": {
+      "Id": "Node_Sample01",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Node": "Node_Sample65",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample14",
+        "Node_Sample54"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample14": {
+      "Id": "Node_Sample14",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor",
+      "DataType": "User",
+      "FlowId": "User",
+      "FlowType": "User",
+      "Node": "Node_Sample01"
+    },
+    "Node_Sample54": {
+      "Id": "Node_Sample54",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "NickName",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample01"
+    },
+    "Expression_Sample16": {
+      "Id": "Expression_Sample16",
+      "Kind": "Expression",
+      "ExpressionStr": "if(_is_public_form, pbf_email, if(self_or_representative, requestor_Email, rep_requestor_email))",
+      "Field": "final_email",
+      "Expression::Node": [
+        "Node_Sample44"
+      ]
+    },
+    "Node_Sample44": {
+      "Id": "Node_Sample44",
+      "Kind": "Node",
+      "Value": "if",
+      "Expression": "Expression_Sample16",
+      "FieldRefCount": 2,
+      "Node::Node": [
+        "Node_Sample59",
+        "Node_Sample87",
+        "Node_Sample69"
+      ],
+      "DataType": "String",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample59": {
+      "Id": "Node_Sample59",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_is_public_form",
+      "DataType": "Boolean",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample44"
+    },
+    "Node_Sample87": {
+      "Id": "Node_Sample87",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "pbf_email",
+      "DataType": "String",
+      "Node": "Node_Sample44"
+    },
+    "Node_Sample69": {
+      "Id": "Node_Sample69",
+      "Kind": "Node",
+      "Value": "if",
+      "Node": "Node_Sample44",
+      "FieldRefCount": 3,
+      "Node::Node": [
+        "Node_Sample02",
+        "Node_Sample50",
+        "Node_Sample70"
+      ],
+      "DataType": "String",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample02": {
+      "Id": "Node_Sample02",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "self_or_representative",
+      "DataType": "Boolean",
+      "Node": "Node_Sample69"
+    },
+    "Node_Sample50": {
+      "Id": "Node_Sample50",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor_email",
+      "DataType": "String",
+      "Node": "Node_Sample69"
+    },
+    "Node_Sample70": {
+      "Id": "Node_Sample70",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "rep_requestor_email",
+      "DataType": "String",
+      "Node": "Node_Sample69"
+    },
+    "Criteria_Sample08": {
+      "Id": "Criteria_Sample08",
+      "Kind": "Criteria",
+      "QueryDefinition": "QueryDefinition_Sample03",
+      "Criteria::Condition": [
+        "Condition_Sample17",
+        "Condition_Sample15",
+        "Condition_Sample10"
+      ],
+      "IsOR": true
+    },
+    "Condition_Sample17": {
+      "Id": "Condition_Sample17",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample08",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Field",
+      "RHSField": "final_email",
+      "HasArguments": true,
+      "LHSField": "Email"
+    },
+    "Condition_Sample15": {
+      "Id": "Condition_Sample15",
+      "Kind": "Condition",
+      "Operator": "EQUAL_TO",
+      "RHSField": "pbf_email",
+      "RHSType": "Field",
+      "HasArguments": true,
+      "LHSField": "Email",
+      "Criteria": "Criteria_Sample08"
+    },
+    "Condition_Sample10": {
+      "Id": "Condition_Sample10",
+      "Kind": "Condition",
+      "Operator": "EQUAL_TO",
+      "RHSField": "rep_requestor_email",
+      "RHSType": "Field",
+      "HasArguments": true,
+      "LHSField": "Email",
+      "Criteria": "Criteria_Sample08"
+    },
+    "Expression_Sample04": {
+      "Id": "Expression_Sample04",
+      "Kind": "Expression",
+      "ExpressionStr": "if(not(isBlank(requestor.Email)) && _is_public_form, 0, 1)",
+      "Field": "pbf_submit_flag",
+      "Expression::Node": [
+        "Node_Sample28"
+      ]
+    },
+    "Node_Sample28": {
+      "Id": "Node_Sample28",
+      "Kind": "Node",
+      "Value": "if",
+      "Expression": "Expression_Sample04",
+      "Node::Node": [
+        "Node_Sample12",
+        "Node_Sample62",
+        "Node_Sample97"
+      ],
+      "DataType": "Number",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample12": {
+      "Id": "Node_Sample12",
+      "Kind": "Node",
+      "Value": "&&",
+      "Syntax": "Infix",
+      "Node": "Node_Sample28",
+      "Node::Node": [
+        "Node_Sample53",
+        "Node_Sample08"
+      ],
+      "FieldRefCount": 1,
+      "DataType": "Boolean",
+      "Category": "Logical",
+      "Type": "Function"
+    },
+    "Node_Sample53": {
+      "Id": "Node_Sample53",
+      "Kind": "Node",
+      "Value": "not",
+      "Node": "Node_Sample12",
+      "Node::Node": [
+        "Node_Sample04"
+      ],
+      "DataType": "Boolean",
+      "Category": "Boolean",
+      "Type": "Function"
+    },
+    "Node_Sample04": {
+      "Id": "Node_Sample04",
+      "Kind": "Node",
+      "Value": "isBlank",
+      "Node": "Node_Sample53",
+      "Node::Node": [
+        "Node_Sample102"
+      ],
+      "DataType": "Boolean",
+      "Category": "String",
+      "Type": "Function"
+    },
+    "Node_Sample102": {
+      "Id": "Node_Sample102",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Node": "Node_Sample04",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample29",
+        "Node_Sample55"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample29": {
+      "Id": "Node_Sample29",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "requestor",
+      "DataType": "User",
+      "FlowId": "User",
+      "FlowType": "User",
+      "Node": "Node_Sample102"
+    },
+    "Node_Sample55": {
+      "Id": "Node_Sample55",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Email",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample102"
+    },
+    "Node_Sample08": {
+      "Id": "Node_Sample08",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_is_public_form",
+      "DataType": "Boolean",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample12"
+    },
+    "Node_Sample62": {
+      "Id": "Node_Sample62",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "0",
+      "DataType": "Number",
+      "Node": "Node_Sample28"
+    },
+    "Node_Sample97": {
+      "Id": "Node_Sample97",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "1",
+      "DataType": "Number",
+      "Node": "Node_Sample28"
+    },
+    "Row_Sample18": {
+      "Id": "Row_Sample18",
+      "Kind": "Row",
+      "Column": "Column_Sample16",
+      "Row::Column": [
+        "Column_Sample14"
+      ]
+    },
+    "Row_Sample17": {
+      "Id": "Row_Sample17",
+      "Kind": "Row",
+      "Column": "Column_Sample16",
+      "Row::Column": [
+        "Column_Sample19"
+      ]
+    },
+    "Column_Sample14": {
+      "Id": "Column_Sample14",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample18",
+      "Column::Field": [
+        "request_number"
+      ]
+    },
+    "request_number": {
+      "Id": "request_number",
+      "Kind": "Field",
+      "Type": "Text",
+      "CreatedAt": "2026-01-26T10:31:41.701Z",
+      "Model": "Model_Sample01",
+      "Name": "request number",
+      "Column": "Column_Sample14",
+      "Field::Expression": [
+        "Expression_Sample13"
+      ]
+    },
+    "Row_Sample19": {
+      "Id": "Row_Sample19",
+      "Kind": "Row",
+      "Column": "Column_Sample22",
+      "Row::Column": [
+        "Column_Sample24",
+        "Column_Sample33"
+      ]
+    },
+    "Column_Sample24": {
+      "Id": "Column_Sample24",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample19",
+      "Column::Field": [
+        "rep_requestor"
+      ],
+      "Hint": "ผู้เปิดงานกรอก email ของผู้ที่ต้องการเปิดงานแทน โดยผู้เปิดงานแทนต้องมี Account Kissflow ด้วย",
+      "Column::Appearance": [
+        "Appearance_Sample04"
+      ]
+    },
+    "QueryDefinition_Sample05": {
+      "Id": "QueryDefinition_Sample05",
+      "Kind": "QueryDefinition",
+      "Field": "rep_requestor",
+      "FlowType": "User",
+      "LookupField": [],
+      "LHSModel": "User"
+    },
+    "rep_requestor": {
+      "Id": "rep_requestor",
+      "Kind": "Field",
+      "Type": "User",
+      "CreatedAt": "2026-04-28T11:35:54.444Z",
+      "Model": "Model_Sample01",
+      "Name": "User ผู้เปิดงานแทน",
+      "Column": "Column_Sample24",
+      "Field::QueryDefinition": [
+        "QueryDefinition_Sample05"
+      ],
+      "Field::Node": [
+        "Node_Sample63"
+      ]
+    },
+    "Expression_Sample08": {
+      "Id": "Expression_Sample08",
+      "Kind": "Expression",
+      "ExpressionStr": "if(self_or_representative, \"\", rep_requestor.Email)",
+      "Field": "rep_requestor_email",
+      "Expression::Node": [
+        "Node_Sample13"
+      ]
+    },
+    "Node_Sample13": {
+      "Id": "Node_Sample13",
+      "Kind": "Node",
+      "Value": "if",
+      "Expression": "Expression_Sample08",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample43",
+        "Node_Sample15",
+        "Node_Sample61"
+      ],
+      "DataType": "String",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample43": {
+      "Id": "Node_Sample43",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "self_or_representative",
+      "DataType": "Boolean",
+      "Node": "Node_Sample13"
+    },
+    "Node_Sample15": {
+      "Id": "Node_Sample15",
+      "Kind": "Node",
+      "Type": "Static",
+      "DataType": "String",
+      "Node": "Node_Sample13"
+    },
+    "Node_Sample61": {
+      "Id": "Node_Sample61",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Node": "Node_Sample13",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample63",
+        "Node_Sample03"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample63": {
+      "Id": "Node_Sample63",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "rep_requestor",
+      "DataType": "User",
+      "FlowId": "User",
+      "FlowType": "User",
+      "Node": "Node_Sample61"
+    },
+    "Node_Sample03": {
+      "Id": "Node_Sample03",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Email",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample61"
+    },
+    "Criteria_Sample11": {
+      "Id": "Criteria_Sample11",
+      "Kind": "Criteria",
+      "ColumnVisibility": "Column_Sample22",
+      "Criteria::Condition": [
+        "Condition_Sample16"
+      ],
+      "IsOR": false
+    },
+    "Condition_Sample16": {
+      "Id": "Condition_Sample16",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample11",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "RHSValue": "false",
+      "HasArguments": true,
+      "LHSOwnField": "self_or_representative"
+    },
+    "Criteria_Sample16": {
+      "Id": "Criteria_Sample16",
+      "Kind": "Criteria",
+      "ColumnVisibility": "Column_Sample30",
+      "IsHidden": true,
+      "Criteria::Condition": [
+        "Condition_Sample01"
+      ],
+      "IsOR": false
+    },
+    "Condition_Sample01": {
+      "Id": "Condition_Sample01",
+      "Kind": "Condition",
+      "Criteria": "Criteria_Sample16",
+      "Operator": "EQUAL_TO",
+      "RHSType": "Value",
+      "RHSValue": "false",
+      "HasArguments": true,
+      "LHSOwnField": "self_or_representative"
+    },
+    "Appearance_Sample04": {
+      "Id": "Appearance_Sample04",
+      "Kind": "Appearance",
+      "Column": "Column_Sample24",
+      "Appearance::Style": [
+        "Style_Sample02"
+      ]
+    },
+    "Style_Sample02": {
+      "Id": "Style_Sample02",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample04"
+    },
+    "Appearance_Sample03": {
+      "Id": "Appearance_Sample03",
+      "Kind": "Appearance",
+      "Column": "Column_Sample25",
+      "Appearance::Style": [
+        "Style_Sample03"
+      ]
+    },
+    "Style_Sample03": {
+      "Id": "Style_Sample03",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample03"
+    },
+    "Appearance_Sample02": {
+      "Id": "Appearance_Sample02",
+      "Kind": "Appearance",
+      "Column": "Column_Sample05",
+      "Appearance::Style": [
+        "Style_Sample01"
+      ]
+    },
+    "Style_Sample01": {
+      "Id": "Style_Sample01",
+      "Kind": "Style",
+      "Appearance": "Appearance_Sample02"
+    },
+    "Expression_Sample13": {
+      "Id": "Expression_Sample13",
+      "Kind": "Expression",
+      "ExpressionStr": "if(AND(false(), _created_by.Email = \"sample.user@example.com\"), \"TEST\", concatenate(\"PBK_\", _submitted_at.year().toText(\"00\"), _submitted_at.month().toText(\"00\"), \"_\",  _request_number.toText(\"0000\")))",
+      "Field": "request_number",
+      "Expression::Node": [
+        "Node_Sample104"
+      ]
+    },
+    "Node_Sample104": {
+      "Id": "Node_Sample104",
+      "Kind": "Node",
+      "Value": "if",
+      "Expression": "Expression_Sample13",
+      "Node::Node": [
+        "Node_Sample17",
+        "Node_Sample72",
+        "Node_Sample84"
+      ],
+      "DataType": "String",
+      "Category": "IF",
+      "Type": "Function"
+    },
+    "Node_Sample17": {
+      "Id": "Node_Sample17",
+      "Kind": "Node",
+      "Value": "AND",
+      "Node": "Node_Sample104",
+      "Node::Node": [
+        "Node_Sample66",
+        "Node_Sample74"
+      ],
+      "DataType": "Boolean",
+      "Category": "Logical",
+      "Type": "Function"
+    },
+    "Node_Sample66": {
+      "Id": "Node_Sample66",
+      "Kind": "Node",
+      "Value": "false",
+      "Node": "Node_Sample17",
+      "DataType": "Boolean",
+      "Category": "Boolean",
+      "Type": "Function"
+    },
+    "Node_Sample74": {
+      "Id": "Node_Sample74",
+      "Kind": "Node",
+      "Value": "=",
+      "Syntax": "Infix",
+      "Node": "Node_Sample17",
+      "Node::Node": [
+        "Node_Sample32",
+        "Node_Sample20"
+      ],
+      "DataType": "Boolean",
+      "Category": "String",
+      "Type": "Function"
+    },
+    "Node_Sample32": {
+      "Id": "Node_Sample32",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "GetValue",
+      "Node": "Node_Sample74",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample68",
+        "Node_Sample38"
+      ],
+      "SourceFlowId": "User",
+      "SourceFlowType": "User",
+      "DataType": "String",
+      "Category": "User"
+    },
+    "Node_Sample68": {
+      "Id": "Node_Sample68",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_created_by",
+      "DataType": "User",
+      "FlowId": "User",
+      "FlowType": "User",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample32"
+    },
+    "Node_Sample38": {
+      "Id": "Node_Sample38",
+      "Kind": "Node",
+      "Type": "RefField",
+      "RefField": "Email",
+      "RefModel": "User",
+      "DataType": "String",
+      "RefFlowType": "User",
+      "Node": "Node_Sample32"
+    },
+    "Node_Sample20": {
+      "Id": "Node_Sample20",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "sample.user@example.com",
+      "DataType": "String",
+      "Node": "Node_Sample74"
+    },
+    "Node_Sample72": {
+      "Id": "Node_Sample72",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "TEST",
+      "DataType": "String",
+      "Node": "Node_Sample104"
+    },
+    "Node_Sample84": {
+      "Id": "Node_Sample84",
+      "Kind": "Node",
+      "Value": "concatenate",
+      "Node": "Node_Sample104",
+      "Node::Node": [
+        "Node_Sample86",
+        "Node_Sample64",
+        "Node_Sample36",
+        "Node_Sample21",
+        "Node_Sample33"
+      ],
+      "DataType": "String",
+      "Category": "String",
+      "Type": "Function"
+    },
+    "Node_Sample86": {
+      "Id": "Node_Sample86",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "PBK_",
+      "DataType": "String",
+      "Node": "Node_Sample84"
+    },
+    "Node_Sample64": {
+      "Id": "Node_Sample64",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "toText",
+      "Syntax": "Chain",
+      "Node": "Node_Sample84",
+      "Node::Node": [
+        "Node_Sample77",
+        "Node_Sample88"
+      ],
+      "DataType": "String",
+      "Category": "Number"
+    },
+    "Node_Sample77": {
+      "Id": "Node_Sample77",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "year",
+      "Syntax": "Chain",
+      "Node": "Node_Sample64",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample95"
+      ],
+      "DataType": "Number",
+      "Category": "DateTime"
+    },
+    "Node_Sample95": {
+      "Id": "Node_Sample95",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_submitted_at",
+      "DataType": "DateTime",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample77"
+    },
+    "Node_Sample88": {
+      "Id": "Node_Sample88",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "00",
+      "DataType": "String",
+      "Node": "Node_Sample64"
+    },
+    "Node_Sample36": {
+      "Id": "Node_Sample36",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "toText",
+      "Syntax": "Chain",
+      "Node": "Node_Sample84",
+      "Node::Node": [
+        "Node_Sample25",
+        "Node_Sample30"
+      ],
+      "DataType": "String",
+      "Category": "Number"
+    },
+    "Node_Sample25": {
+      "Id": "Node_Sample25",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "month",
+      "Syntax": "Chain",
+      "Node": "Node_Sample36",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample98"
+      ],
+      "DataType": "Number",
+      "Category": "DateTime"
+    },
+    "Node_Sample98": {
+      "Id": "Node_Sample98",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_submitted_at",
+      "DataType": "DateTime",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample25"
+    },
+    "Node_Sample30": {
+      "Id": "Node_Sample30",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "00",
+      "DataType": "String",
+      "Node": "Node_Sample36"
+    },
+    "Node_Sample21": {
+      "Id": "Node_Sample21",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "_",
+      "DataType": "String",
+      "Node": "Node_Sample84"
+    },
+    "Node_Sample33": {
+      "Id": "Node_Sample33",
+      "Kind": "Node",
+      "Type": "Function",
+      "Value": "toText",
+      "Syntax": "Chain",
+      "Node": "Node_Sample84",
+      "FieldRefCount": 1,
+      "Node::Node": [
+        "Node_Sample45",
+        "Node_Sample92"
+      ],
+      "DataType": "String",
+      "Category": "Number"
+    },
+    "Node_Sample45": {
+      "Id": "Node_Sample45",
+      "Kind": "Node",
+      "Type": "Field",
+      "Field": "_request_number",
+      "DataType": "Number",
+      "IsSystemField": true,
+      "FieldModel": "Model_Sample01",
+      "Node": "Node_Sample33"
+    },
+    "Node_Sample92": {
+      "Id": "Node_Sample92",
+      "Kind": "Node",
+      "Type": "Static",
+      "Value": "0000",
+      "DataType": "String",
+      "Node": "Node_Sample33"
+    },
+    "Row_Sample28": {
+      "Id": "Row_Sample28",
+      "Kind": "Row",
+      "Model": "Model_Sample01",
+      "Row::Column": [
+        "Column_Sample18"
+      ]
+    },
+    "Column_Sample18": {
+      "Id": "Column_Sample18",
+      "Kind": "Column",
+      "Type": "Section",
+      "Start": 0,
+      "End": 6,
+      "Name": "Request Info",
+      "Row": "Row_Sample28",
+      "Column::Row": [
+        "Row_Sample03",
+        "Row_Sample06"
+      ],
+      "Description": "[{\"type\":\"paragraph\",\"data\":{},\"nodes\":[{\"type\":\"text\",\"text\":\"ข้อมูลร้องขอ ที่ต้องการให้ผู้เปิดงานกรอกรายละเอียดมา\"}]}]"
+    },
+    "Row_Sample03": {
+      "Id": "Row_Sample03",
+      "Kind": "Row",
+      "Column": "Column_Sample18",
+      "Row::Column": [
+        "Column_Sample10"
+      ]
+    },
+    "Column_Sample10": {
+      "Id": "Column_Sample10",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample03",
+      "Column::Field": [
+        "Branch"
+      ]
+    },
+    "QueryDefinition_Sample04": {
+      "Id": "QueryDefinition_Sample04",
+      "Kind": "QueryDefinition",
+      "Field": "Branch",
+      "LHSModel": "Tier1",
+      "LookupField": [
+        {
+          "Type": "Text",
+          "Name": "Key",
+          "Id": "Name"
+        },
+        {
+          "Type": "Text",
+          "Name": "Branch_Name",
+          "Id": "Branch_Name"
+        }
+      ],
+      "LHSRootModel": "Master_Branch",
+      "FlowType": "DatasetView",
+      "SortBy": [
+        {
+          "Field": "Name",
+          "IsDescending": true
+        }
+      ]
+    },
+    "Branch": {
+      "Id": "Branch",
+      "Kind": "Field",
+      "Type": "Reference",
+      "CreatedAt": "2026-08-07T04:29:03.724Z",
+      "Model": "Model_Sample01",
+      "Name": "ฺBranch",
+      "Column": "Column_Sample10",
+      "Field::QueryDefinition": [
+        "QueryDefinition_Sample04"
+      ],
+      "Required": true
+    },
+    "Row_Sample06": {
+      "Id": "Row_Sample06",
+      "Kind": "Row",
+      "Column": "Column_Sample18",
+      "Row::Column": [
+        "Column_Sample15"
+      ]
+    },
+    "Column_Sample15": {
+      "Id": "Column_Sample15",
+      "Kind": "Column",
+      "Type": "Field",
+      "Start": 0,
+      "End": 2,
+      "Row": "Row_Sample06",
+      "Column::Field": [
+        "Description"
+      ]
+    },
+    "Description": {
+      "Id": "Description",
+      "Kind": "Field",
+      "Type": "Textarea",
+      "CreatedAt": "2026-08-07T04:30:30.092Z",
+      "Model": "Model_Sample01",
+      "Name": "Description",
+      "Column": "Column_Sample15",
+      "Required": true
+    }
+  },
+  "notes": [
+    "Built by scripts/deidentify_template.py from the published schema (GET /metadata/2/{acct}/process/{flow}/schema). Re-run it; never hand-edit.",
+    "All Kind-bearing nodes are kept. Root, PublishedAt and _meta_version are dropped.",
+    "Field ids are kept VERBATIM, and so are platform system fields (_is_public_form, _request_number, _created_by, _submitted_at): formula text refers to them by name. Every other node id is a minted <Kind>_SampleNN, numbered per kind in sorted-original-id order (deterministic for one capture); those ids only ever appear as whole values. The flow's own id is Model_Sample01 (Template_Flow_Sample inside a URL); the PublishedBy audit record is User_Sample01, 'Sample Publisher'.",
+    "Every personal email is replaced with the placeholder sample.user@example.com; validation regexes, Thai display names, hints and descriptions are kept verbatim.",
+    "The capture ships without the mandatory root Model::Appearance -> Appearance -> Style chain; the transplant synthesizes it before publish.",
+    "The duplicate suspended 'Manager Approve' Activity and the orphaned SendBackToInitiator Activity are kept: they are part of the published template.",
+    "Component nodes keep their external ComponentId, and 15 nodes keep references to tenant datasets outside this shape (Department_Master_01, Master_Branch, Tier1, _employee, User). A transplant must find them on the target tenant."
+  ]
+}
