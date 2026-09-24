@@ -1,0 +1,20 @@
+"""Coverage form for port_methods_without_use_case (G0 review finding 4): `get_draft` is
+referenced from application/use_cases/runner.py.txt below, so it has a use. `publish` is
+referenced only from infrastructure/mcp/tools/flow.py.txt, which sits under infrastructure/, not
+application/use_cases/, so that reference must not count -- a port method's use is counted only
+from modules under application/use_cases/."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+
+class FlowPort(ABC):
+    @abstractmethod
+    def get_draft(self) -> None:
+        """Compliant: application/use_cases/runner.py.txt calls this."""
+
+    @abstractmethod
+    def publish(self) -> None:
+        """VIOLATION: port_methods_without_use_case -- the only reference to `.publish` sits in
+        infrastructure/mcp/tools/flow.py.txt, outside application/use_cases/."""

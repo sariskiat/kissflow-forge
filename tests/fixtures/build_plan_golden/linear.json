@@ -1,0 +1,217 @@
+[
+  {
+    "args": {
+      "done_definition": "the request is marked resolved",
+      "goal": "every request is logged and resolved",
+      "name": "Simple Ticket Log",
+      "pain": "requests get lost with no record of who is handling them",
+      "result_values": [
+        "Resolved"
+      ],
+      "terminal_states": [
+        "Done"
+      ]
+    },
+    "kind": "create_process",
+    "why": "the flow every later step attaches to (Build order step 1)"
+  },
+  {
+    "args": {
+      "is_admin": false,
+      "members_hint": null,
+      "role": "Front Desk"
+    },
+    "kind": "member_batch",
+    "why": "grant 'Front Desk' access before anything else can render (Members first)"
+  },
+  {
+    "args": {
+      "is_admin": true,
+      "members_hint": null,
+      "role": "Manager"
+    },
+    "kind": "member_batch",
+    "why": "grant 'Manager' access before anything else can render (Members first)"
+  },
+  {
+    "args": {
+      "fields": [
+        {
+          "list_name": null,
+          "name": "Request Text",
+          "options": {},
+          "referred_list": null,
+          "referred_list_from": null,
+          "required": true,
+          "section": "Log Ticket",
+          "type": "Text"
+        }
+      ],
+      "sequence": null,
+      "stage": "Log Ticket"
+    },
+    "kind": "apply_fields",
+    "why": "fields for stage 'Log Ticket' (Node-graph invariants: Field needs Model + CreatedAt). Every Select carries `referred_list: None` plus a `referred_list_from` BINDING, never an id \u2014 a plan is compiled before anything is created. THE EXECUTOR MUST RESOLVE IT before calling forge_apply_fields: take the `_id` returned by the preceding create_list op for that `list_name` (OP_ORDER runs create_list first), or, when `from_op` is None (a personal_data list, human-made per PDPA), the id of the human-made list of that name read off the tenant. Left unresolved the write REFUSES the field loudly, which is the intended failure: a Select written with no ReferredList PUTs 200 and its publish dies 500 MetadataError with zero diagnostics"
+  },
+  {
+    "args": {
+      "parallels": [],
+      "routing": [],
+      "stages": [
+        {
+          "entry_criteria": "a request comes in",
+          "exit_criteria": "ticket logged",
+          "name": "Log Ticket",
+          "what_happens": "record the request"
+        },
+        {
+          "entry_criteria": "ticket logged",
+          "exit_criteria": "request resolved",
+          "name": "Handle Ticket",
+          "what_happens": "resolve the request"
+        }
+      ],
+      "steps": [
+        "Log Ticket",
+        "Handle Ticket"
+      ]
+    },
+    "kind": "build_workflow",
+    "why": "ProcessDef + Activities in stage order \u2014 WorkflowType=Sequence order IS the flow (Build order step 5); N sequential decision splits become N Parallel gateways in order (unconditional and-forks until S4 attaches branch conditions); assignees are a separate op"
+  },
+  {
+    "args": {
+      "owner_role": "Front Desk",
+      "stage": "Log Ticket"
+    },
+    "kind": "set_assignees",
+    "why": "Resource(ValueType=AppRole) assignee on 'Log Ticket''s Activity, resolved from role 'Front Desk' \u2014 members must exist first (Members first); without this nobody can submit the step and simulate_case always fails"
+  },
+  {
+    "args": {
+      "owner_role": "Manager",
+      "stage": "Handle Ticket"
+    },
+    "kind": "set_assignees",
+    "why": "Resource(ValueType=AppRole) assignee on 'Handle Ticket''s Activity, resolved from role 'Manager' \u2014 members must exist first (Members first); without this nobody can submit the step and simulate_case always fails"
+  },
+  {
+    "args": {
+      "entries": [
+        {
+          "field": null,
+          "permission": "Editable",
+          "section": "Log Ticket",
+          "stage": "Start"
+        },
+        {
+          "field": null,
+          "permission": "Editable",
+          "section": "Log Ticket",
+          "stage": "Log Ticket"
+        },
+        {
+          "field": null,
+          "permission": "ReadOnly",
+          "section": "Log Ticket",
+          "stage": "Handle Ticket"
+        },
+        {
+          "field": null,
+          "permission": "Editable",
+          "section": "Handle Ticket",
+          "stage": "Handle Ticket"
+        }
+      ]
+    },
+    "kind": "set_visibility",
+    "why": "per-step visibility matrix \u2014 rebuild after every workflow change (Build order step 8)"
+  },
+  {
+    "args": {
+      "stage": "Log Ticket"
+    },
+    "kind": "set_styles",
+    "why": "give this stage's section a distinguishable look \u2014 token VALUES are read off the builder dropdown at apply time, never synthesized here"
+  },
+  {
+    "args": {
+      "stage": "Handle Ticket"
+    },
+    "kind": "set_styles",
+    "why": "give this stage's section a distinguishable look \u2014 token VALUES are read off the builder dropdown at apply time, never synthesized here"
+  },
+  {
+    "args": {
+      "name": "Simple Ticket Log"
+    },
+    "kind": "publish",
+    "why": "publish so the live version matches the built draft (Build order step 11)"
+  },
+  {
+    "args": {
+      "visibility_role_claims": []
+    },
+    "kind": "doctor",
+    "why": "read-only health check \u2014 THE RULE: a 200 and a clean publish prove nothing"
+  },
+  {
+    "args": {},
+    "kind": "compare",
+    "why": "fidelity check against the input spec (forge_compare_to_spec) \u2014 doctor said ok on a build with wrong field types and a missing event; this is the step that catches those (#16)"
+  },
+  {
+    "args": {
+      "name": "Tickets"
+    },
+    "kind": "create_page",
+    "why": "a virgin page \u2014 4 nodes: Page, root Container, empty Style, User"
+  },
+  {
+    "args": {
+      "actions": [],
+      "design": null,
+      "kpis": [],
+      "name": "Tickets",
+      "on_click": [],
+      "popups": [],
+      "widgets": [
+        {
+          "config": {},
+          "row_fields": [],
+          "slug": "general/label"
+        }
+      ]
+    },
+    "kind": "build_page",
+    "why": "container/component graph for 'Tickets''s widgets, KPIs, actions, popups, on-click behavior, and (if any) its beautiful-page design tree"
+  },
+  {
+    "args": {
+      "page": "Tickets",
+      "role": "Manager"
+    },
+    "kind": "set_navigation",
+    "why": "bind 'Tickets' into 'Manager''s navigation so it appears as a tab"
+  },
+  {
+    "args": {
+      "expected_path": [
+        "Log Ticket",
+        "Handle Ticket"
+      ],
+      "expected_result": "Resolved",
+      "fills": [
+        {
+          "stage": "Log Ticket",
+          "values": {
+            "Request Text": "Fix the printer"
+          }
+        }
+      ],
+      "name": "Simple ticket"
+    },
+    "kind": "simulate_case",
+    "why": "walk create->fill->submit->gates->terminal (Build order step 13)"
+  }
+]

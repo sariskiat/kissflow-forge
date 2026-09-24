@@ -26,7 +26,7 @@ params:
 De-identified. Distilled 2026-08-13 from a live human-built page on the dev tenant
 (34 components, 60 containers) that renders beautifully, diffed against the engine's
 bare label+view/form build. The break that made pages ERROR (flow_type case) is fixed
-separately (kfforge.pages._canon_config); THIS doc is about the design that makes a
+separately (app.domain.pages._canon_config); THIS doc is about the design that makes a
 RENDERING page look good instead of a skeleton. Real-tenant names never enter here.
 -->
 
@@ -92,5 +92,5 @@ solid`. Font `13px`. Spacing steps `4 / 10 / 12 / 16 / 20 / 24 / 28 / 32 px`.
   page (unlike form sections, which are token-only). A bogus token ref PUTs 200
   and fails silently at render — read a real token off the builder, never invent.
 - `flow_type` is case-sensitive: `"Process"`, not `"process"` — the engine now
-  canonicalizes this at write (kfforge.pages._canon_config), but it is the
+  canonicalizes this at write (app.domain.pages._canon_config), but it is the
   difference between a rendered widget and "Unable to display component".

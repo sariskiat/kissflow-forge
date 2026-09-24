@@ -1,7 +1,7 @@
 {
   "kind": "Field",
   "description": "User field. CORRECTS a former CLAUDE.md belief (\"A User-type field blocks publish outright\") — captured off a REAL, live PUBLISHED builder example (a real production process template, issue #59): a bare Field{Type:\"User\"} with no sibling QueryDefinition is still the thing that blocks publish; a User field WITH its QueryDefinition{FlowType:\"User\"} sibling publishes and renders fine. Same Type:\"Reference\"-family QueryDefinition wiring as field_lookup.json (FlowType \"Process\") and field_remote_lookup.json (FlowType \"Dataset\") — User is the third FlowType in that same family, except the FIELD's own Type is \"User\", not \"Reference\".",
-  "source_capture": "template_cj_pi_raw.json",
+  "source_capture": "template_raw.json",
   "template": {
     "Field_Sample01": {
       "Id": "Field_Sample01",

@@ -42,9 +42,9 @@ a bare single-placeholder-step scaffold: an identity/initiate field block
 (requestor/manager/department/branch-style fields), the section/row/column
 layout that hosts them, the mandatory `Model::Appearance -> Appearance ->
 Style` chain, a single `"Manager Approve"` UserTask, and `Button::Row`.
-`kfforge.graph.clone_template_shell` grafts the shell onto a freshly created
+`app.domain.graph.clone_template_shell` grafts the shell onto a freshly created
 process draft's own root Model (fresh Sample ids re-minted via
-`kfforge.pages._instantiate` — the same clone machinery `nav.py` already
+`app.domain.pages._instantiate` — the same clone machinery `nav.py` already
 reuses from `pages.py`), then the caller adds their own fields/workflow on
 top. `from_template=False` still yields the original bare
 `ensure_process_def` scaffold for callers that want to start from nothing.
@@ -54,7 +54,10 @@ de-identified capture of a REAL, published production process template
 (280 nodes on the source tenant) — structure only, not a literal 1:1 clone:
 5 `QueryDefinition` nodes (prod-tenant list/user bindings) were stripped,
 the 2 `Reference` fields and 3 `User` fields they belonged to converted to
-plain `Text` (each `Name` flagged with a TODO), and every
+plain `Text` (the reconnect TODO for each one lives in the shape's own
+`notes`, deliberately NOT inside the field's `Name` — a developer note in a
+`Name` publishes as a user-facing form label on every process built from this
+shell, which `verify.doctor` rule 7c now flags), and every
 `Permission`/`Resource`/`Criteria`/`Condition`/`Expression`/`Node` (in-flight
 state and the branch/validation AST) dropped outright as out of scope for an
 identity shell. See `shapes/process_template_identity_shell.json`'s own
@@ -62,8 +65,8 @@ identity shell. See `shapes/process_template_identity_shell.json`'s own
 
 ## Where
 
-Engine-side only — `kfforge.graph.clone_template_shell`, wired into
-`create_process` and `create_flow_any(kind="process")` in `kfforge/client.py`,
+Engine-side only — `app.domain.graph.clone_template_shell`, wired into
+`create_process` and `create_flow_any(kind="process")` in `src/app/infrastructure/kissflow/client.py`,
 exposed through the `forge_create_process` / `kf_create_process` /
 `forge_create_flow` MCP tools. There is no builder UI surface for this; it is
 what those tools write BEFORE a human ever opens the draft.
@@ -74,13 +77,14 @@ what those tools write BEFORE a human ever opens the draft.
   the old bare scaffold — issue #59's decision is that every process built
   through this engine starts from the same known-good identity shape rather
   than an empty draft, so grilling/spec work stacks on a proven foundation.
-- The shell's 3 retyped `Text` fields (originally `User`) are marked with a
-  `(TODO: was a User field ...)` `Name` — reconnect them to `Type:"User"` +
-  `Field::QueryDefinition{FlowType:"User"}` per
+- The shell's 3 retyped `Text` fields (originally `User`) are named plainly —
+  "Manager User", "Requestor User", "Representative Requestor User"; the
+  shape's own `notes` carry the RECONNECT LIST naming them by id. Reconnect
+  them to `Type:"User"` + `Field::QueryDefinition{FlowType:"User"}` per
   `shapes/field_user_reference.json` once a dev-tenant `User`/`_employee`
   source exists to bind against (see `docs/capabilities/field.user.md`).
-  Similarly for the 2 retyped `Reference` fields — reconnect a `ReferredList`
-  once a real dev-tenant list exists.
+  Similarly for the 2 retyped `Reference` fields ("Branch", "Business Unit
+  Lookup") — reconnect a `ReferredList` once a real dev-tenant list exists.
 - `KF_PROCESS_TEMPLATE` lets a deployment point at its OWN de-identified
   template instead of the shipped default, without touching engine code — a
   real tenant's template itself must never be committed to this repo (only a

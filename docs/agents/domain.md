@@ -25,7 +25,7 @@ This repo is single-context — no `CONTEXT-MAP.md`. If that ever changes, re-ru
 │   ├── 0002-branches-fail-open-loops-fail-closed.md
 │   ├── 0003-known-exclusions-are-judge-owned.md
 │   └── 0004-refuse-the-api-impossible-at-compile.md
-├── kfforge/        # the typed core — types, graph, expr, nav, pages, verify, client, engine...
+├── src/app/        # the typed core — types, graph, expr, nav, pages, verify, client, engine...
 ├── shapes/         # 57 captured JSON node shapes
 └── tests/
 ```

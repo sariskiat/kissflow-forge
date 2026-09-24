@@ -1,0 +1,18 @@
+"""A use case that calls the FlowRepository port's get_draft method -- port_methods_without_use_case
+must not report FlowRepository.get_draft as unused. Also the own-family import target for
+tool_module_imports_own_family_only's compliant case."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+class GetDraftUseCase:
+    """execute() reaches the port through an attribute access, which is all the scan looks for."""
+
+    def __init__(self, flow_repo: Any) -> None:
+        self._flow_repo = flow_repo
+
+    def execute(self, flow_id: str) -> dict[str, Any]:
+        """Compliant use: references .get_draft as an attribute node."""
+        return self._flow_repo.get_draft(flow_id)

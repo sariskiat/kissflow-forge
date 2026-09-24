@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Edit(.env)",
+      "Write(.env)",
+      "Read(kf.env)",
+      "Edit(kf.env)",
+      "Write(kf.env)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/lint-on-stop.sh",
+            "timeout": 120,
+            "statusMessage": "Running lint..."
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/test-coverage-on-stop.sh",
+            "timeout": 120,
+            "statusMessage": "Running tests with coverage..."
+          }
+        ]
+      }
+    ]
+  }
+}

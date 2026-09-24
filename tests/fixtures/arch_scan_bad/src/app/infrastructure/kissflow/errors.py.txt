@@ -1,0 +1,15 @@
+"""Fixture for iserror_dicts: one bare 'isError' dict key next to a docstring mention that must
+not match, since docstrings and comments do not match string-constant scanning."""
+
+from __future__ import annotations
+
+
+def bad_result() -> dict:
+    """VIOLATION: iserror_dicts -- a raw dict shaped like the old Err/isError contract."""
+    return {"isError": True, "content": []}
+
+
+def good_result() -> dict:
+    """Compliant: this docstring mentions isError as English text, not as a dict key, and that
+    must not match -- only an exact string-constant node with the value 'isError' matches."""
+    return {"ok": True}

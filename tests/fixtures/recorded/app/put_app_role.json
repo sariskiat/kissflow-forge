@@ -1,0 +1,28 @@
+{
+  "new": [
+    {
+      "body": {
+        "Users": [
+          {
+            "_id": "U1"
+          }
+        ]
+      },
+      "method": "PUT",
+      "url": "https://dev-acme.kissflow.com/app_role/2/ACC1/Ro1?_application_id=A1"
+    }
+  ],
+  "old": [
+    {
+      "body": {
+        "Users": [
+          {
+            "_id": "U1"
+          }
+        ]
+      },
+      "method": "PUT",
+      "url": "https://dev-acme.kissflow.com/app_role/2/ACC1/Ro1?_application_id=A1"
+    }
+  ]
+}

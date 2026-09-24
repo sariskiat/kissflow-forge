@@ -1,0 +1,20 @@
+{
+  "new": [
+    {
+      "body": {
+        "Name": "rec-1"
+      },
+      "method": "DELETE",
+      "url": "https://dev-acme.kissflow.com/dataset/2/ACC1/F1?_application_id=A1&_id=rec-1"
+    }
+  ],
+  "old": [
+    {
+      "body": {
+        "Name": "rec-1"
+      },
+      "method": "DELETE",
+      "url": "https://dev-acme.kissflow.com/dataset/2/ACC1/F1?_application_id=A1&_id=rec-1"
+    }
+  ]
+}

@@ -1,0 +1,160 @@
+{
+  "app_name": "Simple Ticket Log",
+  "approved": true,
+  "data_model": {
+    "computed": [],
+    "fields": [
+      {
+        "list_name": null,
+        "name": "Request Text",
+        "options": [],
+        "required": true,
+        "section": null,
+        "stage": "Log Ticket",
+        "type": "Text"
+      }
+    ],
+    "sections": [],
+    "sequence": null,
+    "tables": []
+  },
+  "master_data": {
+    "confirmed_none": true,
+    "lists": []
+  },
+  "personas": {
+    "views": [
+      {
+        "actions": [],
+        "kpis": [],
+        "pages": [
+          {
+            "design": null,
+            "name": "Tickets",
+            "on_click": [],
+            "popups": [],
+            "widgets": [
+              {
+                "config": [],
+                "row_fields": [],
+                "slug": "general/label"
+              }
+            ]
+          }
+        ],
+        "role": "Manager"
+      }
+    ]
+  },
+  "problem_goal": {
+    "done_definition": "the request is marked resolved",
+    "goal": "every request is logged and resolved",
+    "pain": "requests get lost with no record of who is handling them",
+    "result_values": [
+      "Resolved"
+    ],
+    "terminal_states": [
+      "Done"
+    ]
+  },
+  "rework_loops": {
+    "confirmed_none": true,
+    "loops": []
+  },
+  "roles": {
+    "roles": [
+      {
+        "is_admin": false,
+        "members_hint": null,
+        "name": "Front Desk"
+      },
+      {
+        "is_admin": true,
+        "members_hint": null,
+        "name": "Manager"
+      }
+    ]
+  },
+  "routing": {
+    "confirmed_none": true,
+    "points": []
+  },
+  "stages": {
+    "stages": [
+      {
+        "entry_criteria": "a request comes in",
+        "exit_criteria": "ticket logged",
+        "name": "Log Ticket",
+        "owner_role": "Front Desk",
+        "what_happens": "record the request"
+      },
+      {
+        "entry_criteria": "ticket logged",
+        "exit_criteria": "request resolved",
+        "name": "Handle Ticket",
+        "owner_role": "Manager",
+        "what_happens": "resolve the request"
+      }
+    ]
+  },
+  "test_cases": {
+    "cases": [
+      {
+        "expected_path": [
+          "Log Ticket",
+          "Handle Ticket"
+        ],
+        "expected_result": "Resolved",
+        "fills": [
+          {
+            "stage": "Log Ticket",
+            "values": [
+              [
+                "Request Text",
+                "Fix the printer"
+              ]
+            ]
+          }
+        ],
+        "name": "Simple ticket"
+      }
+    ]
+  },
+  "timing": {
+    "batch_days": [],
+    "reminders": [],
+    "sla_notes": ""
+  },
+  "visibility": {
+    "entries": [
+      {
+        "field": null,
+        "permission": "Editable",
+        "role": null,
+        "section": "Log Ticket",
+        "stage": "Start"
+      },
+      {
+        "field": null,
+        "permission": "Editable",
+        "role": null,
+        "section": "Log Ticket",
+        "stage": "Log Ticket"
+      },
+      {
+        "field": null,
+        "permission": "ReadOnly",
+        "role": null,
+        "section": "Log Ticket",
+        "stage": "Handle Ticket"
+      },
+      {
+        "field": null,
+        "permission": "Editable",
+        "role": null,
+        "section": "Handle Ticket",
+        "stage": "Handle Ticket"
+      }
+    ]
+  }
+}

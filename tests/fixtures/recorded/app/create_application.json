@@ -1,0 +1,20 @@
+{
+  "new": [
+    {
+      "body": {
+        "Name": "New app"
+      },
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/application"
+    }
+  ],
+  "old": [
+    {
+      "body": {
+        "Name": "New app"
+      },
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/application"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "new": [
+    {
+      "body": {
+        "Name": "Orders"
+      },
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/dataset?_application_id=A1"
+    }
+  ],
+  "old": [
+    {
+      "body": {
+        "Name": "Orders"
+      },
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/dataset?_application_id=A1"
+    }
+  ]
+}

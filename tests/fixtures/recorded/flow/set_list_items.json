@@ -1,0 +1,26 @@
+{
+  "new": [
+    {
+      "body": {
+        "ListItems": [
+          "Red",
+          "Blue"
+        ]
+      },
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/list/L1/items"
+    }
+  ],
+  "old": [
+    {
+      "body": {
+        "ListItems": [
+          "Red",
+          "Blue"
+        ]
+      },
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/list/L1/items"
+    }
+  ]
+}

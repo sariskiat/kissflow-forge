@@ -1,0 +1,20 @@
+{
+  "new": [
+    {
+      "body": {
+        "Name": "New flow"
+      },
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/process?_application_id=A1"
+    }
+  ],
+  "old": [
+    {
+      "body": {
+        "Name": "New flow"
+      },
+      "method": "POST",
+      "url": "https://dev-acme.kissflow.com/flow/2/ACC1/process?_application_id=A1"
+    }
+  ]
+}

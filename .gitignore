@@ -1,5 +1,7 @@
 .env
 __pycache__/
+.coverage
+proof/
 .venv/
 .ruff_cache/
 .DS_Store
@@ -8,3 +10,11 @@ dist/
 .env.deploy
 bestonesource.html
 brokesoruce.html
+uat-key.json
+
+# Claude Code
+.claude/hooks/.coverage-attempt-count
+.claude/hooks/.lint-attempt-count
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/

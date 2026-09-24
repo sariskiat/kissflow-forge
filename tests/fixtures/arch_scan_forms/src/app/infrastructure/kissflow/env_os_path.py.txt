@@ -1,0 +1,10 @@
+"""Coverage form for env_reads_outside_settings (G0 review finding 3): `import os.path` binds
+the plain name `os` in the importing module even though there is no `as` name, so the read below
+must still be reported."""
+
+import os.path
+
+
+def read() -> str:
+    """VIOLATION: env_reads_outside_settings, through `import os.path`."""
+    return os.environ["X"]

@@ -32,7 +32,7 @@ flow.drawio ─┐
 - `forge_plan_app` compiles the approved, complete spec to its ordered BuildPlan.
 
 The boundary is proven by the exact `spec_to_dict`/`spec_from_dict` round-trip
-(`kfforge/intake/serde.py`) — `tests/test_reader_boundary.py` drives a synthetic
+(`src/app/application/intake/serde.py`) — `tests/test_reader_boundary.py` drives a synthetic
 multi-split spec through this whole surface and asserts a real BuildPlan comes
 back. Your job is to produce JSON that survives it.
 
@@ -75,7 +75,7 @@ one rule, not a second mechanism:
   `forge_intake_questions`) for that dimension — `forge_plan_app` refuses a spec
   with any blocking gap anyway.
 - **Advisory gap** → *may proceed*. Only `ADVISORY_DIMENSIONS`
-  (`kfforge/intake/schema.py` — currently dimension 9, timing). An empty advisory
+  (`src/app/application/intake/schema.py` — currently dimension 9, timing). An empty advisory
   dimension does not block a plan; note it and move on.
 
 The interview shrinks: it stops asking what the diagram already answers and asks
@@ -106,7 +106,7 @@ on the diagram's spelling alone.
 
 ## Refuse any shape the coverage contract marks unbuildable — name the row
 
-The coverage contract (`kfforge/coverage.py`, `ROWS`) is the single source of truth
+The coverage contract (`src/app/domain/coverage.py`, `ROWS`) is the single source of truth
 for what a diagram may contain. Before emitting a spec, check every shape the
 diagram uses against it. If a shape's row is **not** `captured-live` or `buildable`
 — i.e. it is `refuses-loudly` — **stop and refuse, naming the row** (its stable
@@ -143,7 +143,7 @@ you emit only the functional widgets (`personas.views[].pages[].widgets`, each j
 dimension closes. Emit the design too.
 
 Each page carries an **optional** `design` field: a nested `DesignNode` **container
-tree** (`kfforge/intake/schema.py`), the beautiful-page dimension. Distill the
+tree** (`src/app/application/intake/schema.py`), the beautiful-page dimension. Distill the
 mockup into it using the design system in **`docs/capabilities/page.design.md`** —
 its token palette (page bg `#FCFAF2`, cards `#FFFFFF`/radius `14px`/pad `24-28px`,
 hero `#2E6B3B`/pad `32px`, tip chips `#EFF7F0`, icon `#2E6B3B` on `#DCEEE0`, text
