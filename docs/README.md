@@ -139,6 +139,7 @@ The same image runs unchanged behind the platform team's mesh:
 | `docs/research/` | 2 findings from primary sources | You need a fact someone already chased down |
 | `docs/connect-claude-desktop.md` | End-user connector walkthrough | A non-technical person needs to connect |
 | `docs/demo-user-setup.md` | Demo handout for the Claude Code tab, with VPN preflight | Onboarding demo users to the shared server |
+| `docs/setup-windows-claude-desktop.md` | Windows setup for the local clone: Git + Claude Desktop only, own key in `.env` | A colleague runs the server on their own Windows PC |
 | `docs/capture-guideline-th.md` | Thai guideline: describe a feature, build it once in the builder, paste the network requests, let Claude diff; branch → GitHub PR → our review | A colleague whose Claude builds something wrong or incomplete |
 | `docs/agents/developerguide.md` | Agent-facing guide for a colleague's Claude: plan → red test → browser capture → diff → engine change → shape saved → GitHub PR | Their Claude is about to add a feature the engine cannot build yet |
 | `docs/security-findings.md` | Open security findings, with owners | Before exposing the server to anyone |
