@@ -172,6 +172,8 @@ uv = shutil.which("uv")
 if not uv:
     raise SystemExit("uv not found. Close PowerShell, open a new one, and run this again.")
 repo = str(Path.cwd())
+if not (Path(repo) / "pyproject.toml").is_file() or not (Path(repo) / ".env").is_file():
+    raise SystemExit("Run this inside the kissflow-forge folder (cd $HOME\\kissflow-forge), after Step 4.")
 places = [Path(os.environ["APPDATA"]) / "Claude"]
 places += [Path(p) for p in glob.glob(os.path.join(os.environ.get("LOCALAPPDATA", ""), "Packages", "*Claude*", "LocalCache", "Roaming", "Claude"))]
 targets = [p for p in places if p.is_dir()] or places[:1]
@@ -229,7 +231,7 @@ too. Run this in PowerShell, in the `kissflow-forge` folder. It passes the paths
 PowerShell cannot change them:
 
 ```powershell
-uv run python -c "import shutil, subprocess, pathlib; subprocess.run([shutil.which('claude'), 'mcp', 'add', 'kissflow-forge', '-s', 'user', '-e', 'PYTHONUTF8=1', '--', shutil.which('uv'), '--directory', str(pathlib.Path.cwd()), 'run', 'mcp-server'], check=True)"
+uv run python -c "import shutil, subprocess, pathlib; assert (pathlib.Path.cwd() / 'pyproject.toml').is_file(), 'Run this inside the kissflow-forge folder'; subprocess.run([shutil.which('claude'), 'mcp', 'add', 'kissflow-forge', '-s', 'user', '-e', 'PYTHONUTF8=1', '--', shutil.which('uv'), '--directory', str(pathlib.Path.cwd()), 'run', 'mcp-server'], check=True)"
 ```
 
 You see `Added stdio MCP server kissflow-forge ... to user config`. Check it:
@@ -295,6 +297,7 @@ Then quit and open Claude Desktop again.
 | `UnicodeDecodeError` or `charmap` in Step 5 | Your copy of the code is old. Run `git pull` and `uv sync`, then Step 5 again. |
 | The uv install or `uv sync` fails with a certificate (SSL) error | The office network checks secure traffic. In PowerShell run `$env:UV_NATIVE_TLS=1`, then run the command again. |
 | A tool fails with `CERTIFICATE_VERIFY_FAILED` | The server cannot check Kissflow's certificate on this network. Send the full error to the project owner. |
+| `Couldn't reconnect kissflow-forge: Connection closed` | The server stopped at start. In PowerShell run `cd $HOME\kissflow-forge` then `uv run mcp-server`: an error line shows the cause (often `.env`); no output means it works, press Ctrl+C. Also check the path after `--directory` in the config is your `kissflow-forge` folder, not `C:\WINDOWS\system32`. The log is `%APPDATA%\Claude\logs\mcp-server-kissflow-forge.log`. |
 | kissflow-forge is not in the tools menu | The entry did not save. Quit Claude Desktop from the tray, run the Step 6 script again, then open Claude Desktop. If it still fails, read the newest `mcp*.log` in `%APPDATA%\Claude\logs`. |
 | `claude mcp list` shows kissflow-forge as failed | Run the Step 5 check. If it passes, remove the entry (`claude mcp remove kissflow-forge -s user`) and run the Step 6b line again from the `kissflow-forge` folder. |
 | Only a few kissflow-forge tools show | Some tools are switched off. Tools menu → kissflow-forge → switch all on. |
