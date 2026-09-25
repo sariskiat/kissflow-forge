@@ -41,14 +41,16 @@ Do this once. The repo is private, so Git must sign in to download it.
 
 uv runs the server. It also downloads the correct Python for you, so you do not install Python.
 
-1. Open the Start menu, type `PowerShell`, and open **Windows PowerShell**.
+1. Open the Start menu, type `PowerShell`, and open **Windows PowerShell**. Open it normally,
+   not with "Run as administrator".
 2. Paste this line and press Enter:
 
    ```powershell
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
-3. **Close PowerShell and open it again.** The new window finds uv.
+3. **Close PowerShell and open it again.** Windows adds uv to the PATH only for new windows,
+   so the same window says `uv : The term 'uv' is not recognized`.
 4. Check it:
 
    ```powershell
@@ -56,6 +58,12 @@ uv runs the server. It also downloads the correct Python for you, so you do not 
    ```
 
    You see a version number, for example `uv 0.9.28`.
+
+   If it still says "not recognized", run this line in the same window, then check again:
+
+   ```powershell
+   $env:Path = "$HOME\.local\bin;$env:Path"
+   ```
 
 ## Step 2. Download the code
 
@@ -278,7 +286,7 @@ Then quit and open Claude Desktop again.
 
 | You see | Do this |
 |---|---|
-| `uv` is not recognized | Close PowerShell and open a new one. If it still fails, run Step 1 again. |
+| `uv` is not recognized | Close PowerShell and open a new one. Or run `$env:Path = "$HOME\.local\bin;$env:Path"` in the same window. If it still fails, run the Step 1 install again. |
 | `git clone` says `repository not found` or `HTTP Basic: Access denied` | You are not a project member yet (Step 0.2), or you typed a password instead of the token, or the token lacks `read_repository` or has expired (Step 0.3). A wrong saved sign-in: remove `git:https://gitlab.cjexpress.io` from Windows Credential Manager and try again. |
 | `KF_DEV_DOMAIN is required` or `KF_DEV_ACCOUNT_ID is required` | The `.env` file is missing, is named `.env.txt`, or that line is empty. Check Step 4. |
 | `refusing non-dev domain` | The server works only on the dev tenant. Use the domain that starts with `dev-`. |
