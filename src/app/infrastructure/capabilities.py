@@ -22,7 +22,7 @@ from app.resources import CAP_DIR, REPO_ROOT
 
 
 def _load(path: Path) -> tuple[dict[str, Any], str]:
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     _, fm, body = text.split("---\n", 2)
     meta = yaml.safe_load(fm)
     if not isinstance(meta, dict):
@@ -116,7 +116,7 @@ def find_capabilities(
                 errors.append(f"{meta.get('id')}: linked shape does not resolve: {rel}")
                 continue
             try:
-                shapes[rel] = json.loads(shape_path.read_text())
+                shapes[rel] = json.loads(shape_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as e:
                 errors.append(f"{meta.get('id')}: shape {rel} is not valid JSON: {e}")
         entries.append(

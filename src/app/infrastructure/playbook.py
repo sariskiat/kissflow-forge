@@ -46,12 +46,12 @@ def read_playbook(path: Path = PLAYBOOK_PATH, root: Path = REPO_ROOT) -> dict[st
         ApplicationError: `code=NOT_FOUND` when the file is missing, or when
             its text is blank -- a stated reason, never a silently blank brain.
     """
-    source = str(path.relative_to(root))
+    source = path.relative_to(root).as_posix()
     if not path.is_file():
         raise ApplicationError(
             f"vendored playbook not found at {source}", code=NOT_FOUND
         )
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     if not text.strip():
         raise ApplicationError(
             f"vendored playbook is empty at {source}", code=NOT_FOUND
